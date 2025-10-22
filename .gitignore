@@ -1,0 +1,8 @@
+__pycache__/
+
+initial_populations/*
+logs/*
+log/*
+.env
+.venv/*
+picture2d/rendered
