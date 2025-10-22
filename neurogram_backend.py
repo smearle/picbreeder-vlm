@@ -1,7 +1,7 @@
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from PIL import Image
 
@@ -30,7 +30,7 @@ def resolve_neurogram_resume_snapshot(population_dir: Path, generation: int | No
     return candidates[-1]
 
 
-def _persist_neurogram_population(
+def _save_neurogram_population(
     neurogram: Any,
     state: Dict[str, Any],
     output_dir: Path,
@@ -66,7 +66,7 @@ def run_neurogram(
     population_dir: Path,
     query_dir: Path,
     *,
-    select_parents_from_grid: Callable[[Dict[str, Any], str, Path], Dict[str, Any]],
+    select_parents_from_grid: Callable[[Dict[str, Any], str, Path, Optional[int], Optional[str]], Dict[str, Any]],
     decode_image_fn: Callable[[Dict[str, Any]], Image.Image],
     write_run_metadata: Callable[[Path, argparse.Namespace], None],
 ) -> None:
@@ -106,14 +106,21 @@ def run_neurogram(
         generation = int(state["generation"])
         print(f"\n--- Generation {generation} ---")
 
-        state_path = _persist_neurogram_population(
+        state_path = _save_neurogram_population(
             neurogram,
             state,
             population_dir,
             generation,
             decode_image_fn,
         )
-        selection_meta = select_parents_from_grid(state, args.prompt, query_dir)
+        selection_meta = select_parents_from_grid(
+            state,
+            args.prompt,
+            query_dir,
+            args.select_k,
+            args.system_instruction,
+            args.chat_history_turns,
+        )
         selected = selection_meta["selected"]
         rationale = selection_meta.get("rationale") or "(no rationale)"
 

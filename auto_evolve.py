@@ -17,9 +17,6 @@ except ImportError:  # pragma: no cover - optional dependency
     graphviz = None  # type: ignore[assignment]
 
 REPO_ROOT = Path(__file__).resolve().parent
-NEAT_VENDOR_PATH = REPO_ROOT / "neat-python"
-if NEAT_VENDOR_PATH.exists():
-    sys.path.insert(0, str(NEAT_VENDOR_PATH))
 
 import neat
 from neat.checkpoint import Checkpointer
@@ -42,38 +39,45 @@ from render_experiment_results import (  # type: ignore
     render_population_structure_plots_from_experiment as _render_population_plots,
 )
 from picbreeder_reproduction import PicbreederReproduction
-
-DEFAULT_PROMPT = (
-    "You are playing with an online platform which evolves small neural networks called Compositional Pattern Producing Networks (CPPNs) to generate images. "
-    # "You are searching in an open-ended fashion for visually interesting images. "
-    "Your goal is to evolve images that resemble familiar real-world objects. "
-    "At each generation, you are shown a grid of numbered images produced by different CPPNs. "
-    "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents in the next generation. "
-    "The point is not to pick the most interesting images relative to the others in the grid, necessarily, but rather to pick images that you want to mutate and evolve further. "
-    "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
+from experiment_cli import (
+    SELECTION_BASELINES,
+    add_experiment_cli_arguments,
+    build_experiment_slug,
+    cap_select_k_for_engine,
 )
 
 DEFAULT_BASELINE_SELECTION_LIMIT = 1
-SELECTION_BASELINES = ("none", "random", "max-depth", "max-nodes")
+_CHAT_SESSION: Optional[Any] = None
+_CHAT_SESSION_MAX_TURNS: Optional[int] = None
 
 
-def apply_select_limit_to_prompt(prompt: str, select_k: Optional[int]) -> str:
+GOAL_PROMPT = (
+    "Your goal is to evolve images that resemble familiar real-world objects."
+    # "Your goal is to evolve an image that looks like a fish."
+)
+
+
+DEFAULT_SYSTEM_INSTRUCTION = (
+    "You are playing with an online platform which evolves small neural networks called Compositional Pattern Producing Networks (CPPNs) to generate images. "
+    f"{GOAL_PROMPT} "
+    "At each generation, you are shown a grid of numbered images produced by different CPPNs. "
+    "{selection_prompt}"
+    "The point is not to pick the most interesting images relative to the others in the grid, necessarily, but rather to pick images that you want to mutate and evolve further. "
+    "(Also, for debugging, please tell me how many previous grids you see in the chat history, and describe the overall evolution progress so far.) "
+    "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
+)
+
+
+DEFAULT_PROMPT = "Grid at generation {generation}:"
+
+
+def gen_selection_prompt(select_k: Optional[int]) -> str:
     if select_k is None:
-        return prompt
-    needle = "Pick one or several images"
-    if f"{needle} (up to" in prompt:
-        return prompt
-    if needle in prompt:
-        return prompt.replace(needle, f"{needle} (up to {select_k})", 1)
-    return prompt
+        return "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. "
+    if select_k == 1:
+        return "Pick one image by its numeric label--the corresponding CPPN will be used as the parent of the next generation. "
 
-
-def cap_select_k_for_engine(engine: str, select_k: Optional[int]) -> Optional[int]:
-    if select_k is None:
-        return None
-    if engine == "neurogram":
-        return min(select_k, 4)
-    return select_k
+    return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. "
 
 
 def dump_initial_populations(
@@ -109,7 +113,7 @@ def dump_initial_populations(
         state, png_cache = build_generation_state(genomes, config, 0, rows, cols, thumb_size, scheme, palette)
 
         population_dir = output_dir / f"population_{index:03d}"
-        # persist_neat_population(state, population_dir, 0, png_cache)
+        # save_neat_population(state, population_dir, 0, png_cache)
 
         grid_image = create_numbered_grid(state)
         grid_image.save(os.path.join(output_dir, f"pop-{index:03d}_grid.png"), format="PNG")
@@ -140,16 +144,46 @@ def extract_json_object(text: str) -> Dict[str, Any]:
     return json.loads(candidate)
 
 
+def _session_max_turns(chat_history_turns: Optional[int]) -> Optional[int]:
+    if chat_history_turns is None or chat_history_turns < 0:
+        return None
+    return chat_history_turns
+
+
+def _ensure_chat_session(chat_history_turns: Optional[int]) -> Any:
+    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS
+    max_turns = _session_max_turns(chat_history_turns)
+    if _CHAT_SESSION is None or _CHAT_SESSION_MAX_TURNS != max_turns:
+        _CHAT_SESSION = im_query.create_chat_session(max_turns=max_turns)
+        _CHAT_SESSION_MAX_TURNS = max_turns
+    return _CHAT_SESSION
+
+
+def _query_with_history(
+    image_bytes: bytes,
+    prompt: str,
+    *,
+    system_instruction: Optional[str],
+    chat_history_turns: Optional[int],
+) -> Any:
+    session: im_query.ImageChatSession = _ensure_chat_session(chat_history_turns)
+    return session.send(
+        image_bytes,
+        prompt,
+        history_turns=chat_history_turns,
+        mime_type="image/png",
+        system_instruction=system_instruction,
+    )
+
 
 def select_parents_from_grid(
     state: Dict[str, Any],
     prompt_template: str,
     query_dir: Path,
     select_k: Optional[int] = None,
+    system_instruction: Optional[str] = None,
+    chat_history_turns: Optional[int] = 0,
 ) -> Dict[str, Any]:
-    if im_query is None:
-        raise RuntimeError("im_query module is not available. Install required dependencies to perform image queries.")
-
     generation = int(state["generation"])
     grid_image = create_numbered_grid(state)
 
@@ -161,13 +195,16 @@ def select_parents_from_grid(
     grid_image.save(buffer, format="PNG")
     image_bytes = buffer.getvalue()
 
-    prompt = prompt_template.format(
-        rows=state["rows"],
-        cols=state["cols"],
-        total=len(state["images"]),
-    )
+    total_images = len(state["images"])
+    max_index = max(total_images - 1, 0)
+    prompt = prompt_template.format(generation=generation)
 
-    response = im_query.query_im(image_bytes, prompt=prompt, mime_type="image/png")
+    response = _query_with_history(
+        image_bytes,
+        prompt=prompt,
+        system_instruction=system_instruction,
+        chat_history_turns=chat_history_turns,
+    )
     response_text = getattr(response, "text", "") or ""
     parsed = extract_json_object(response_text)
 
@@ -203,9 +240,13 @@ def select_parents_from_grid(
         "grid_path": str(base_grid_path),
         "selection_path": str(selection_path),
         "select_k": select_k,
+        "chat_history_turns": chat_history_turns,
     }
-    meta_path = selection_path.with_suffix(".json")
+    metadata_dir = query_dir / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = metadata_dir / f"gen_{generation:03d}_selection.json"
     meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    metadata["metadata_path"] = str(meta_path)
 
     return metadata
 
@@ -286,11 +327,13 @@ class AutomatedNeatEvolver:
         scheme: str,
         palette: str,
         prompt: str,
+        system_instruction: Optional[str],
         experiment_dir: Path,
         population_dir: Path,
         query_dir: Path,
         selection_baseline: str = "none",
         select_k: Optional[int] = None,
+        chat_history_turns: Optional[int] = 0,
     ) -> None:
         self.population = population
         self.rows = rows
@@ -299,12 +342,14 @@ class AutomatedNeatEvolver:
         self.scheme = scheme
         self.palette = palette
         self.prompt = prompt
+        self.system_instruction = system_instruction
         self.experiment_dir = experiment_dir
         self.population_dir = population_dir
         self.query_dir = query_dir
         self.population_size = rows * cols
         self.selection_baseline = selection_baseline
         self.select_k = select_k
+        self.chat_history_turns = chat_history_turns
         self._diagram_warning_emitted = False
         self.metrics_dir = experiment_dir / "metrics"
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -360,7 +405,14 @@ class AutomatedNeatEvolver:
                 self._diagram_warning_emitted = True
 
         if self.selection_baseline == "none":
-            selection_meta = select_parents_from_grid(state, self.prompt, self.query_dir, self.select_k)
+            selection_meta = select_parents_from_grid(
+                state,
+                self.prompt,
+                self.query_dir,
+                self.select_k,
+                self.system_instruction,
+                self.chat_history_turns,
+            )
         else:
             selection_meta = self._select_parents_baseline(generation, genomes, config, state)
         selected = selection_meta["selected"]
@@ -372,7 +424,7 @@ class AutomatedNeatEvolver:
         print(f"Selected indices: {selected}")
         print(f"Rationale: {rationale}")
         # print(f"Snapshot saved to {state_path}")
-        print(f"Grid image saved to {selection_meta.get('grid_path')}")
+        print(f"Selection image saved to {selection_meta.get('selection_path')}")
         metrics_entry = self._record_population_metrics(generation, genomes, config, selected)
         node_stats = metrics_entry["node_count"]
         depth_stats = metrics_entry["depth"]
@@ -473,8 +525,11 @@ class AutomatedNeatEvolver:
             }
         )
 
-        meta_path = selection_path.with_suffix(".json")
+        metadata_dir = self.query_dir / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        meta_path = metadata_dir / f"gen_{generation:03d}_selection.json"
         meta_path.write_text(json.dumps(enriched, indent=2), encoding="utf-8")
+        enriched["metadata_path"] = str(meta_path)
         return enriched
 
     def _record_population_metrics(
@@ -522,24 +577,7 @@ def ensure_gemini_key() -> None:
 
 
 def build_experiment_dir(args: argparse.Namespace) -> Path:
-    slug_parts = [
-        f"g{args.generations}",
-        f"ht{args.chat_history_turns}",
-        f"r{args.rows}",
-        f"c{args.cols}",
-        f"ts{args.thumb_size}",
-        f"eng-{args.engine}",
-    ]
-    if args.engine == "neat":
-        slug_parts.append(f"pal-{args.color_palette}")
-        slug_parts.append(args.scheme)
-        if getattr(args, "output_activations", False):
-            slug_parts.append("outact")
-    if args.select_k is not None:
-        slug_parts.append(f"sk{args.select_k}")
-    if args.selection_baseline != "none":
-        slug_parts.append(f"baseline-{args.selection_baseline}")
-    slug = "_".join(slug_parts)
+    slug = build_experiment_slug(args)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     experiment_dir = Path("logs") / f"{slug}_{timestamp}"
     experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -554,6 +592,7 @@ def write_run_metadata(experiment_dir: Path, args: argparse.Namespace) -> None:
         "thumb_size": args.thumb_size,
         "generations_planned": args.generations,
         "prompt": args.prompt,
+        "system_instruction": args.system_instruction,
         "chat_history_turns": args.chat_history_turns,
         "engine": args.engine,
         "selection_baseline": args.selection_baseline,
@@ -563,18 +602,25 @@ def write_run_metadata(experiment_dir: Path, args: argparse.Namespace) -> None:
         metadata["scheme"] = args.scheme
         metadata["config_path"] = str(args.config_path) if args.config_path else None
         metadata["color_palette"] = args.color_palette
-        metadata["output_activations"] = bool(getattr(args, "output_activations", False))
+        metadata["output_activations"] = args.output_activations
     else:
         metadata["module_path"] = str(args.module_path) if args.module_path else None
     metadata_path = experiment_dir / "run_config.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def persist_initial_prompt(experiment_dir: Path, prompt: str) -> Path:
+def save_initial_prompt(experiment_dir: Path, prompt: str) -> Path:
     prompt_path = experiment_dir / "initial_prompt.txt"
     if not prompt_path.exists():
         prompt_path.write_text(prompt, encoding="utf-8")
     return prompt_path
+
+
+def save_initial_system_instruction(experiment_dir: Path, instruction: str) -> Path:
+    instruction_path = experiment_dir / "initial_system_instruction.txt"
+    if not instruction_path.exists():
+        instruction_path.write_text(instruction, encoding="utf-8")
+    return instruction_path
 
 
 def load_run_metadata(experiment_dir: Path) -> Dict[str, Any]:
@@ -605,121 +651,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Automate Picbreeder-style evolution with either NEAT-Python or the legacy Neurogram backend."
     )
-    parser.add_argument(
-        "--engine",
-        choices=("neat", "neurogram"),
-        default="neat",
-        help="Evolution engine to use ('neat' for NEAT-Python, 'neurogram' for the JavaScript runtime).",
-    )
-    parser.add_argument("--generations", type=int, default=200, help="Number of generations to evolve.")
-    parser.add_argument("--rows", type=int, default=4, help="Number of rows in the grid (Picbreeder uses 4).")
-    parser.add_argument("--cols", type=int, default=5, help="Number of columns in the grid (Picbreeder uses 5).")
-    parser.add_argument(
-        "--thumb-size",
-        type=int,
-        default=200,
-        help="Thumbnail size for rendered genomes (Picbreeder buttons are 200x200).",
-    )
-    parser.add_argument(
-        "--scheme",
-        choices=("color", "gray"),
-        default="gray",
-        help="Image rendering scheme to use.",
-    )
-    parser.add_argument(
-        "--color-palette",
-        choices=("hsb", "sigmoid"),
-        default="hsb",
-        help="Color palette to use for rendering ('hsb' matches CPPNArtEvolution, 'sigmoid' uses the older sigmoid-based palette).",
-    )
-    parser.add_argument(
-        "--output-activations",
-        action="store_true",
-        help="Enable CPPN output activation functions (disabled by default).",
-    )
-    parser.add_argument(
-        "--config-path",
-        type=Path,
-        default=None,
-        help="Path to the NEAT configuration file (defaults based on scheme).",
-    )
-    parser.add_argument(
-        "--module-path",
-        type=Path,
-        default=None,
-        help="Path to the neurogram_standalone.js module (legacy backend).",
-    )
-    parser.add_argument(
-        "--prompt",
-        type=str,
-        default=DEFAULT_PROMPT,
-        help="Custom prompt template for Gemini. Available tokens: {rows}, {cols}, {total}.",
-    )
-    parser.add_argument(
-        "--select-k",
-        type=int,
-        default=None,
-        help="Maximum number of parents to select each generation (defaults to unlimited).",
-    )
-    parser.add_argument(
-        "--selection-baseline",
-        choices=SELECTION_BASELINES,
-        default="none",
-        help="Baseline selection strategy to use instead of querying Gemini.",
-    )
-    parser.add_argument(
-        "--resume-dir",
-        type=Path,
-        default=None,
-        help="Existing experiment directory to resume.",
-    )
-    parser.add_argument(
-        "--resume-generation",
-        type=int,
-        default=None,
-        help="Checkpoint generation to resume from (defaults to the latest available).",
-    )
-    parser.add_argument(
-        "--chat-history-turns",
-        type=int,
-        default=0,
-        help="Past turns from the conversation to include when querying Gemini.",
-    )
-    parser.add_argument(
-        "--dump-initial-populations",
-        type=int,
-        default=0,
-        help="Number of initial populations to generate and persist instead of running evolution.",
-    )
-    parser.add_argument(
-        "--dump-output-dir",
-        type=str,
-        default=None,
-        help="Directory for dumped initial populations (defaults to a subdirectory of the experiment dir).",
-    )
-    parser.add_argument(
-        "--render-diagrams",
-        action="store_true",
-        help="Render genome topology diagrams using graphviz (NEAT engine only).",
-    )
-    parser.add_argument(
-        "--gif-output-name",
-        default="grid_with_selection.gif",
-        help="Filename for the generated selection GIF.",
-    )
-    parser.add_argument(
-        "--gif-duration",
-        type=int,
-        default=500,
-        help="Duration for each selection GIF frame in milliseconds.",
-    )
-    parser.add_argument(
-        "--gif-frame-mode",
-        choices=("grid", "first-selection"),
-        default="grid",
-        help="Frame strategy to use when assembling the selection GIF.",
-    )
-
+    add_experiment_cli_arguments(parser)
     args = parser.parse_args()
     if args.resume_dir is None:
         if args.engine == "neat":
@@ -782,10 +714,10 @@ def validate_args(args: argparse.Namespace) -> None:
             if args.module_path is None or not args.module_path.exists():
                 raise ValueError(f"module not found at {args.module_path}")
 
-    if args.chat_history_turns < 0:
-        raise ValueError("chat-history-turns must be non-negative")
+    if args.chat_history_turns < -1:
+        raise ValueError("chat-history-turns must be at least -1 (-1 for unlimited)")
 
-    if getattr(args, "gif_duration", 0) <= 0:
+    if args.gif_duration <= 0:
         raise ValueError("gif-duration must be a positive integer")
 
 
@@ -832,11 +764,13 @@ def run_neat(args: argparse.Namespace, experiment_dir: Path, population_dir: Pat
         args.scheme,
         args.color_palette,
         args.prompt,
+        args.system_instruction,
         experiment_dir,
         population_dir,
         query_dir,
         selection_baseline=args.selection_baseline,
         select_k=args.select_k,
+        chat_history_turns=args.chat_history_turns,
     )
 
     evolver.evaluate_generation = functools.partial(
@@ -901,6 +835,13 @@ def main() -> None:
     population_dir.mkdir(parents=True, exist_ok=True)
     query_dir.mkdir(parents=True, exist_ok=True)
 
+    args.prompt = DEFAULT_PROMPT
+    args.system_instruction = DEFAULT_SYSTEM_INSTRUCTION.format(
+        selection_prompt=gen_selection_prompt(args.select_k)
+    )
+    # save_initial_prompt(experiment_dir, args.prompt)
+    save_initial_system_instruction(experiment_dir, args.system_instruction)
+
     if args.resume_dir:
         metadata = load_run_metadata(experiment_dir)
         metadata_engine = metadata.get("engine")
@@ -915,9 +856,21 @@ def main() -> None:
         args.rows = int(metadata["rows"])
         args.cols = int(metadata["cols"])
         args.thumb_size = int(metadata["thumb_size"])
+        stored_chat_history = metadata.get("chat_history_turns")
+        if stored_chat_history is not None:
+            stored_chat_history = int(stored_chat_history)
+            if stored_chat_history != args.chat_history_turns:
+                print(
+                    f"Resume directory chat-history-turns '{stored_chat_history}' overrides CLI value '{args.chat_history_turns}'."
+                )
+            args.chat_history_turns = stored_chat_history
         stored_prompt = metadata.get("prompt")
         if stored_prompt:
             args.prompt = stored_prompt
+
+        stored_system_instruction = metadata.get("system_instruction")
+        if stored_system_instruction:
+            args.system_instruction = stored_system_instruction
 
         stored_select_k = metadata.get("select_k", args.select_k)
         if stored_select_k is not None:
@@ -958,9 +911,6 @@ def main() -> None:
             stored_module = metadata.get("module_path")
             if stored_module:
                 args.module_path = Path(stored_module).resolve()
-
-    args.prompt = apply_select_limit_to_prompt(args.prompt, args.select_k)
-    persist_initial_prompt(experiment_dir, args.prompt)
 
     if args.engine == "neat":
         run_neat(args, experiment_dir, population_dir, query_dir)

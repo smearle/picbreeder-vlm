@@ -174,7 +174,7 @@ function buildGenomeSnapshot() {
   return genomes;
 }
 
-function buildPersistedState(options = {}) {
+function buildSaveState(options = {}) {
   const includeImages = options.includeImages || false;
   const snapshot = {
     generation: state.generation,
@@ -340,13 +340,13 @@ function getImage(index) {
 function dumpState(pathLike) {
   ensureInitialized();
   const target = path.resolve(process.cwd(), pathLike);
-  fs.writeFileSync(target, JSON.stringify(buildPersistedState(true), null, 2), 'utf8');
+  fs.writeFileSync(target, JSON.stringify(buildSaveState(true), null, 2), 'utf8');
   return target;
 }
 
 function exportState(options) {
   ensureInitialized();
-  return buildPersistedState(options || {});
+  return buildSaveState(options || {});
 }
 
 module.exports = {

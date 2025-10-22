@@ -1,0 +1,8 @@
+graphviz
+google-genai
+matplotlib
+neat-python
+Pillow
+python-dotenv
+
+# javascript  # for neurogram only

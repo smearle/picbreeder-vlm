@@ -11,13 +11,16 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import datetime
 from typing import Iterable, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
-from metrics_visualization import render_population_structure_plots_from_experiment
+from metrics_visualization import render_first_selection_grid, render_population_structure_plots_from_experiment
+from experiment_cli import add_experiment_cli_arguments, build_experiment_slug, cap_select_k_for_engine
 
 
 CAPTION_HEIGHT = 30
@@ -38,6 +41,7 @@ class GifFrame:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    add_experiment_cli_arguments(parser)
     parser.add_argument(
         "--logs-dir",
         type=Path,
@@ -46,19 +50,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pattern",
-        default="*",
-        help="Glob pattern used to pick experiment directories under the logs directory.",
-    )
-    parser.add_argument(
-        "--output-name",
-        default="grid_with_selection.gif",
-        help="Filename to use for the generated GIF inside each experiment directory.",
-    )
-    parser.add_argument(
-        "--duration",
-        type=int,
-        default=500,
-        help="Duration for each GIF frame in milliseconds.",
+        default=None,
+        help="Optional glob pattern to override slug-based discovery (e.g., 'g200_*').",
     )
     parser.add_argument(
         "--limit",
@@ -67,14 +60,24 @@ def parse_args() -> argparse.Namespace:
         help="Optional limit for how many experiment directories to process.",
     )
     parser.add_argument(
+        "--output-name",
+        dest="gif_output_name",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--duration",
+        dest="gif_duration",
+        type=int,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--frame-mode",
+        dest="gif_frame_mode",
         choices=("grid", "first-selection"),
-        default="grid",
-        help=(
-            "Controls which images are used per generation. "
-            "'grid' (default) alternates between the full query grid and the annotated selection. "
-            "'first-selection' uses only the first selected organism from the population."
-        ),
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     return parser.parse_args()
 
@@ -82,7 +85,14 @@ def parse_args() -> argparse.Namespace:
 def gather_experiments(logs_dir: Path, pattern: str) -> Iterable[Path]:
     if not logs_dir.exists():
         raise FileNotFoundError(f"Logs directory not found: {logs_dir}")
-    return sorted(p for p in logs_dir.glob(pattern) if p.is_dir())
+    candidates = [p for p in logs_dir.glob(pattern) if p.is_dir()]
+    return sorted(candidates, key=lambda path: _experiment_timestamp_key(path.name), reverse=True)
+
+
+def _experiment_timestamp_key(slug: str) -> Tuple[datetime, str]:
+    _, timestamp_text = slug.rsplit("_", 1)
+    timestamp = datetime.strptime(timestamp_text, "%Y%m%d-%H%M%S")
+    return timestamp, slug
 
 
 def load_first_selection(selection_json: Path) -> Optional[int]:
@@ -169,7 +179,15 @@ def collect_frames(experiment_dir: Path, frame_mode: str) -> List[GifFrame]:
     if not queries_dir.exists():
         raise FileNotFoundError(f"Missing queries directory in {experiment_dir}")
 
-    selection_files = sorted(queries_dir.glob("gen_*_selection.json"))
+    metadata_dir = queries_dir / "metadata"
+    if metadata_dir.exists():
+        selection_files = sorted(metadata_dir.glob("gen_*_selection.json"))
+    else:
+        selection_files = []
+
+    if not selection_files:
+        selection_files = sorted(queries_dir.glob("gen_*_selection.json"))
+
     if frame_mode == "grid":
         return collect_grid_frames(queries_dir, selection_files)
 
@@ -278,24 +296,100 @@ def annotate_with_caption(image: Image.Image, frame: GifFrame) -> Image.Image:
     return canvas
 
 
+def _run_ffmpeg_palette_pipeline(
+    input_pattern: str,
+    output_path: Path,
+    fps: float,
+) -> None:
+    palette_path = output_path.with_suffix(".palette.png")
+    fps_str = f"{fps:.6f}".rstrip("0").rstrip(".")
+    if not fps_str:
+        fps_str = "1"
+
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                fps_str,
+                "-i",
+                input_pattern,
+                "-vf",
+                "palettegen=stats_mode=diff",
+                str(palette_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                fps_str,
+                "-i",
+                input_pattern,
+                "-i",
+                str(palette_path),
+                "-lavfi",
+                "[0:v][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                "-gifflags",
+                "+transdiff",
+                "-loop",
+                "0",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        palette_path.unlink(missing_ok=True)
+
+
 def assemble_gif(frames: List[GifFrame], output_path: Path, duration: int) -> Tuple[int, int]:
     if not frames:
         raise ValueError("No frames available to build GIF.")
 
-    pil_images = []
-    for frame in frames:
-        img = Image.open(frame.image_path).convert("RGB")
-        img = annotate_with_caption(img, frame)
-        pil_images.append(img)
+    annotated_frames: List[Image.Image] = []
+    first_size: Optional[Tuple[int, int]] = None
+    fps = 1000.0 / duration if duration > 0 else 1.0
 
-    pil_images[0].save(
+    with tempfile.TemporaryDirectory(prefix="frames_", dir=output_path.parent) as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        for index, frame in enumerate(frames):
+            with Image.open(frame.image_path) as img:
+                annotated = annotate_with_caption(img.convert("RGB"), frame)
+            annotated_frames.append(annotated)
+            if first_size is None:
+                first_size = annotated.size
+            frame_path = tmpdir_path / f"frame_{index:05d}.png"
+            annotated.save(frame_path, format="PNG")
+
+        input_pattern = str(tmpdir_path / "frame_%05d.png")
+        try:
+            _run_ffmpeg_palette_pipeline(input_pattern, output_path, fps)
+        except FileNotFoundError:
+            print("[WARN] ffmpeg not found; falling back to Pillow GIF writer.", file=sys.stderr)
+        except subprocess.CalledProcessError as exc:
+            stderr_text = (exc.stderr or "").strip().splitlines()
+            if stderr_text:
+                print(f"[WARN] ffmpeg failed: {stderr_text[-1]}", file=sys.stderr)
+            else:
+                print("[WARN] ffmpeg failed during GIF rendering; falling back to Pillow.", file=sys.stderr)
+        else:
+            return first_size if first_size is not None else annotated_frames[0].size
+
+    annotated_frames[0].save(
         output_path,
         save_all=True,
-        append_images=pil_images[1:],
+        append_images=annotated_frames[1:],
         duration=duration,
         loop=0,
     )
-    return pil_images[0].size
+    return first_size if first_size is not None else annotated_frames[0].size
 
 
 def process_experiment(
@@ -306,24 +400,6 @@ def process_experiment(
     render_structure_plot: bool = True,
 ) -> None:
     print(f"[INFO] Processing {experiment_dir}")
-    frames = collect_frames(experiment_dir, frame_mode=frame_mode)
-    if not frames:
-        print(f"[INFO] Skipping {experiment_dir} (no frames).")
-        return
-
-    output_path = experiment_dir / output_name
-    size = assemble_gif(frames, output_path, duration)
-    print(f"[INFO] Wrote GIF to {output_path}")
-
-    # add _compressed to filename
-    compressed_output = output_path.with_name(
-        output_path.stem + "_compressed" + output_path.suffix
-    )
-    if compress_gif_with_ffmpeg(output_path, compressed_output, size):
-        print(f"[INFO] Wrote compressed GIF to {compressed_output}")
-    else:
-        compressed_output.unlink(missing_ok=True)
-
     if render_structure_plot:
         try:
             plot_path = render_population_structure_plots_from_experiment(experiment_dir)
@@ -345,21 +421,68 @@ def process_experiment(
         else:
             print(f"[INFO] Wrote population structure plot to {plot_path}")
 
+    frames = collect_frames(experiment_dir, frame_mode=frame_mode)
+    if not frames:
+        print(f"[INFO] Skipping {experiment_dir} (no frames).")
+        return
+
+    render_first_selection_grid(experiment_dir)
+
+    output_path = experiment_dir / output_name
+    size = assemble_gif(frames, output_path, duration)
+    print(f"[INFO] Wrote GIF to {output_path}")
+
+    # add _compressed to filename
+    compressed_output = output_path.with_name(
+        output_path.stem + "_compressed" + output_path.suffix
+    )
+    if compress_gif_with_ffmpeg(output_path, compressed_output, size):
+        print(f"[INFO] Wrote compressed GIF to {compressed_output}")
+    else:
+        compressed_output.unlink(missing_ok=True)
+
 
 def main() -> None:
     args = parse_args()
-    experiments = gather_experiments(args.logs_dir, args.pattern)
+    if args.select_k is not None:
+        if args.select_k < 1:
+            raise SystemExit("select-k must be at least 1 when provided.")
+        args.select_k = cap_select_k_for_engine(args.engine, args.select_k)
+
+    slug = build_experiment_slug(args)
+    pattern = args.pattern or f"{slug}_*"
+
+    try:
+        experiments = list(gather_experiments(args.logs_dir, pattern))
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    if args.pattern is None:
+        experiments = [exp for exp in experiments if exp.name.startswith(f"{slug}_")]
 
     if args.limit is not None:
-        experiments = list(experiments)[: args.limit]
+        experiments = experiments[: args.limit]
 
     if not experiments:
-        print(f"[WARN] No experiments matched pattern '{args.pattern}' in {args.logs_dir}", file=sys.stderr)
+        if args.pattern is None:
+            message = f"No experiments matched slug '{slug}' in {args.logs_dir}"
+        else:
+            message = f"No experiments matched pattern '{pattern}' in {args.logs_dir}"
+        print(f"[WARN] {message}", file=sys.stderr)
         return
 
+    if args.pattern is None:
+        print(f"[INFO] Rendering experiments for slug '{slug}' (pattern '{pattern}')")
+    else:
+        print(f"[INFO] Rendering experiments matching pattern '{pattern}'")
     for experiment_dir in experiments:
         try:
-            process_experiment(experiment_dir, args.output_name, args.duration, args.frame_mode)
+            process_experiment(
+                experiment_dir,
+                args.gif_output_name,
+                args.gif_duration,
+                args.gif_frame_mode,
+            )
         except Exception as exc:
             print(f"[ERROR] Failed to process {experiment_dir}: {exc}", file=sys.stderr)
 
