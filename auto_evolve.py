@@ -53,7 +53,9 @@ _CHAT_SESSION_MAX_TURNS: Optional[int] = None
 
 GOAL_PROMPT = (
     "Your goal is to evolve images that resemble familiar real-world objects."
+    # "Your goal is to evolve images that resemble familiar real-world objects. We want the object to be colored, but try to move away from the high-frequency rainbow artefact. "
     # "Your goal is to evolve an image that looks like a fish."
+    # "Your goal is to generate a lizard."
 )
 
 
@@ -63,7 +65,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "At each generation, you are shown a grid of numbered images produced by different CPPNs. "
     "{selection_prompt}"
     "The point is not to pick the most interesting images relative to the others in the grid, necessarily, but rather to pick images that you want to mutate and evolve further. "
-    "(Also, for debugging, please tell me how many previous grids you see in the chat history, and describe the overall evolution progress so far.) "
+    # "(Also, for debugging, please tell me how many previous grids you see in the chat history, and describe the overall evolution progress so far.) "
     "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
 )
 

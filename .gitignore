@@ -1,6 +1,7 @@
 __pycache__/
 
 initial_populations/*
+interactive_runs/*
 logs/*
 log/*
 .env

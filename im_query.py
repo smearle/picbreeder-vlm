@@ -107,12 +107,14 @@ class ImageChatSession:
             chat = client.chats.create(**create_kwargs)
             try:
                 response = chat.send_message(parts)
+                break
             except Exception as exc:
                 if _is_token_limit_error(exc) and start_index < len(self._turn_history):
                     start_index += 1
                     continue
-                raise
-            break
+            except genai.errors.ServerError:
+                time.sleep(10)
+                continue
 
         response_text = getattr(response, "text", "") or ""
         if start_index > 0:
