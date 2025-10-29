@@ -103,7 +103,7 @@ def apply_picbreeder_config_defaults(config: neat.Config, enable_output_activati
     genome_config.weight_init_stdev = 0.5
     genome_config.weight_init_type = "uniform"
     genome_config.weight_mutate_rate = 0.05
-    genome_config.weight_mutate_power = 1.0
+    genome_config.weight_mutate_power = 2.0
     genome_config.weight_replace_rate = 0.0
     genome_config.enabled_mutate_rate = 0.0
 

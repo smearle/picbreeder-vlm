@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 
-SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes")
+SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes", "siglip")
 
 
 def add_experiment_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -62,6 +62,29 @@ def add_experiment_cli_arguments(parser: argparse.ArgumentParser) -> argparse.Ar
         choices=SELECTION_BASELINES,
         default="none",
         help="Baseline selection strategy to use instead of querying Gemini.",
+    )
+    parser.add_argument(
+        "--elitism",
+        type=int,
+        default=None,
+        help="Elites per species preserved unchanged (DefaultReproduction; used with 'siglip').",
+    )
+    parser.add_argument(
+        "--target-label",
+        type=str,
+        default=None,
+        help="Target text label used by text–image similarity selection (e.g., when using 'siglip').",
+    )
+    parser.add_argument(
+        "--siglip-model",
+        type=str,
+        default="google/siglip-base-patch16-224",
+        help="Hugging Face model id for SigLIP zero-shot classification.",
+    )
+    parser.add_argument(
+        "--siglip-device",
+        default=None,
+        help="Device for SigLIP pipeline (e.g., 0 for CUDA device 0, or 'cpu').",
     )
     parser.add_argument(
         "--resume-dir",

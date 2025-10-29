@@ -8,7 +8,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from statistics import mean, pstdev
-
+import sys
+import configparser
 import sys
 
 try:
@@ -18,8 +19,17 @@ except ImportError:  # pragma: no cover - optional dependency
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+# Optional imports for SigLIP; only needed if selection-baseline is 'siglip'
+try:
+    import torch  # type: ignore
+    from transformers import pipeline  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore
+    pipeline = None  # type: ignore
+
 import neat
 from neat.checkpoint import Checkpointer
+from neat.reproduction import DefaultReproduction
 from neat.population import CompleteExtinctionException
 from neurogram_backend import DEFAULT_MODULE_PATH, run_neurogram
 from neat_components import (
@@ -33,7 +43,7 @@ from neat_components import (
 )
 from artifacts import build_generation_state, save_neat_genome_diagrams, save_neat_population
 from rendering import create_numbered_grid, decode_image
-import im_query  # type: ignore
+# import im_query  # type: ignore
 from render_experiment_results import (  # type: ignore
     process_experiment as _process_selection_gif,
     render_population_structure_plots_from_experiment as _render_population_plots,
@@ -71,6 +81,76 @@ DEFAULT_SYSTEM_INSTRUCTION = (
 
 
 DEFAULT_PROMPT = "Grid at generation {generation}:"
+
+
+
+# ================================
+# Siglip stuff
+# ================================
+_SIGLIP_PIPELINE = None
+def _get_siglip_pipeline(model_name: str = "google/siglip-base-patch16-224",
+                         device: Optional[str|int] = None):
+    global _SIGLIP_PIPELINE
+    if _SIGLIP_PIPELINE is not None:
+        return _SIGLIP_PIPELINE
+    if pipeline is None:
+        raise ImportError("'transformers' is required for SigLIP selection.")
+    init_kwargs: Dict[str, Any] = {"task": "zero-shot-image-classification", "model": model_name}
+    if device is not None and str(device).lower() != "cpu":
+        try:
+            init_kwargs["device"] = int(device)
+            if torch is not None and getattr(torch, "cuda", None) is not None and torch.cuda.is_available():  # type: ignore[attr-defined]
+                init_kwargs["dtype"] = torch.bfloat16  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    _SIGLIP_PIPELINE = pipeline(**init_kwargs)
+    return _SIGLIP_PIPELINE
+
+def select_parents_by_text_similarity(  state: Dict[str, Any],
+                                        label: str,
+                                        select_k: int,
+                                        *,
+                                        model_name: str = "google/siglip-base-patch16-224",
+                                        device: Optional[str|int] = None,
+                                        query_dir: Optional[Path] = None,
+                                        ) -> Dict[str, Any]:
+    generation = int(state["generation"])
+    images: List = [decode_image(entry) for entry in state["images"]]
+    clf = _get_siglip_pipeline(model_name=model_name, device=device)
+
+    # Batch infer; pipeline returns list per image: [{label, score}, ...]
+    outputs: List[List[Dict[str, Any]]] = clf(images, candidate_labels=[label])
+
+    scored: List[tuple[int, float]] = []
+    for idx, out in enumerate(outputs):
+        # With a single candidate label, out[0]["score"] is the score for `label`.
+        score = float(out[0]["score"]) if out and out[0].get("label") == label else 0.0
+        scored.append((idx, score))
+
+    scored.sort(key=lambda t: t[1], reverse=True)
+    selected = [idx for idx, _ in scored[:max(1, select_k)]]
+
+    # Optional: write artifacts (grid and selection overlays) consistent with existing outputs.
+    if query_dir is not None:
+        query_dir.mkdir(parents=True, exist_ok=True)
+        grid = create_numbered_grid(state)
+        grid.save(query_dir / f"gen_{generation:03d}_grid.png", format="PNG")
+        sel = create_numbered_grid(state, selected=selected)
+        sel.save(query_dir / f"gen_{generation:03d}_selection.png", format="PNG")
+        meta = {
+            "selected": selected,
+            "rationale": f"Top-{select_k} by SigLIP score for '{label}'",
+            "scores": [{"index": i, "score": s} for i, s in scored],
+        }
+        meta_dir = query_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / f"gen_{generation:03d}_selection.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    return {
+        "selected": selected,
+        "rationale": f"Top-{select_k} by SigLIP score for '{label}'",
+        "scores": [{"index": i, "score": s} for i, s in scored],
+    }
 
 
 def gen_selection_prompt(select_k: Optional[int]) -> str:
@@ -336,6 +416,9 @@ class AutomatedNeatEvolver:
         selection_baseline: str = "none",
         select_k: Optional[int] = None,
         chat_history_turns: Optional[int] = 0,
+        target_label: Optional[str] = None,
+        siglip_model: str = "google/siglip-base-patch16-224",
+        siglip_device: Optional[str] = None,
     ) -> None:
         self.population = population
         self.rows = rows
@@ -353,6 +436,9 @@ class AutomatedNeatEvolver:
         self.select_k = select_k
         self.chat_history_turns = chat_history_turns
         self._diagram_warning_emitted = False
+        self.target_label = target_label
+        self.siglip_model = siglip_model
+        self.siglip_device = siglip_device
         self.metrics_dir = experiment_dir / "metrics"
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_path = self.metrics_dir / "population_structure.jsonl"
@@ -406,7 +492,16 @@ class AutomatedNeatEvolver:
                 print("Graphviz not available; skipping genome diagram export.")
                 self._diagram_warning_emitted = True
 
-        if self.selection_baseline == "none":
+        if self.selection_baseline == "siglip":
+            selection_meta = select_parents_by_text_similarity(
+                state,
+                label=self.target_label or "",
+                select_k=self.select_k or 1,
+                model_name=self.siglip_model,
+                device=self.siglip_device,
+                query_dir=self.query_dir,
+            )
+        elif self.selection_baseline == "none":
             selection_meta = select_parents_from_grid(
                 state,
                 self.prompt,
@@ -420,13 +515,36 @@ class AutomatedNeatEvolver:
         selected = selection_meta["selected"]
         rationale = selection_meta.get("rationale") or "(no rationale)"
 
-        for idx, (_, genome) in enumerate(genomes):
-            genome.fitness = 1.0 if idx in selected else 0.0
+        # Assign fitness: for SigLIP set score for every genome; otherwise binary.
+        if self.selection_baseline == "siglip":
+            score_map: Dict[int, float] = {int(s["index"]): float(s["score"]) for s in selection_meta.get("scores", [])}
+            for idx, (_, genome) in enumerate(genomes):
+                genome.fitness = float(score_map.get(idx, 0.0))
+        else:
+            for idx, (_, genome) in enumerate(genomes):
+                genome.fitness = 1.0 if idx in selected else 0.0
 
         print(f"Selected indices: {selected}")
-        print(f"Rationale: {rationale}")
+        print(f"Rationale: {rationale}")    
         # print(f"Snapshot saved to {state_path}")
         print(f"Selection image saved to {selection_meta.get('selection_path')}")
+        if self.selection_baseline == "siglip":
+            try:
+                score_map = {int(s["index"]): float(s["score"]) for s in selection_meta.get("scores", [])}
+                all_scores: List[float] = [float(score_map.get(i, 0.0)) for i in range(len(genomes))]
+                if all_scores:
+                    avg = mean(all_scores)
+                    mn = min(all_scores)
+                    mx = max(all_scores)
+                    st = pstdev(all_scores) if len(all_scores) > 1 else 0.0
+                    print(f"SigLIP fitness - avg: {avg:.4f}, min: {mn:.4f}, max: {mx:.4f}, std: {st:.4f}")
+                top_n = self.select_k or 5
+                top_pairs = sorted(score_map.items(), key=lambda t: t[1], reverse=True)[: max(1, top_n)]
+                if top_pairs:
+                    summary = ", ".join(f"{idx}:{score:.4f}" for idx, score in top_pairs)
+                    print(f"Top fitness: {summary}")
+            except Exception:
+                pass
         metrics_entry = self._record_population_metrics(generation, genomes, config, selected)
         node_stats = metrics_entry["node_count"]
         depth_stats = metrics_entry["depth"]
@@ -465,7 +583,6 @@ class AutomatedNeatEvolver:
         selection_count = max(1, min(max_selection, len(genomes)))
         selected_indices: List[int]
         rationale: str
-
         if self.selection_baseline == "random":
             selected_indices = random.sample(range(len(genomes)), k=selection_count)
             rationale = f"Random baseline selected {selected_indices}."
@@ -694,6 +811,9 @@ def validate_args(args: argparse.Namespace) -> None:
 
     if args.selection_baseline != "none" and args.engine != "neat":
         raise ValueError("Selection baselines other than 'none' are only supported with the NEAT engine.")
+    if args.selection_baseline == "siglip":
+        if not getattr(args, "target_label", None):
+            raise ValueError("--target-label is required when using selection baseline 'siglip'.")
 
     if args.resume_dir:
         if not args.resume_dir.exists():
@@ -723,6 +843,43 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("gif-duration must be a positive integer")
 
 
+def _ensure_default_reproduction_section(config_path: Path, experiment_dir: Path, elitism: Optional[int]) -> Path:
+    """Ensure the NEAT config has a [DefaultReproduction] section and optional elitism override.
+    If we add the section or change values, write a derived config into the experiment directory and return its path.
+    Otherwise return the original path.
+    """
+    parser = configparser.ConfigParser()
+    parser.read(config_path)
+    changed = False
+    if not parser.has_section("DefaultReproduction"):
+        parser.add_section("DefaultReproduction")
+        changed = True
+
+    # Ensure survival_threshold has some sensible default if absent
+    if not parser.has_option("DefaultReproduction", "survival_threshold"):
+        parser.set("DefaultReproduction", "survival_threshold", "0.2")
+        changed = True
+
+    # Apply elitism if provided; otherwise ensure at least present
+    if elitism is not None:
+        current = parser.get("DefaultReproduction", "elitism", fallback=None)
+        if current is None or current != str(int(elitism)):
+            parser.set("DefaultReproduction", "elitism", str(int(elitism)))
+            changed = True
+    else:
+        if not parser.has_option("DefaultReproduction", "elitism"):
+            parser.set("DefaultReproduction", "elitism", "0")
+            changed = True
+
+    if not changed:
+        return config_path
+
+    derived = experiment_dir / "config_with_default_reproduction.cfg"
+    with derived.open("w", encoding="utf-8") as fh:
+        parser.write(fh)
+    return derived
+
+
 def run_neat(args: argparse.Namespace, experiment_dir: Path, population_dir: Path, query_dir: Path) -> None:
     enable_output_activations = args.output_activations 
     if args.resume_dir:
@@ -738,12 +895,20 @@ def run_neat(args: argparse.Namespace, experiment_dir: Path, population_dir: Pat
             f"{checkpoint_path.relative_to(experiment_dir)}"
         )
     else:
+        # Use default reproduction when 'siglip' selection baseline is active; otherwise Picbreeder reproduction.
+        reproduction_cls = DefaultReproduction if args.selection_baseline == "siglip" else PicbreederReproduction
+        effective_config_path = args.config_path
+        if reproduction_cls is DefaultReproduction and effective_config_path is not None:
+            effective_config_path = _ensure_default_reproduction_section(
+                effective_config_path, experiment_dir, getattr(args, "elitism", None)
+            )
+            args.config_path = effective_config_path
         config = neat.Config(
             PicbreederGenome,
-            PicbreederReproduction,
+            reproduction_cls,
             neat.DefaultSpeciesSet,
             InteractiveStagnation,
-            str(args.config_path),
+            str(effective_config_path),
         )
         apply_picbreeder_config_defaults(
             config,
@@ -773,6 +938,9 @@ def run_neat(args: argparse.Namespace, experiment_dir: Path, population_dir: Pat
         selection_baseline=args.selection_baseline,
         select_k=args.select_k,
         chat_history_turns=args.chat_history_turns,
+        target_label=getattr(args, "target_label", None),
+        siglip_model=getattr(args, "siglip_model", "google/siglip-base-patch16-224"),
+        siglip_device=getattr(args, "siglip_device", None),
     )
 
     evolver.evaluate_generation = functools.partial(
