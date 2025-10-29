@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 import neat
+from pyparsing import Iterable
 
 from picture2d.common import (
     _canvas_coords,
@@ -340,3 +341,52 @@ __all__ = [
     "render_genome_image",
     "render_genome_diagram",
 ]
+
+
+def _draw_dotted_rectangle(
+    draw: ImageDraw.ImageDraw,
+    bbox: Tuple[int, int, int, int],
+    *,
+    color: Tuple[int, int, int],
+    width: int,
+    dash_length: int = 8,
+    gap_length: int = 6,
+) -> None:
+    """Render a dotted rectangle so publication highlights do not mask red parent outlines."""
+
+    x0, y0, x1, y1 = bbox
+    x0, x1 = sorted((int(round(x0)), int(round(x1))))
+    y0, y1 = sorted((int(round(y0)), int(round(y1))))
+
+    def while_loop(start: int, end: int, step: int) -> Iterable[int]:
+        current = start
+        while current <= end:
+            yield current
+            current += step
+
+    horizontal_step = dash_length + gap_length
+    for x in while_loop(x0, x1, horizontal_step):
+        draw.line(
+            [(x, y0), (min(x + dash_length, x1), y0)],
+            fill=color,
+            width=width,
+        )
+        draw.line(
+            [(x, y1), (min(x + dash_length, x1), y1)],
+            fill=color,
+            width=width,
+        )
+
+    vertical_step = dash_length + gap_length
+    for y in while_loop(y0, y1, vertical_step):
+        draw.line(
+            [(x0, y), (x0, min(y + dash_length, y1))],
+            fill=color,
+            width=width,
+        )
+        draw.line(
+            [(x1, y), (x1, min(y + dash_length, y1))],
+            fill=color,
+            width=width,
+        )
+

@@ -3,6 +3,7 @@ google-genai
 matplotlib
 neat-python
 Pillow
+pygame
 python-dotenv
 
 # javascript  # for neurogram only

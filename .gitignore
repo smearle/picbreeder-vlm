@@ -2,6 +2,7 @@ __pycache__/
 
 initial_populations/*
 interactive_runs/*
+logs_collaborative/*
 logs/*
 log/*
 .env

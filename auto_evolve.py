@@ -11,10 +11,7 @@ from statistics import mean, pstdev
 
 import sys
 
-try:
-    import graphviz  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    graphviz = None  # type: ignore[assignment]
+import graphviz 
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -70,16 +67,15 @@ DEFAULT_SYSTEM_INSTRUCTION = (
 )
 
 
-DEFAULT_PROMPT = "Grid at generation {generation}:"
-
-
 def gen_selection_prompt(select_k: Optional[int]) -> str:
     if select_k is None:
         return "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. "
     if select_k == 1:
         return "Pick one image by its numeric label--the corresponding CPPN will be used as the parent of the next generation. "
-
     return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. "
+
+
+DEFAULT_PROMPT = "Grid at generation {generation}:"
 
 
 def dump_initial_populations(
@@ -152,6 +148,14 @@ def _session_max_turns(chat_history_turns: Optional[int]) -> Optional[int]:
     return chat_history_turns
 
 
+def reset_chat_session() -> None:
+    """Clear any cached chat session so the next request starts fresh."""
+
+    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS
+    _CHAT_SESSION = None
+    _CHAT_SESSION_MAX_TURNS = None
+
+
 def _ensure_chat_session(chat_history_turns: Optional[int]) -> Any:
     global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS
     max_turns = _session_max_turns(chat_history_turns)
@@ -161,7 +165,7 @@ def _ensure_chat_session(chat_history_turns: Optional[int]) -> Any:
     return _CHAT_SESSION
 
 
-def _query_with_history(
+def query_with_history(
     image_bytes: bytes,
     prompt: str,
     *,
@@ -201,7 +205,7 @@ def select_parents_from_grid(
     max_index = max(total_images - 1, 0)
     prompt = prompt_template.format(generation=generation)
 
-    response = _query_with_history(
+    response = query_with_history(
         image_bytes,
         prompt=prompt,
         system_instruction=system_instruction,
