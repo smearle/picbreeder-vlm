@@ -13,6 +13,7 @@ Outputs saved to the experiment directory:
 """
 from pathlib import Path
 import argparse
+import json
 import sys
 import math
 from PIL import Image
@@ -33,6 +34,7 @@ except Exception:
 
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
+from sklearn.metrics import pairwise_distances
 
 import matplotlib
 matplotlib.use("Agg")
@@ -128,6 +130,83 @@ def plot_coords(coords, image_paths, outpath: Path, thumbs_limit=200):
     plt.close(fig)
 
 
+def _mean_pairwise_distance(embeddings: np.ndarray, max_points: int = 2000, random_state: int = 0):
+    n = embeddings.shape[0]
+    if n < 2:
+        return {"value": None, "computed_on": n, "sampled": False}
+
+    if n > max_points:
+        rng = np.random.default_rng(random_state)
+        sample_idx = rng.choice(n, size=max_points, replace=False)
+        sample = embeddings[sample_idx]
+        sampled = True
+        sample_size = max_points
+    else:
+        sample = embeddings
+        sampled = False
+        sample_size = n
+
+    dists = pairwise_distances(sample, metric="euclidean")
+    iu = np.triu_indices(sample_size, k=1)
+    if iu[0].size == 0:
+        mean_dist = 0.0
+    else:
+        mean_dist = float(dists[iu].mean())
+    return {"value": mean_dist, "computed_on": sample_size, "sampled": sampled}
+
+
+def _greedy_k_center_radius(embeddings: np.ndarray, k: int):
+    n = embeddings.shape[0]
+    if n == 0 or k <= 0:
+        return None
+    k = min(k, n)
+
+    mean_vec = embeddings.mean(axis=0)
+    start = int(np.argmax(np.linalg.norm(embeddings - mean_vec, axis=1)))
+    centers = [start]
+    dist_to_centers = np.linalg.norm(embeddings - embeddings[start], axis=1)
+
+    for _ in range(1, k):
+        next_center = int(np.argmax(dist_to_centers))
+        centers.append(next_center)
+        new_dist = np.linalg.norm(embeddings - embeddings[next_center], axis=1)
+        dist_to_centers = np.minimum(dist_to_centers, new_dist)
+
+    return float(dist_to_centers.max())
+
+
+def compute_embedding_metrics(
+    embeddings: np.ndarray,
+    *,
+    random_state: int = 0,
+    pairwise_sample_limit: int = 2000,
+    k_values=None,
+):
+    if k_values is None:
+        k_values = [1, 5, 10, 20]
+
+    metrics = {
+        "num_embeddings": int(embeddings.shape[0]),
+        "embedding_dim": int(embeddings.shape[1]) if embeddings.size else 0,
+    }
+
+    mpd = _mean_pairwise_distance(embeddings, max_points=pairwise_sample_limit, random_state=random_state)
+    metrics["mean_pairwise_distance"] = mpd
+
+    n = metrics["num_embeddings"]
+    k_radius = {}
+    for k in k_values:
+        radius = _greedy_k_center_radius(embeddings, k)
+        if radius is not None:
+            k_radius[str(k)] = {
+                "radius": radius,
+                "effective_k": min(k, n),
+            }
+    metrics["k_center_radius"] = k_radius
+
+    return metrics
+
+
 def main():
     parser = argparse.ArgumentParser(description="Embed and visualize images from an experiment archive using OpenCLIP + UMAP/TSNE")
     parser.add_argument("--experiment-dir", required=True, help="Path to experiment directory containing archive/images/*.png")
@@ -137,6 +216,18 @@ def main():
     parser.add_argument("--batch-size", type=int, default=64, help="Image embedding batch size")
     parser.add_argument("--thumbs-limit", type=int, default=200, help="Max number of thumbnails to draw on the plot")
     parser.add_argument("--device", default=None, help="torch device string (auto-detect if not provided)")
+    parser.add_argument(
+        "--pairwise-sample-limit",
+        type=int,
+        default=2000,
+        help="Max number of embeddings used when computing mean pairwise distance (default: 2000)",
+    )
+    parser.add_argument(
+        "--k-center-values",
+        type=str,
+        default="1,5,10,20",
+        help="Comma-separated list of k values for k-center radius computation (default: 1,5,10,20)",
+    )
     args = parser.parse_args()
 
     exp_dir = Path(args.experiment_dir)
@@ -163,6 +254,25 @@ def main():
     emb_out = exp_dir / "embeddings_openclip.npz"
     np.savez_compressed(emb_out, filenames=np.array(filenames), embeddings=embeddings)
     print(f"Saved embeddings to {emb_out}")
+
+    try:
+        k_values = [int(v) for v in args.k_center_values.split(",") if v.strip()]
+        if len(k_values) == 0:
+            raise ValueError
+    except ValueError:
+        print("Invalid --k-center-values: provide a comma-separated list of integers.")
+        sys.exit(1)
+
+    metrics = compute_embedding_metrics(
+        embeddings,
+        random_state=0,
+        pairwise_sample_limit=max(2, args.pairwise_sample_limit),
+        k_values=k_values,
+    )
+    metrics_out = exp_dir / "embedding_metrics.json"
+    with metrics_out.open("w") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"Saved embedding coverage metrics to {metrics_out}")
 
     print(f"Reducing to 2D using {args.method}...")
     coords = reduce_embeddings(embeddings, method=args.method)

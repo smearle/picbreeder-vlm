@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import shutil
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import neat
 from neat.population import CompleteExtinctionException
@@ -128,6 +128,10 @@ class ArchiveEntry:
     added_at: datetime
     metadata_path: Optional[Path] = None
     selection_grid_path: Optional[Path] = None
+    genome_key: Optional[int] = None
+    parent_genome_keys: List[int] = field(default_factory=list)
+    source_entry_ids: List[str] = field(default_factory=list)
+    ancestor_genome_keys: List[int] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -145,6 +149,10 @@ class ArchiveEntry:
             "selection_grid_path": (
                 str(self.selection_grid_path) if self.selection_grid_path else None
             ),
+            "genome_key": self.genome_key,
+            "parent_genome_keys": list(self.parent_genome_keys),
+            "source_entry_ids": list(self.source_entry_ids),
+            "ancestor_genome_keys": list(self.ancestor_genome_keys),
         }
 
     @classmethod
@@ -158,6 +166,11 @@ class ArchiveEntry:
         metadata_path = payload.get("metadata_path")
         selection_grid_path = payload.get("selection_grid_path")
         title = payload.get("title") or ""
+        genome_key_raw = payload.get("genome_key")
+        try:
+            genome_key = int(genome_key_raw) if genome_key_raw is not None else None
+        except (TypeError, ValueError):
+            genome_key = None
         return cls(
             entry_id=payload["id"],
             title=str(title),
@@ -171,6 +184,12 @@ class ArchiveEntry:
             added_at=added_at,
             metadata_path=Path(metadata_path) if metadata_path else None,
             selection_grid_path=Path(selection_grid_path) if selection_grid_path else None,
+            genome_key=genome_key,
+            parent_genome_keys=_ensure_int_list(payload.get("parent_genome_keys", [])),
+            source_entry_ids=[
+                str(value) for value in payload.get("source_entry_ids", []) if value is not None
+            ],
+            ancestor_genome_keys=_ensure_int_list(payload.get("ancestor_genome_keys", [])),
         )
 
 
@@ -262,6 +281,10 @@ class ArchiveManager:
         source_experiment: Path,
         favorite_log_path: Optional[Path] = None,
         selection_grid_path: Optional[Path] = None,
+        genome_key: Optional[int] = None,
+        parent_genome_keys: Optional[Sequence[int]] = None,
+        source_entry_ids: Optional[Sequence[str]] = None,
+        ancestor_genome_keys: Optional[Sequence[int]] = None,
     ) -> ArchiveEntry:
         """Persist a favourite image and genome into the shared archive."""
 
@@ -288,6 +311,10 @@ class ArchiveManager:
             added_at=datetime.now(),
             metadata_path=favorite_log_path,
             selection_grid_path=selection_grid_path,
+            genome_key=genome_key,
+            parent_genome_keys=list(parent_genome_keys or []),
+            source_entry_ids=[str(value) for value in (source_entry_ids or [])],
+            ancestor_genome_keys=list(ancestor_genome_keys or []),
         )
 
         self._metadata.setdefault("entries", []).append(archive_entry.as_dict())
@@ -322,7 +349,7 @@ class ArchiveManager:
                     img = img.convert("RGB")
                     img = img.resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
                     images.append(img)
-                    captions.append(f"{index}\n{entry['agent_id']}")
+                    captions.append(f"{index}")
             except Exception:
                 continue
 
@@ -556,6 +583,10 @@ class CollaborativeAgentRunner:
         self.publication_history_path = self.logs_dir / "publication_history.jsonl"
         self.publication_history_path.touch(exist_ok=True)
         self._current_publication_entry_id: Optional[str] = None
+        self._lineage_log_path = self.logs_dir / "lineage.jsonl"
+        self._lineage_log_path.touch(exist_ok=True)
+        self._archive_seed_map: Dict[int, Dict[str, Any]] = {}
+        self._genome_lineage: Dict[int, Dict[str, Any]] = {}
         if self.resume_mode:
             self._load_existing_publication_state()
 
@@ -646,6 +677,16 @@ class CollaborativeAgentRunner:
                 if preview_path is not None:
                     decision["branch_preview_path"] = str(preview_path)
 
+        if archive_entries:
+            selected_entry_ids = [
+                archive_entries[idx]["id"]
+                for idx in decision.get("selected_images", [])
+                if 0 <= idx < len(archive_entries)
+            ]
+        else:
+            selected_entry_ids = []
+        decision["selected_entry_ids"] = selected_entry_ids
+
         self._write_branching_log(decision)
         print(
             f"[{self.agent_id}] Branching decision: choice={choice}, selected={selected_images}, rationale='{rationale}'"
@@ -653,21 +694,26 @@ class CollaborativeAgentRunner:
         return decision
 
     def initialise_population(self, decision: Dict[str, Any]) -> None:
+        self._archive_seed_map.clear()
+        self._genome_lineage.clear()
+
         if decision.get("choice") != "branch" or not decision.get("selected_images"):
             seed_initial_population(self.population, self.config.genome_config)
             return
 
         archive_entries = self.archive_manager.entries
         selected_indices = decision.get("selected_images", [])
-        genomes: List[neat.DefaultGenome] = []
+        selected_records: List[Tuple[Dict[str, Any], neat.DefaultGenome]] = []
         for idx in selected_indices:
+            if not (0 <= idx < len(archive_entries)):
+                continue
             entry = archive_entries[idx]
             genome = self.archive_manager.load_genome(entry["id"])
             if genome is None:
                 continue
-            genomes.append(genome)
+            selected_records.append((entry, genome))
 
-        if not genomes:
+        if not selected_records:
             seed_initial_population(self.population, self.config.genome_config)
             return
 
@@ -675,11 +721,16 @@ class CollaborativeAgentRunner:
         random.shuffle(population_keys)
         self.population.population.clear()
 
-        for key, genome in zip(population_keys, genomes):
+        for key, (entry_dict, genome) in zip(population_keys, selected_records):
             clone = copy.deepcopy(genome)
             clone.key = key
             clone.fitness = None
             self.population.population[key] = clone
+            self._archive_seed_map[key] = {
+                "entry_id": entry_dict.get("id"),
+                "agent_id": entry_dict.get("agent_id"),
+                "generation": entry_dict.get("generation"),
+            }
 
         sync_population_output_activations(self.population, self.config.genome_config)
         self.population.species.speciate(
@@ -688,10 +739,13 @@ class CollaborativeAgentRunner:
             self.population.generation,
         )
         self.population.population = self.population.reproduction.reproduce(
-            self.population.config, self.population.species, self.population.config.pop_size,
-            self.population.generation)
+            self.population.config,
+            self.population.species,
+            self.population.config.pop_size,
+            self.population.generation,
+        )
 
-        self._write_branching_summary(decision, len(genomes))
+        self._write_branching_summary(decision, len(selected_records))
 
     # ------------------------------------------------------------------
     # Evolution loop
@@ -771,6 +825,7 @@ class CollaborativeAgentRunner:
         )
         print(f"Saved selection grid to {selection_path}")
         self._generation_records[generation] = record
+        self._log_generation_lineage(generation, genomes)
 
         publish_payload = None
         if not self.dry_run:
@@ -923,12 +978,132 @@ class CollaborativeAgentRunner:
             source_experiment=self.agent_dir,
             favorite_log_path=log_path,
             selection_grid_path=record.grid_path,
+            genome_key=favorite.get("genome_key"),
+            parent_genome_keys=favorite.get("parent_genome_keys"),
+            source_entry_ids=favorite.get("source_archive_entry_ids"),
+            ancestor_genome_keys=favorite.get("ancestor_genome_keys"),
         )
         return entry
 
     # ------------------------------------------------------------------
     # Logging helpers
     # ------------------------------------------------------------------
+    def _log_generation_lineage(
+        self,
+        generation: int,
+        genomes: List[Tuple[int, neat.DefaultGenome]],
+    ) -> None:
+        reproduction = getattr(self.population, "reproduction", None)
+        if reproduction is not None and hasattr(reproduction, "ancestors"):
+            ancestors_map = getattr(reproduction, "ancestors")
+        else:
+            ancestors_map = {}
+
+        memo_sources: Dict[int, List[str]] = {}
+        memo_ancestors: Dict[int, Set[int]] = {}
+        log_entries: List[Dict[str, Any]] = []
+
+        for idx, (genome_id, _) in enumerate(genomes):
+            parents_raw = ancestors_map.get(genome_id, tuple())
+            parents = [
+                int(parent)
+                for parent in parents_raw
+                if isinstance(parent, int) and parent not in (-1,)
+            ]
+            source_entries = self._resolve_source_entries(genome_id, ancestors_map, memo_sources)
+            ancestor_keys = sorted(
+                self._collect_ancestor_genomes(genome_id, ancestors_map, memo_ancestors)
+            )
+
+            lineage_record = self._genome_lineage.get(genome_id, {})
+            if "first_seen_generation" not in lineage_record:
+                lineage_record["first_seen_generation"] = generation
+            lineage_record["parents"] = parents
+            lineage_record["source_entries"] = list(source_entries)
+            lineage_record["ancestor_keys"] = ancestor_keys
+            self._genome_lineage[genome_id] = lineage_record
+
+            log_entries.append(
+                {
+                    "agent_id": self.agent_id,
+                    "generation": generation,
+                    "image_index": idx,
+                    "genome_key": genome_id,
+                    "parent_genome_keys": parents,
+                    "source_entry_ids": source_entries,
+                    "ancestor_genome_keys": ancestor_keys,
+                }
+            )
+
+        if not log_entries:
+            return
+
+        with self._lineage_log_path.open("a", encoding="utf-8") as fp:
+            for entry in log_entries:
+                fp.write(json.dumps(entry))
+                fp.write("\n")
+
+    def _resolve_source_entries(
+        self,
+        genome_key: int,
+        ancestors_map: Dict[int, Tuple[int, int]],
+        memo: Dict[int, List[str]],
+    ) -> List[str]:
+        if genome_key in memo:
+            return memo[genome_key]
+
+        seed_info = self._archive_seed_map.get(genome_key)
+        if seed_info is not None:
+            entry_id = seed_info.get("entry_id")
+            memo[genome_key] = [entry_id] if entry_id else []
+            return memo[genome_key]
+
+        lineage_record = self._genome_lineage.get(genome_key)
+        if lineage_record and lineage_record.get("source_entries") is not None:
+            memo[genome_key] = list(lineage_record["source_entries"])
+            return memo[genome_key]
+
+        parents_raw = ancestors_map.get(genome_key, tuple())
+        parents = [
+            int(parent)
+            for parent in parents_raw
+            if isinstance(parent, int) and parent not in (-1,)
+        ]
+        if not parents:
+            memo[genome_key] = []
+            return memo[genome_key]
+
+        collected: Set[str] = set()
+        for parent in parents:
+            collected.update(self._resolve_source_entries(parent, ancestors_map, memo))
+
+        memo[genome_key] = sorted(value for value in collected if value)
+        return memo[genome_key]
+
+    def _collect_ancestor_genomes(
+        self,
+        genome_key: int,
+        ancestors_map: Dict[int, Tuple[int, int]],
+        memo: Dict[int, Set[int]],
+    ) -> Set[int]:
+        if genome_key in memo:
+            return memo[genome_key]
+
+        parents_raw = ancestors_map.get(genome_key, tuple())
+        parents = [
+            int(parent)
+            for parent in parents_raw
+            if isinstance(parent, int) and parent not in (-1,)
+        ]
+
+        ancestors: Set[int] = set()
+        for parent in parents:
+            ancestors.add(parent)
+            ancestors.update(self._collect_ancestor_genomes(parent, ancestors_map, memo))
+
+        memo[genome_key] = ancestors
+        return ancestors
+
     def _write_branching_log(self, payload: Dict[str, Any]) -> None:
         path = self.logs_dir / "branching_selection.json"
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1030,18 +1205,23 @@ class CollaborativeAgentRunner:
         source: str,
         replaced_entry_id: Optional[str],
     ) -> Optional[ArchiveEntry]:
-        generation = favorite.get("generation")
-        index = favorite.get("index")
+        generation_raw = favorite.get("generation")
+        index_raw = favorite.get("index")
         title = favorite.get("title", "")
-        if generation is None or index is None:
+        if generation_raw is None or index_raw is None:
             return None
-        record = self._generation_records.get(int(generation))
-        if record is None or int(index) not in record.image_paths:
+        try:
+            generation_int = int(generation_raw)
+            index_int = int(index_raw)
+        except (TypeError, ValueError):
+            return None
+        record = self._generation_records.get(generation_int)
+        if record is None or index_int not in record.image_paths:
             return None
 
         payload = dict(favorite)
-        payload["generation"] = int(generation)
-        payload["index"] = int(index)
+        payload["generation"] = generation_int
+        payload["index"] = index_int
         payload.setdefault("rationale", "")
         payload["timestamp"] = datetime.now().isoformat()
         payload["forced"] = forced
@@ -1050,6 +1230,36 @@ class CollaborativeAgentRunner:
             payload["response_text"] = response_text
         if replaced_entry_id is not None:
             payload["replaced_entry_id"] = replaced_entry_id
+
+        genome_snapshot = record.genome_snapshots.get(index_int) if record else None
+        reproduction = getattr(self.population, "reproduction", None)
+        if genome_snapshot is not None and hasattr(genome_snapshot, "key"):
+            genome_key = int(getattr(genome_snapshot, "key"))
+        else:
+            genome_key = None
+        if reproduction is not None and hasattr(reproduction, "ancestors"):
+            ancestors_map = getattr(reproduction, "ancestors")
+        else:
+            ancestors_map = {}
+        if genome_key is not None:
+            parent_keys_raw = ancestors_map.get(genome_key, tuple())
+            parent_keys = [
+                int(parent)
+                for parent in parent_keys_raw
+                if isinstance(parent, int) and parent not in (-1,)
+            ]
+            source_entry_ids = self._resolve_source_entries(genome_key, ancestors_map, {})
+            ancestor_key_set = self._collect_ancestor_genomes(genome_key, ancestors_map, {})
+            ancestor_keys = sorted(ancestor_key_set)
+        else:
+            parent_keys = []
+            source_entry_ids = []
+            ancestor_keys = []
+
+        payload["genome_key"] = genome_key
+        payload["parent_genome_keys"] = parent_keys
+        payload["source_archive_entry_ids"] = source_entry_ids
+        payload["ancestor_genome_keys"] = ancestor_keys
 
         self._write_favorite_log(payload)
 
@@ -1063,13 +1273,19 @@ class CollaborativeAgentRunner:
             return None
 
         payload["archive_entry_id"] = entry.entry_id
+        if genome_key is not None:
+            self._archive_seed_map[genome_key] = {
+                "entry_id": entry.entry_id,
+                "agent_id": self.agent_id,
+                "generation": generation_int,
+            }
         self._append_publication_history(payload)
 
         self.favorite_archive_entry = entry
         self.favorite_decision = payload
         self._current_publication_entry_id = entry.entry_id
         print(
-            f"[{self.agent_id}] Publication committed: generation={generation}, index={index}, title='{title}', forced={payload.get('forced')}"
+            f"[{self.agent_id}] Publication committed: generation={generation_int}, index={index_int}, title='{title}', forced={payload.get('forced')}"
         )
         return entry
 
@@ -1657,7 +1873,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-agents",
         type=int,
-        default=20,
+        default=100,
         help="Number of agents to execute sequentially",
     )
     parser.add_argument(
