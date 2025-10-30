@@ -30,6 +30,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+import shutil
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import neat
@@ -43,6 +44,7 @@ from auto_evolve import (
     gen_selection_prompt,
     reset_chat_session,
     select_parents_from_grid,
+    restore_chat_history_from_metadata,
 )
 from artifacts import build_generation_state, save_neat_population
 from experiment_cli import cap_select_k_for_engine
@@ -86,6 +88,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     """(During branching, set `selected` to null to start from a fresh population.) """
     "You may also include a \"publish\" field in the JSON response if you wish to publish an image from this grid. It should have the form: "
     '{{"index": image_index, "title": "image title", "reason": "brief publication note"}}. '
+    "When justifying your publication choice, explain why the selected contribution is valuable to the archive. "
     # "(Also, for debugging, please tell me how many previous grids you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
     # "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
 )
@@ -99,10 +102,11 @@ def gen_selection_prompt(select_k: Optional[int]) -> str:
 
 
 
-DEFAULT_PROMPT = "Grid at generation {generation}."
+PARENT_SELECTION_PROMPT = "Above is the grid at generation {generation}."
 
-ARCHIVE_SELECTION_PROMPT = (
+ARCHIVE_BRANCHING_PROMPT = (
     "Above is the archive of images published by prior users. You may choose to branch from one of them, or start from a fresh population. "
+    "Their names are, in raster order: {elite_names}."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -113,6 +117,7 @@ class ArchiveEntry:
     """Structured information recorded for each archived favourite."""
 
     entry_id: str
+    title: str
     image_path: Path
     genome_path: Path
     agent_id: str
@@ -127,6 +132,7 @@ class ArchiveEntry:
     def as_dict(self) -> Dict[str, Any]:
         return {
             "id": self.entry_id,
+            "title": self.title,
             "image_path": str(self.image_path),
             "genome_path": str(self.genome_path),
             "agent_id": self.agent_id,
@@ -151,8 +157,10 @@ class ArchiveEntry:
         )
         metadata_path = payload.get("metadata_path")
         selection_grid_path = payload.get("selection_grid_path")
+        title = payload.get("title") or ""
         return cls(
             entry_id=payload["id"],
+            title=str(title),
             image_path=Path(payload["image_path"]),
             genome_path=Path(payload["genome_path"]),
             agent_id=payload["agent_id"],
@@ -194,6 +202,8 @@ class ArchiveManager:
         if self.metadata_file.exists():
             with self.metadata_file.open("r", encoding="utf-8") as fp:
                 self._metadata = json.load(fp)
+            for entry in self._metadata.get("entries", []):
+                entry.setdefault("title", "")
         else:
             self._metadata = {
                 "created_at": datetime.now().isoformat(),
@@ -213,6 +223,23 @@ class ArchiveManager:
     def entries(self) -> List[Dict[str, Any]]:
         return list(self._metadata.get("entries", []))
 
+    def get_elite_names(self, max_length: int = 80) -> List[str]:
+        names: List[str] = []
+        for entry in self._metadata.get("entries", []):
+            title = str(entry.get("title") or "").strip()
+            candidates = [title, entry.get("rationale"), entry.get("id"), "untitled"]
+            name = ""
+            for candidate in candidates:
+                candidate_str = str(candidate or "").strip()
+                if candidate_str:
+                    name = candidate_str
+                    break
+            single_line = " ".join(name.split())
+            if max_length > 0 and len(single_line) > max_length:
+                single_line = single_line[: max_length - 3] + "..."
+            names.append(single_line or "untitled")
+        return names
+
     def get_entry(self, entry_id: str) -> Optional[ArchiveEntry]:
         for raw in self._metadata.get("entries", []):
             if raw.get("id") == entry_id:
@@ -231,6 +258,7 @@ class ArchiveManager:
         generation: int,
         image_index: int,
         rationale: str,
+        title: str,
         source_experiment: Path,
         favorite_log_path: Optional[Path] = None,
         selection_grid_path: Optional[Path] = None,
@@ -249,6 +277,7 @@ class ArchiveManager:
 
         archive_entry = ArchiveEntry(
             entry_id=entry_id,
+            title=title,
             image_path=image_path,
             genome_path=genome_path,
             agent_id=agent_id,
@@ -300,7 +329,7 @@ class ArchiveManager:
         if not images:
             return None
 
-        columns = max(1, int(math.sqrt(len(images))))
+        columns = max(1, math.ceil(math.sqrt(len(images))))
         rows = math.ceil(len(images) / columns)
         margin = ARCHIVE_GRID_MARGIN
         font = _try_load_font(18)
@@ -451,6 +480,8 @@ class CollaborativeAgentRunner:
     ) -> None:
         self.agent_id = agent_id
         self.agent_dir = agent_dir
+        # Save running latest image in parent of agent directory
+        self.latest_img_path = agent_dir.parent / "latest_image.png"
         self.archive_manager = archive_manager
         self.generations = generations
         self.rows = rows
@@ -490,7 +521,7 @@ class CollaborativeAgentRunner:
         sync_population_output_activations(self.population, self.config.genome_config)
         self.population.add_reporter(GenerationCheckpointer(self.population_dir))
 
-        self.prompt_template = DEFAULT_PROMPT
+        self.prompt_template = PARENT_SELECTION_PROMPT
         if self.scheme == "color":
             color_prompt = "It would be nice to have color images in the online archive, but we do not want it to be domainated by high-frequency rainbow artefacts. "
         else:
@@ -501,6 +532,20 @@ class CollaborativeAgentRunner:
             n_generations=self.generations,
             color_prompt=color_prompt,
         )
+        with open(self.agent_dir / "system_instruction.txt", "w", encoding="utf-8") as fp:
+            fp.write(self.system_instruction)
+
+        self._restored_chat_turns = 0
+        should_restore_chat = (not self.dry_run) and (self.chat_history_turns is None or self.chat_history_turns != 0)
+        if should_restore_chat:
+            restored = restore_chat_history_from_metadata(
+                self.query_dir,
+                chat_history_turns=self.chat_history_turns,
+                prompt_template=self.prompt_template,
+            )
+            if restored:
+                self._restored_chat_turns = restored
+                print(f"[{self.agent_id}] Restored {restored} prior chat turn(s) from saved metadata.")
 
         self.branching_decision: Dict[str, Any] = {}
         self.favorite_decision: Dict[str, Any] = {}
@@ -520,76 +565,91 @@ class CollaborativeAgentRunner:
     def select_starting_point(self) -> Dict[str, Any]:
         archive_grid = self.archive_manager.create_archive_grid(self.thumb_size)
         archive_entries = self.archive_manager.entries
+        elite_name_list = self.archive_manager.get_elite_names()
         if not archive_entries:
+            rationale = "Archive empty; defaulting to fresh population."
+            selected_images: List[int] = []
+            choice = "fresh"
             decision = {
-                "choice": "fresh",
-                "selected_images": [],
-                "rationale": "Archive empty; defaulting to fresh population.",
+                "choice": choice,
+                "selected_images": selected_images,
+                "rationale": rationale,
                 "raw_response": None,
                 "timestamp": datetime.now().isoformat(),
+                "archive_elite_names": elite_name_list,
             }
-            self._write_branching_log(decision)
-            self._print_branching_decision(decision)
-            return decision
 
-        if self.dry_run:
+        elif self.dry_run:
+            rationale = "Dry-run mode; random decision."
+            selected_images: List[int] = []
+            choice = "fresh" if random.random() < 0.5 else "branch"
             decision = {
-                "choice": "fresh" if random.random() < 0.5 else "branch",
-                "selected_images": [],
-                "rationale": "Dry-run random decision.",
+                "choice": choice,
+                "selected_images": selected_images,
+                "rationale": rationale,
                 "raw_response": None,
                 "timestamp": datetime.now().isoformat(),
+                "archive_elite_names": elite_name_list,
             }
             if decision["choice"] == "branch":
                 decision["selected_images"] = [random.randrange(len(archive_entries))]
-            self._write_branching_log(decision)
-            self._print_branching_decision(decision)
-            return decision
-
-        if archive_grid is None:
+        
+        elif archive_grid is None:
             decision = {
                 "choice": "fresh",
                 "selected_images": [],
                 "rationale": "Archive grid unavailable; falling back to fresh population.",
                 "raw_response": None,
                 "timestamp": datetime.now().isoformat(),
+                "archive_elite_names": elite_name_list,
             }
-            self._write_branching_log(decision)
-            self._print_branching_decision(decision)
-            return decision
 
-        with archive_grid.open("rb") as fp:
-            grid_bytes = fp.read()
+        else:
+            elite_labels = [f"{idx}: {name}" for idx, name in enumerate(elite_name_list)]
+            elite_names = "; ".join(elite_labels) if elite_labels else "none available"
+            archive_prompt = ARCHIVE_BRANCHING_PROMPT.format(
+                elite_names=elite_names,
+            )
 
-        response = query_with_history(
-            grid_bytes,
-            prompt=ARCHIVE_SELECTION_PROMPT,
-            system_instruction=self.system_instruction,
-            chat_history_turns=self.chat_history_turns,
-        )
+            with archive_grid.open("rb") as fp:
+                grid_bytes = fp.read()
 
-        response_text = getattr(response, "text", "") or ""
-        try:
-            parsed = extract_json_object(response_text)
-        except Exception:
-            parsed = {}
+                response = query_with_history(
+                    grid_bytes,
+                    prompt=archive_prompt,
+                    system_instruction=self.system_instruction,
+                    chat_history_turns=self.chat_history_turns,
+                )
 
-        choice = parsed.get("choice", "fresh")
-        selected_images = _ensure_int_list(parsed.get("selected_images", []))
-        selected_images = [idx for idx in selected_images if 0 <= idx < len(archive_entries)]
-        decision = {
-            "choice": "branch" if choice == "branch" and selected_images else "fresh",
-            "selected_images": selected_images,
-            "rationale": parsed.get("rationale", ""),
-            "raw_response": response_text,
-            "timestamp": datetime.now().isoformat(),
-            "archive_grid_path": str(archive_grid),
-        }
-        preview_path = self._save_archive_branch_preview(decision, archive_entries)
-        if preview_path is not None:
-            decision["branch_preview_path"] = str(preview_path)
+                response_text = getattr(response, "text", "") or ""
+                try:
+                    parsed = extract_json_object(response_text)
+                except Exception:
+                    parsed = {}
+
+                selected_images = parsed.get("selected", [])
+                selected_images = [] if selected_images is None else selected_images
+                selected_images = _ensure_int_list(selected_images)
+                selected_images = [idx for idx in selected_images if 0 <= idx < len(archive_entries)]
+                rationale = str(parsed.get("rationale", ""))
+                choice = "branch" if selected_images else "fresh"
+                decision = {
+                    "choice": choice,
+                    "selected_images": selected_images,
+                    "rationale": rationale,
+                    "raw_response": response_text,
+                    "timestamp": datetime.now().isoformat(),
+                    "archive_grid_path": str(archive_grid),
+                    "archive_elite_names": elite_name_list,
+                }
+                preview_path = self._save_archive_branch_preview(decision, archive_entries)
+                if preview_path is not None:
+                    decision["branch_preview_path"] = str(preview_path)
+
         self._write_branching_log(decision)
-        self._print_branching_decision(decision)
+        print(
+            f"[{self.agent_id}] Branching decision: choice={choice}, selected={selected_images}, rationale='{rationale}'"
+        )
         return decision
 
     def initialise_population(self, decision: Dict[str, Any]) -> None:
@@ -662,16 +722,18 @@ class CollaborativeAgentRunner:
         grid_image = create_numbered_grid(state)
         grid_path = self.query_dir / f"gen_{generation:03d}_grid.png"
         grid_image.save(grid_path, format="PNG")
+        shutil.copy(grid_path, self.latest_img_path)
 
-        require_publish = self.favorite_archive_entry is None and generation == self.generations - 1
         system_instruction = self.system_instruction
         prompt_template = self.prompt_template
-        if require_publish:
-            prompt_template += (
-                " You have not published any favorite yet and this is the final generation; "
-                "you must include a publish object selecting exactly one image to share. "
-                "If you omit it, one of your selected parents will be published automatically."
-            )
+        if generation == self.generations - 1:
+            require_publish = self.favorite_archive_entry is None
+            if require_publish:
+                prompt_template += (
+                    " You have not published any favorite yet and this is the final generation; "
+                    "you must include a publish object selecting exactly one image to share. "
+                    "If you omit it, one of your selected parents will be published automatically."
+                )
 
         selection_meta = select_parents_from_grid(
             state,
@@ -682,6 +744,8 @@ class CollaborativeAgentRunner:
             self.chat_history_turns,
         )
         selection_meta = dict(selection_meta)
+        selection_path = Path(selection_meta.get("selection_path", grid_path))
+        shutil.copy(selection_path, self.latest_img_path)
         selected_indices: Sequence[int] = selection_meta["selected"]
         publish_details: Optional[Dict[str, Any]] = None
         for idx, (_, genome) in enumerate(genomes):
@@ -698,7 +762,6 @@ class CollaborativeAgentRunner:
             image_paths[idx] = image_path
             genome_snapshots[idx] = copy.deepcopy(genome)
 
-        selection_path = Path(selection_meta.get("selection_path", grid_path))
         record = GenerationArtifacts(
             state_path=state_path,
             grid_path=grid_path,
@@ -856,6 +919,7 @@ class CollaborativeAgentRunner:
             generation=generation,
             image_index=index,
             rationale=favorite.get("rationale", ""),
+            title=favorite.get("title", ""),
             source_experiment=self.agent_dir,
             favorite_log_path=log_path,
             selection_grid_path=record.grid_path,
@@ -907,7 +971,6 @@ class CollaborativeAgentRunner:
             rationale = (
                 payload.get("reason")
                 or payload.get("rationale")
-                or payload.get("explanation")
                 or ""
             )
             title = payload.get("title")
@@ -925,7 +988,7 @@ class CollaborativeAgentRunner:
             return None
         return {
             "index": index_int,
-            "rationale": str(rationale).strip(),
+            "reason": str(rationale).strip(),
             "raw": payload,
             "title": str(title).strip() if 'title' in locals() else "",
         }
@@ -1022,10 +1085,6 @@ class CollaborativeAgentRunner:
             return min(record.image_paths)
         return 0
 
-    def _build_system_instruction(self, *, require_publish: bool) -> str:
-        instruction = self.base_system_instruction
-        return instruction
-
     def _render_selection_with_publication(
         self,
         state: Dict[str, Any],
@@ -1058,14 +1117,6 @@ class CollaborativeAgentRunner:
                     gap_length=6,
                 )
         image.save(selection_path, format="PNG")
-
-    def _print_branching_decision(self, decision: Dict[str, Any]) -> None:
-        selected = decision.get("selected_images", [])
-        rationale = decision.get("rationale", "")
-        choice = decision.get("choice", "fresh")
-        print(
-            f"[{self.agent_id}] Branching decision: choice={choice}, selected={selected}, rationale='{rationale}'"
-        )
 
     def _save_archive_branch_preview(
         self,
@@ -1125,6 +1176,7 @@ class CollaborativeAgentRunner:
                     width=5,
                 )
             preview.save(output_path, format="PNG")
+            shutil.copy(output_path, self.latest_img_path)
 
         return output_path
 
@@ -1137,7 +1189,7 @@ class CollaborativeAgentRunner:
     ) -> None:
         publish_index = publish_details.get("index") if publish_details else None
         publish_title = publish_details.get("title") if publish_details else None
-        publish_rationale = publish_details.get("rationale") if publish_details else None
+        publish_rationale = publish_details.get("reason") if publish_details else None
         print((
             f"[{self.agent_id}] Gen {generation} selection: selected={list(selected_indices)}, rationale='{rationale}',"
             f" publish_index={publish_index}, publish_title='{publish_title}', publish_rationale='{publish_rationale}'"
@@ -1161,8 +1213,10 @@ class CollaborativeMultiAgentOrchestrator:
         enable_output_activations: bool,
         dry_run: bool,
         seed: Optional[int],
+        chat_history_turns: int,
     ) -> None:
         self.experiment_dir = experiment_dir
+        self.chat_history_turns = chat_history_turns
         self.rows = rows
         self.cols = cols
         self.thumb_size = thumb_size
@@ -1393,7 +1447,7 @@ class CollaborativeMultiAgentOrchestrator:
             scheme=self.scheme,
             palette=self.palette,
             select_k=self.select_k,
-            chat_history_turns=DEFAULT_CHAT_HISTORY_TURNS,
+            chat_history_turns=self.chat_history_turns,
             dry_run=self.dry_run,
             population=population,
             progress_callback=callback,
@@ -1565,6 +1619,12 @@ def parse_args() -> argparse.Namespace:
         help="Thumbnail size for rendered genomes",
     )
     parser.add_argument(
+        "--chat-history-turns",
+        type=int,
+        default=DEFAULT_CHAT_HISTORY_TURNS,
+        help="Number of turns to keep in chat history",
+    )
+    parser.add_argument(
         "--scheme",
         choices=("color", "gray", "mono"),
         default="gray",
@@ -1675,8 +1735,8 @@ def ensure_valid_args(args: argparse.Namespace) -> None:
     else:
         if args.experiment_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            seed_suffix = f"_seed_{args.seed}" if args.seed is not None else ""
-            args.experiment_dir = Path("logs_collaborative") / f"collaborative_multi_agent_{timestamp}{seed_suffix}"
+            args.experiment_dir = Path(
+                "logs_collaborative") / f"th{args.chat_history_turns}_ag{args.agent_generations}-s{args.seed}_{timestamp}"
         args.experiment_dir = args.experiment_dir.resolve()
         args.experiment_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1707,6 +1767,7 @@ def run(args: argparse.Namespace) -> None:
         enable_output_activations=args.output_activations,
         dry_run=args.dry_run,
         seed=args.seed,
+        chat_history_turns=args.chat_history_turns,
     )
 
     orchestrator.run_agents(

@@ -1,6 +1,6 @@
 import os
 import time
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from google import genai
 from google.genai import types
@@ -67,6 +67,23 @@ class ImageChatSession:
                     )
                 )
         return contents
+
+    def load_history(self, turns: Iterable[Tuple[bytes, str, str]]) -> int:
+        """Install a previously recorded sequence of chat turns."""
+
+        normalised: List[Tuple[bytes, str, str]] = []
+        for image_bytes, prompt_text, response_text in turns:
+            prompt_value = prompt_text or ""
+            response_value = response_text or ""
+            normalised.append((bytes(image_bytes), prompt_value, response_value))
+
+        if self._max_turns is None:
+            self._turn_history = normalised
+        elif self._max_turns <= 0:
+            self._turn_history = []
+        else:
+            self._turn_history = normalised[-self._max_turns :]
+        return len(self._turn_history)
 
     def send(
         self,

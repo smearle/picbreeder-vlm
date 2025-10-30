@@ -7,3 +7,12 @@ pygame
 python-dotenv
 
 # javascript  # for neurogram only
+
+# Added for embedding and visualization script
+open_clip_torch
+torchvision
+torch
+umap-learn
+scikit-learn
+seaborn
+tqdm

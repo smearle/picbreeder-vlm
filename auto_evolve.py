@@ -3,6 +3,7 @@ import functools
 import json
 import os
 import random
+import re
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -243,6 +244,9 @@ def select_parents_from_grid(
         "raw_selected": raw_selected,
         "rationale": parsed.get("rationale") or parsed.get("reason", ""),
         "response_text": response_text,
+        "prompt": prompt,
+        "system_instruction": system_instruction,
+        "generation": generation,
         "grid_path": str(base_grid_path),
         "selection_path": str(selection_path),
         "select_k": select_k,
@@ -255,6 +259,110 @@ def select_parents_from_grid(
     metadata["metadata_path"] = str(meta_path)
 
     return metadata
+
+
+_METADATA_FILENAME_PATTERN = re.compile(r"gen_(\d+)_selection\.json$", re.IGNORECASE)
+
+
+def _iter_query_metadata(query_dir: Path) -> List[Tuple[int, Dict[str, Any], Path]]:
+    metadata_dir = query_dir / "metadata"
+    if not metadata_dir.exists():
+        return []
+
+    records: List[Tuple[int, Dict[str, Any], Path]] = []
+    for meta_path in sorted(metadata_dir.glob("gen_*_selection.json")):
+        match = _METADATA_FILENAME_PATTERN.match(meta_path.name)
+        generation_value: Optional[int]
+        if match is not None:
+            try:
+                generation_value = int(match.group(1))
+            except ValueError:
+                generation_value = None
+        else:
+            generation_value = None
+
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if isinstance(payload, dict):
+            if generation_value is None:
+                stored_generation = payload.get("generation")
+                generation_value = int(stored_generation) if isinstance(stored_generation, int) else None
+            if generation_value is None:
+                continue
+            records.append((generation_value, payload, meta_path))
+
+    return records
+
+
+def restore_chat_history_from_metadata(
+    query_dir: Path,
+    *,
+    chat_history_turns: Optional[int],
+    prompt_template: Optional[str],
+) -> int:
+    """Rehydrate the Gemini chat session from saved selection metadata."""
+
+    max_turns = _session_max_turns(chat_history_turns)
+    if max_turns == 0:
+        return 0
+
+    records = _iter_query_metadata(query_dir)
+
+    if not records:
+        return 0
+
+    turns: List[Tuple[bytes, str, str]] = []
+    for generation_value, payload, meta_path in records:
+        response_text = payload.get("response_text")
+        if not response_text:
+            continue
+
+        grid_path_value = payload.get("grid_path")
+        if not grid_path_value:
+            continue
+
+        candidate_paths = []
+        raw_candidate = Path(grid_path_value)
+        candidate_paths.append(raw_candidate)
+        if not raw_candidate.is_absolute():
+            candidate_paths.append(meta_path.parent.parent / raw_candidate)
+            candidate_paths.append(meta_path.parent / raw_candidate.name)
+            candidate_paths.append((query_dir / raw_candidate).resolve())
+            candidate_paths.append((query_dir / raw_candidate.name).resolve())
+
+        image_bytes: Optional[bytes] = None
+        for candidate in candidate_paths:
+            try:
+                image_bytes = candidate.read_bytes()
+            except OSError:
+                continue
+            if image_bytes is not None:
+                break
+
+        if image_bytes is None:
+            continue
+
+        prompt_text = payload.get("prompt")
+        if not prompt_text and prompt_template:
+            try:
+                prompt_text = prompt_template.format(generation=generation_value)
+            except (KeyError, ValueError):
+                prompt_text = prompt_template
+
+        turns.append((image_bytes, prompt_text or "", str(response_text)))
+
+    if not turns:
+        return 0
+
+    if max_turns is not None and max_turns > 0:
+        turns = turns[-max_turns:]
+
+    session = _ensure_chat_session(chat_history_turns)
+    stored_turns = session.load_history(turns)
+    return stored_turns
 
 
 def summarize_genome_structure(genome: neat.DefaultGenome, genome_config: neat.genome.DefaultGenomeConfig) -> Dict[str, Any]:
@@ -375,6 +483,18 @@ class AutomatedNeatEvolver:
                         continue
                     self._recorded_generations.add(generation_value)
                     self._metrics_history.append(entry)
+
+        self._restored_chat_turns = 0
+        should_restore_chat = self.selection_baseline == "none" and (self.chat_history_turns is None or self.chat_history_turns != 0)
+        if should_restore_chat:
+            restored = restore_chat_history_from_metadata(
+                self.query_dir,
+                chat_history_turns=self.chat_history_turns,
+                prompt_template=self.prompt,
+            )
+            if restored:
+                self._restored_chat_turns = restored
+                print(f"Restored {restored} prior chat turn(s) from saved metadata.")
 
     def evaluate_generation(self, genomes: List[Tuple[int, neat.DefaultGenome]], config: neat.Config,
                             render_diagrams: bool = False) -> None:
