@@ -3,7 +3,7 @@ import math
 import pickle
 import random
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Set
 
 import neat
 from neat.reporting import BaseReporter
@@ -116,8 +116,19 @@ def apply_picbreeder_config_defaults(config: neat.Config, enable_output_activati
     genome_config.picbreeder_activation_rate = 0.3
     genome_config.picbreeder_node_add_prob = 0.2
     genome_config.picbreeder_conn_add_prob = 0.4
+    # Add symmetric deletion to control bloat.
+    genome_config.picbreeder_node_del_prob = 0.00
+    genome_config.picbreeder_conn_del_prob = 0.00
+    # Prune unused (disconnected) nodes/edges after mutation.
+    genome_config.picbreeder_prune_unused = True
     genome_config.picbreeder_weight_mutate_rate = 0.05
     genome_config.picbreeder_weight_sigma = 1.0
+
+    # Mutation scoping defaults (channel-masked mutation)
+    # Modes: "all" (default), "color_only" (limit to H/S), "structure_only" (limit to B)
+    genome_config.picbreeder_mutation_mode = "all"
+    # Policies: "strict" (disallow touching entangled nodes/edges), "soft" (currently same as strict)
+    genome_config.picbreeder_mask_policy = "strict"
 
     reproduction_config = config.reproduction_config
     if hasattr(reproduction_config, "mating"):
@@ -195,6 +206,90 @@ class PicbreederGenome(neat.DefaultGenome):
         if enabled:
             self._mutate_output_activations(config)
 
+        # Deletion to counter growth
+        if random.random() < getattr(config, "picbreeder_conn_del_prob", 0.05):
+            self._mutate_delete_connection(config)
+        if random.random() < getattr(config, "picbreeder_node_del_prob", 0.10):
+            self._mutate_delete_node(config)
+
+        # Optional pruning of unused topology
+        if getattr(config, "picbreeder_prune_unused", False):
+            self._prune_unused_topology(config)
+
+    # -------------------- Channel-masked mutation helpers --------------------
+
+    def _get_allowed_outputs(self, config) -> Optional[Set[int]]:
+        """Return set of output keys allowed to be modified, or None for all."""
+        try:
+            mode = str(getattr(config, "picbreeder_mutation_mode", "all")).lower()
+        except Exception:
+            mode = "all"
+        out_keys = list(config.output_keys)
+        if mode == "all" or not out_keys:
+            return None
+        if mode == "color_only":
+            # Expect H,S,B ordering; use first two when available.
+            if len(out_keys) >= 3:
+                return set(out_keys[:2])
+            return None  # no-op if not a 3-channel setup
+        if mode == "structure_only":
+            # Expect brightness as last when 3-channel; otherwise take the single output.
+            if len(out_keys) >= 3:
+                return {out_keys[2]}
+            return {out_keys[-1]}
+        return None
+
+    def _mask_policy(self, config) -> str:
+        try:
+            policy = str(getattr(config, "picbreeder_mask_policy", "strict")).lower()
+        except Exception:
+            policy = "strict"
+        return policy
+
+    def _compute_outputs_reached(self, config) -> Dict[int, Set[int]]:
+        """For every node key (including inputs/outputs), which output keys are reachable downstream?
+
+        Uses reverse adjacency over enabled connections to propagate each output back to its ancestors.
+        """
+        reverse_adj: Dict[int, List[int]] = {}
+        for (src, dst), conn in self.connections.items():
+            if not getattr(conn, "enabled", True):
+                continue
+            reverse_adj.setdefault(dst, []).append(src)
+
+        outputs_reached: Dict[int, Set[int]] = {}
+        all_keys = set(self.nodes.keys()) | set(config.input_keys) | set(config.output_keys)
+        for k in all_keys:
+            outputs_reached[k] = set()
+
+        stack: List[int] = []
+        for out in config.output_keys:
+            outputs_reached[out].add(out)
+            stack.append(out)
+        while stack:
+            node = stack.pop()
+            for src in reverse_adj.get(node, []):
+                before = len(outputs_reached[src])
+                outputs_reached[src].update(outputs_reached[node])
+                if len(outputs_reached[src]) != before:
+                    stack.append(src)
+        return outputs_reached
+
+    @staticmethod
+    def _is_node_allowed(node_key: int, allowed_outputs: Optional[Set[int]], outputs_reached: Optional[Dict[int, Set[int]]]) -> bool:
+        if allowed_outputs is None or outputs_reached is None:
+            return True
+        downstream = outputs_reached.get(node_key, set())
+        return bool(downstream) and downstream.issubset(allowed_outputs)
+
+    @staticmethod
+    def _is_conn_allowed(conn_key: Sequence[int], allowed_outputs: Optional[Set[int]], outputs_reached: Optional[Dict[int, Set[int]]]) -> bool:
+        if allowed_outputs is None or outputs_reached is None:
+            return True
+        src, dst = conn_key  # type: ignore[misc]
+        downstream = outputs_reached.get(dst, set())
+        return bool(downstream) and downstream.issubset(allowed_outputs)
+
     def transform_inputs(self, inputs: Sequence[float]) -> List[float]:
         funcs = getattr(self, "_input_activation_funcs", None)
         if not funcs:
@@ -256,7 +351,14 @@ class PicbreederGenome(neat.DefaultGenome):
             return
         options = tuple(getattr(config, "activation_options", self._ACTIVATION_CHOICES))
         changed = False
+        allowed = self._get_allowed_outputs(config)
+        outputs_reached = self._compute_outputs_reached(config) if allowed is not None else None
+        input_keys_ordered = list(config.input_keys)
         for idx in range(len(self._input_activation_names)):
+            if allowed is not None and outputs_reached is not None:
+                input_key = input_keys_ordered[idx] if idx < len(input_keys_ordered) else None
+                if input_key is not None and not self._is_node_allowed(input_key, allowed, outputs_reached):
+                    continue
             if random.random() < rate:
                 self._input_activation_names[idx] = random.choice(options)
                 changed = True
@@ -305,7 +407,13 @@ class PicbreederGenome(neat.DefaultGenome):
             return
         options = tuple(getattr(config, "activation_options", self._ACTIVATION_CHOICES))
         changed = False
+        allowed = self._get_allowed_outputs(config)
+        output_keys_ordered = list(config.output_keys)
         for idx in range(len(self._output_activation_names)):
+            if allowed is not None:
+                out_key = output_keys_ordered[idx] if idx < len(output_keys_ordered) else None
+                if out_key is not None and out_key not in allowed:
+                    continue
             if random.random() < rate:
                 self._output_activation_names[idx] = random.choice(options)
                 changed = True
@@ -335,6 +443,10 @@ class PicbreederGenome(neat.DefaultGenome):
             return
 
         candidate_keys = [key for key in self.nodes if key not in config.input_keys]
+        allowed = self._get_allowed_outputs(config)
+        if allowed is not None:
+            outputs_reached = self._compute_outputs_reached(config)
+            candidate_keys = [k for k in candidate_keys if self._is_node_allowed(k, allowed, outputs_reached)]
         if not candidate_keys:
             return
 
@@ -349,6 +461,14 @@ class PicbreederGenome(neat.DefaultGenome):
         if not enabled_connections:
             return
 
+        # Restrict to connections that only influence allowed outputs (if any)
+        allowed = self._get_allowed_outputs(config)
+        if allowed is not None:
+            outputs_reached = self._compute_outputs_reached(config)
+            enabled_connections = [cg for cg in enabled_connections if self._is_conn_allowed(cg.key, allowed, outputs_reached)]
+            if not enabled_connections:
+                return
+
         conn_to_split = random.choice(enabled_connections)
         conn_to_split.enabled = False
         input_key, output_key = conn_to_split.key
@@ -361,11 +481,76 @@ class PicbreederGenome(neat.DefaultGenome):
         self.add_connection(config, new_node_id, output_key, self._random_weight(), True)
 
     def _mutate_add_connection(self, config) -> None:
-        before = set(self.connections)
-        super().mutate_add_connection(config)
-        added = set(self.connections) - before
-        for key in added:
-            self.connections[key].weight = self._random_weight()
+        allowed = self._get_allowed_outputs(config)
+        if allowed is None:
+            before = set(self.connections)
+            super().mutate_add_connection(config)
+            added = set(self.connections) - before
+            for key in added:
+                self.connections[key].weight = self._random_weight()
+            return
+
+        outputs_reached = self._compute_outputs_reached(config)
+        attempts = 4
+        while attempts > 0:
+            before = set(self.connections)
+            super().mutate_add_connection(config)
+            added = set(self.connections) - before
+            ok = False
+            for key in list(added):
+                if self._is_conn_allowed(key, allowed, outputs_reached):
+                    self.connections[key].weight = self._random_weight()
+                    ok = True
+                else:
+                    # Remove disallowed addition
+                    self.connections.pop(key, None)
+            if ok:
+                break
+            attempts -= 1
+
+    def _mutate_delete_connection(self, config) -> None:
+        allowed = self._get_allowed_outputs(config)
+        if allowed is None:
+            try:
+                super().mutate_delete_connection(config)
+            except Exception:
+                # Some NEAT variants may not implement deletion; ignore if unavailable.
+                pass
+            return
+        outputs_reached = self._compute_outputs_reached(config)
+        candidates: List[Sequence[int]] = []
+        for key, conn in self.connections.items():
+            if not conn.enabled:
+                continue
+            if self._is_conn_allowed(key, allowed, outputs_reached):
+                candidates.append(key)
+        if not candidates:
+            return
+        key = random.choice(candidates)
+        self.connections.pop(key, None)
+
+    def _mutate_delete_node(self, config) -> None:
+        allowed = self._get_allowed_outputs(config)
+        if allowed is None:
+            try:
+                super().mutate_delete_node(config)
+            except Exception:
+                # If deletion is unsupported, skip.
+                pass
+            return
+        outputs_reached = self._compute_outputs_reached(config)
+        input_keys = set(config.input_keys)
+        output_keys = set(config.output_keys)
+        candidates = [nid for nid in self.nodes if nid not in input_keys and nid not in output_keys]
+        candidates = [nid for nid in candidates if self._is_node_allowed(nid, allowed, outputs_reached)]
+        if not candidates:
+            return
+        nid = random.choice(candidates)
+        # Remove node and incident connections
+        self.nodes.pop(nid, None)
+        to_delete = [key for key in list(self.connections) if key[0] == nid or key[1] == nid]
+        for key in to_delete:
+            self.connections.pop(key, None)
 
     def _mutate_weights(self, config) -> None:
         rate = getattr(config, "picbreeder_weight_mutate_rate", 0.0)
@@ -373,14 +558,64 @@ class PicbreederGenome(neat.DefaultGenome):
         if rate <= 0.0:
             return
 
-        for connection in self.connections.values():
+        allowed = self._get_allowed_outputs(config)
+        outputs_reached = self._compute_outputs_reached(config) if allowed is not None else None
+        for key, connection in self.connections.items():
             if not connection.enabled:
+                continue
+            if allowed is not None and outputs_reached is not None and not self._is_conn_allowed(key, allowed, outputs_reached):
                 continue
             if random.random() < rate:
                 connection.weight += random.gauss(0.0, sigma)
 
     def _random_weight(self) -> float:
         return random.uniform(-1.0, 1.0)
+
+    def _prune_unused_topology(self, config) -> None:
+        """Remove nodes and connections that do not contribute to any output.
+
+        Traverses enabled connections backward from outputs to inputs and
+        keeps only reachable nodes and their enabled connections.
+        """
+        if not self.connections:
+            return
+        input_keys = set(config.input_keys)
+        output_keys = set(config.output_keys)
+
+        # Build reverse adjacency of enabled connections: dst -> [src]
+        reverse_adj = {}
+        for key, conn in self.connections.items():
+            if not conn.enabled:
+                continue
+            src, dst = key
+            reverse_adj.setdefault(dst, []).append(src)
+
+        # Backward reachability from outputs
+        reachable_nodes = set(output_keys)
+        stack = list(output_keys)
+        while stack:
+            node = stack.pop()
+            for src in reverse_adj.get(node, []):
+                if src not in reachable_nodes:
+                    reachable_nodes.add(src)
+                    stack.append(src)
+
+        # Always keep inputs/outputs even if disconnected
+        reachable_nodes |= input_keys | output_keys
+
+        # Prune nodes
+        nodes_to_remove = [nid for nid in self.nodes.keys() if nid not in reachable_nodes]
+        for nid in nodes_to_remove:
+            self.nodes.pop(nid, None)
+
+        # Prune connections not between reachable nodes or disabled
+        to_delete = []
+        for key, conn in self.connections.items():
+            src, dst = key
+            if not conn.enabled or src not in reachable_nodes or dst not in reachable_nodes:
+                to_delete.append(key)
+        for key in to_delete:
+            self.connections.pop(key, None)
 
 
 class InteractiveStagnation:

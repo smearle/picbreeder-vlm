@@ -65,6 +65,38 @@ def draw_label(draw: ImageDraw.ImageDraw, position: Sequence[int], text: str, fo
     draw.text(position, text, font=font, fill=(255, 255, 0))
 
 
+def draw_bbox(
+    draw: ImageDraw.ImageDraw,
+    box_xyxy: Sequence[float],
+    text: Optional[str],
+    *,
+    color: Tuple[int, int, int] = (0, 200, 255),
+    width: int = 3,
+    font: Optional[ImageFont.ImageFont] = None,
+) -> None:
+    x1, y1, x2, y2 = map(float, box_xyxy)
+    draw.rectangle((x1, y1, x2, y2), outline=color, width=width)
+    if text:
+        if font is None:
+            font = try_load_font(16)
+        # background for legibility
+        try:
+            l, t, r, b = draw.textbbox((0, 0), text, font=font)
+            tw, th = (r - l), (b - t)
+        except Exception:
+            # Fallback if textbbox unavailable
+            tw, th = font.getsize(text) if hasattr(font, "getsize") else (60, 16)
+        pad = 2
+        x_bg2 = x1 + tw + pad * 2
+        y_bg2 = y1 + th + pad * 2
+        # Try semi-transparent bg; if not supported, fall back to opaque
+        try:
+            draw.rectangle((x1, y1, x_bg2, y_bg2), fill=(0, 0, 0, 160))
+        except Exception:
+            draw.rectangle((x1, y1, x_bg2, y_bg2), fill=(0, 0, 0))
+        draw.text((x1 + pad, y1 + pad), text, font=font, fill=(255, 255, 255))
+
+
 def create_numbered_grid(
     state: Dict[str, Any],
     margin: int = 12,
@@ -103,6 +135,92 @@ def create_numbered_grid(
             )
 
     return canvas.convert("RGB")
+
+
+def create_numbered_grid_with_overlays(
+    state: Dict[str, Any],
+    overlays: Dict[int, Dict[str, Any]],
+    *,
+    margin: int = 12,
+    font_size: int = 22,
+    selected: Optional[Sequence[int]] = None,
+    highlight_indices: Optional[Sequence[int]] = None,
+    box_color: Tuple[int, int, int] = (0, 200, 255),
+    highlight_color: Tuple[int, int, int] = (0, 255, 0),
+    box_width: int = 3,
+) -> Image.Image:
+    rows = int(state["rows"])
+    cols = int(state["cols"])
+    thumb = int(state["thumbSize"])
+    font = try_load_font(font_size)
+    selected_set = set(int(s) for s in selected) if selected else set()
+    highlight_set = set(int(h) for h in highlight_indices) if highlight_indices else set()
+
+    width = (cols * thumb) + ((cols + 1) * margin)
+    height = (rows * thumb) + ((rows + 1) * margin)
+    canvas = Image.new("RGBA", (width, height), (16, 16, 20, 255))
+    draw = ImageDraw.Draw(canvas)
+
+    for entry in state["images"]:
+        image = decode_image(entry)
+        row = int(entry["row"])
+        col = int(entry["col"])
+        index = int(entry["index"])
+
+        x = margin + col * (thumb + margin)
+        y = margin + row * (thumb + margin)
+        canvas.paste(image, (x, y))
+
+        label = str(index)
+        draw_label(draw, (x + 6, y + 6), label, font)
+
+        # Overlay YOLO best detection if present
+        det = overlays.get(index)
+        if det and det.get("box") is not None:
+            bx1, by1, bx2, by2 = det["box"]
+            # translate to grid coordinates
+            gx1 = x + float(bx1)
+            gy1 = y + float(by1)
+            gx2 = x + float(bx2)
+            gy2 = y + float(by2)
+            text = None
+            if det.get("label") is not None and det.get("score") is not None:
+                text = f"{det['label']} {det['score']:.2f}"
+            color = highlight_color if index in highlight_set else box_color
+            draw_bbox(draw, (gx1, gy1, gx2, gy2), text, color=color, width=box_width, font=try_load_font(16))
+
+        if index in selected_set:
+            draw.rectangle(
+                (x, y, x + thumb, y + thumb),
+                outline=(255, 0, 0),
+                width=4,
+            )
+
+    return canvas.convert("RGB")
+
+
+def render_image_with_yolo_overlay(
+    image: Image.Image,
+    det: Dict[str, Any],
+    *,
+    box_color: Tuple[int, int, int] = (0, 200, 255),
+    box_width: int = 3,
+    font_size: int = 16,
+) -> Image.Image:
+    """Return a copy of image with one YOLO detection (box+label+score) drawn.
+
+    det keys: {"box": (x1,y1,x2,y2), "label": str, "score": float}
+    """
+    img = image.convert("RGB").copy()
+    rgba = Image.new("RGBA", img.size)
+    rgba.paste(img)
+    draw = ImageDraw.Draw(rgba)
+    text = None
+    if det.get("label") is not None and det.get("score") is not None:
+        text = f"{det['label']} {det['score']:.2f}"
+    if det.get("box") is not None:
+        draw_bbox(draw, det["box"], text, color=box_color, width=box_width, font=try_load_font(font_size))
+    return rgba.convert("RGB")
 
 
 def _resolve_inputs(genome: neat.DefaultGenome, coords: Sequence[float]) -> List[float]:
@@ -333,7 +451,10 @@ __all__ = [
     "decode_image",
     "try_load_font",
     "draw_label",
+    "draw_bbox",
     "create_numbered_grid",
+    "create_numbered_grid_with_overlays",
+    "render_image_with_yolo_overlay",
     "legacy_eval_mono_image",
     "legacy_eval_gray_image",
     "legacy_eval_color_image",

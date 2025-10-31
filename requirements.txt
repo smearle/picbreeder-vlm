@@ -4,5 +4,11 @@ matplotlib
 neat-python
 Pillow
 python-dotenv
-
-# javascript  # for neurogram only
+sentencepiece
+protobuf
+javascript  # for neurogram only
+transformers>=4.45
+torch>=2.2
+accelerate
+ultralytics
+opencv-python-headless
