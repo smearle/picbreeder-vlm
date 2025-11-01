@@ -390,6 +390,8 @@ class MapElitesEvolver:
         yolo_confidence: float = 0.1,
         prefer_elites_selection: bool = False,
         render_diagrams: bool = False,
+        mutation_mode: str = "all",
+        mutation_alternate_period: int = 10,
     ) -> None:
         self.population = population
         self.rows = rows
@@ -417,6 +419,12 @@ class MapElitesEvolver:
         self.metrics_dir = experiment_dir / "metrics"
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
         self.scores_path = self.metrics_dir / "label_scores.jsonl"
+        # Mutation alternation settings
+        self.mutation_mode = str(mutation_mode).lower()
+        try:
+            self.mutation_alternate_period = max(1, int(mutation_alternate_period))
+        except Exception:
+            self.mutation_alternate_period = 10
 
     def _ensure_siglip(self):
         if self._clf is None:
@@ -552,6 +560,16 @@ class MapElitesEvolver:
         self, genomes: List[Tuple[int, neat.DefaultGenome]], config: neat.Config
     ) -> None:
         generation = int(self.population.generation)
+        # Apply alternating mutation mode schedule (affects reproduction to next gen)
+        if getattr(self, "mutation_mode", "all") == "alternate":
+            period = max(1, int(getattr(self, "mutation_alternate_period", 10)))
+            block_index = (generation // period)
+            next_mode = "color_only" if (block_index % 2 == 0) else "structure_only"
+            try:
+                config.genome_config.picbreeder_mutation_mode = next_mode
+            except Exception:
+                pass
+            print(f"Alternating mutation mode (period={period}) → next reproduction: {next_mode}")
         if len(genomes) != self.population_size:
             raise ValueError(
                 f"Expected {self.population_size} genomes, received {len(genomes)}."
@@ -836,6 +854,7 @@ def _write_run_metadata(experiment_dir: Path, args: argparse.Namespace) -> None:
         "prefer_elites_selection": getattr(args, "prefer_elites_selection", False),
         "mutation_mode": getattr(args, "mutation_mode", "all"),
         "mutation_mask": getattr(args, "mutation_mask", "strict"),
+        "mutation_alternate_period": getattr(args, "mutation_alternate_period", None),
     }
     (experiment_dir / "run_config.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"
@@ -894,15 +913,21 @@ def parse_args() -> argparse.Namespace:
     # Mutation scoping
     parser.add_argument(
         "--mutation-mode",
-        choices=["all", "color_only", "structure_only"],
+        choices=["all", "color_only", "structure_only", "alternate"],
         default="all",
-        help="Restrict mutations to color channels (H/S), structure (B), or allow all",
+        help="Mutation scope: 'all', color-only (H/S), structure-only (B), or alternate blocks",
     )
     parser.add_argument(
         "--mutation-mask",
         choices=["strict", "soft"],
         default="strict",
         help="Policy for channel-masked mutation. Strict = avoid entangled genes.",
+    )
+    parser.add_argument(
+        "--mutation-alternate-period",
+        type=int,
+        default=10,
+        help="When --mutation-mode=alternate, number of generations per block before switching",
     )
     return parser.parse_args()
 
@@ -919,6 +944,9 @@ def validate_args(args: argparse.Namespace) -> None:
     if getattr(args, "eval_mode", "siglip") == "yolo":
         if getattr(args, "yolo_max_classes", 0) < 1:
             raise ValueError("yolo-max-classes must be at least 1 for YOLO mode")
+    if getattr(args, "mutation_mode", "all") == "alternate":
+        if getattr(args, "mutation_alternate_period", 0) < 1:
+            raise ValueError("mutation-alternate-period must be at least 1 when using alternate mode")
 
 
 def run(args: argparse.Namespace, experiment_dir: Path, population_dir: Path, query_dir: Path) -> None:
@@ -974,6 +1002,8 @@ def run(args: argparse.Namespace, experiment_dir: Path, population_dir: Path, qu
         yolo_confidence=args.yolo_confidence,
         prefer_elites_selection=args.prefer_elites_selection,
         render_diagrams=args.render_diagrams,
+        mutation_mode=getattr(args, "mutation_mode", "all"),
+        mutation_alternate_period=getattr(args, "mutation_alternate_period", 10),
     )
 
     try:
