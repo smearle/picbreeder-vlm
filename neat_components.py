@@ -3,7 +3,7 @@ import math
 import pickle
 import random
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Set
 
 import neat
 from neat.reporting import BaseReporter
@@ -119,6 +119,10 @@ def apply_picbreeder_config_defaults(config: neat.Config, enable_output_activati
     genome_config.picbreeder_weight_mutate_rate = 0.05
     genome_config.picbreeder_weight_sigma = 1.0
 
+    # Mutation scoping defaults (channel-masked mutation)
+    # Modes: "all" (default), "color_only" (limit to H/S), "structure_only" (limit to B)
+    genome_config.picbreeder_mutation_mode = "all"
+
     reproduction_config = config.reproduction_config
     if hasattr(reproduction_config, "mating"):
         reproduction_config.mating = True
@@ -195,6 +199,80 @@ class PicbreederGenome(neat.DefaultGenome):
         if enabled:
             self._mutate_output_activations(config)
 
+    # -------------------- Channel-masked mutation helpers --------------------
+
+    def _get_allowed_outputs(self, config) -> Optional[Set[int]]:
+        """Return set of output keys allowed to be modified, or None for all."""
+        try:
+            mode = str(getattr(config, "picbreeder_mutation_mode", "all")).lower()
+        except Exception:
+            mode = "all"
+        out_keys = list(config.output_keys)
+        if mode == "all" or not out_keys:
+            return None
+        if mode == "color_only":
+            # Expect H,S,B ordering; use first two when available.
+            if len(out_keys) >= 3:
+                return set(out_keys[:2])
+            return None  # no-op if not a 3-channel setup
+        if mode == "structure_only":
+            # Expect brightness as last when 3-channel; otherwise take the single output.
+            if len(out_keys) >= 3:
+                return {out_keys[2]}
+            return {out_keys[-1]}
+        return None
+
+    def _mask_policy(self, config) -> str:
+        try:
+            policy = str(getattr(config, "picbreeder_mask_policy", "strict")).lower()
+        except Exception:
+            policy = "strict"
+        return policy
+
+    def _compute_outputs_reached(self, config) -> Dict[int, Set[int]]:
+        """For every node key (including inputs/outputs), which output keys are reachable downstream?
+
+        Uses reverse adjacency over enabled connections to propagate each output back to its ancestors.
+        """
+        reverse_adj: Dict[int, List[int]] = {}
+        for (src, dst), conn in self.connections.items():
+            if not getattr(conn, "enabled", True):
+                continue
+            reverse_adj.setdefault(dst, []).append(src)
+
+        outputs_reached: Dict[int, Set[int]] = {}
+        all_keys = set(self.nodes.keys()) | set(config.input_keys) | set(config.output_keys)
+        for k in all_keys:
+            outputs_reached[k] = set()
+
+        stack: List[int] = []
+        for out in config.output_keys:
+            outputs_reached[out].add(out)
+            stack.append(out)
+        while stack:
+            node = stack.pop()
+            for src in reverse_adj.get(node, []):
+                before = len(outputs_reached[src])
+                outputs_reached[src].update(outputs_reached[node])
+                if len(outputs_reached[src]) != before:
+                    stack.append(src)
+        return outputs_reached
+
+    @staticmethod
+    def _is_node_allowed(node_key: int, allowed_outputs: Optional[Set[int]], outputs_reached: Optional[Dict[int, Set[int]]]) -> bool:
+        if allowed_outputs is None or outputs_reached is None:
+            return True
+        downstream = outputs_reached.get(node_key, set())
+        return bool(downstream) and downstream.issubset(allowed_outputs)
+
+    @staticmethod
+    def _is_conn_allowed(conn_key: Sequence[int], allowed_outputs: Optional[Set[int]], outputs_reached: Optional[Dict[int, Set[int]]]) -> bool:
+        if allowed_outputs is None or outputs_reached is None:
+            return True
+        src, dst = conn_key  # type: ignore[misc]
+        downstream = outputs_reached.get(dst, set())
+        return bool(downstream) and downstream.issubset(allowed_outputs)
+
     def transform_inputs(self, inputs: Sequence[float]) -> List[float]:
         funcs = getattr(self, "_input_activation_funcs", None)
         if not funcs:
@@ -256,7 +334,14 @@ class PicbreederGenome(neat.DefaultGenome):
             return
         options = tuple(getattr(config, "activation_options", self._ACTIVATION_CHOICES))
         changed = False
+        allowed = self._get_allowed_outputs(config)
+        outputs_reached = self._compute_outputs_reached(config) if allowed is not None else None
+        input_keys_ordered = list(config.input_keys)
         for idx in range(len(self._input_activation_names)):
+            if allowed is not None and outputs_reached is not None:
+                input_key = input_keys_ordered[idx] if idx < len(input_keys_ordered) else None
+                if input_key is not None and not self._is_node_allowed(input_key, allowed, outputs_reached):
+                    continue
             if random.random() < rate:
                 self._input_activation_names[idx] = random.choice(options)
                 changed = True
@@ -305,7 +390,13 @@ class PicbreederGenome(neat.DefaultGenome):
             return
         options = tuple(getattr(config, "activation_options", self._ACTIVATION_CHOICES))
         changed = False
+        allowed = self._get_allowed_outputs(config)
+        output_keys_ordered = list(config.output_keys)
         for idx in range(len(self._output_activation_names)):
+            if allowed is not None:
+                out_key = output_keys_ordered[idx] if idx < len(output_keys_ordered) else None
+                if out_key is not None and out_key not in allowed:
+                    continue
             if random.random() < rate:
                 self._output_activation_names[idx] = random.choice(options)
                 changed = True
@@ -335,6 +426,10 @@ class PicbreederGenome(neat.DefaultGenome):
             return
 
         candidate_keys = [key for key in self.nodes if key not in config.input_keys]
+        allowed = self._get_allowed_outputs(config)
+        if allowed is not None:
+            outputs_reached = self._compute_outputs_reached(config)
+            candidate_keys = [k for k in candidate_keys if self._is_node_allowed(k, allowed, outputs_reached)]
         if not candidate_keys:
             return
 
@@ -348,6 +443,14 @@ class PicbreederGenome(neat.DefaultGenome):
         enabled_connections = [cg for cg in self.connections.values() if cg.enabled]
         if not enabled_connections:
             return
+
+        # Restrict to connections that only influence allowed outputs (if any)
+        allowed = self._get_allowed_outputs(config)
+        if allowed is not None:
+            outputs_reached = self._compute_outputs_reached(config)
+            enabled_connections = [cg for cg in enabled_connections if self._is_conn_allowed(cg.key, allowed, outputs_reached)]
+            if not enabled_connections:
+                return
 
         conn_to_split = random.choice(enabled_connections)
         conn_to_split.enabled = False
@@ -373,8 +476,12 @@ class PicbreederGenome(neat.DefaultGenome):
         if rate <= 0.0:
             return
 
-        for connection in self.connections.values():
+        allowed = self._get_allowed_outputs(config)
+        outputs_reached = self._compute_outputs_reached(config) if allowed is not None else None
+        for key, connection in self.connections.items():
             if not connection.enabled:
+                continue
+            if allowed is not None and outputs_reached is not None and not self._is_conn_allowed(key, allowed, outputs_reached):
                 continue
             if random.random() < rate:
                 connection.weight += random.gauss(0.0, sigma)

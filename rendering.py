@@ -188,7 +188,7 @@ def render_genome_image(
     scheme: str,
     palette: str,
 ) -> Image.Image:
-    if scheme == "color":
+    if scheme == "color" or scheme == "toggle":
         if palette == "sigmoid":
             image_data = legacy_eval_color_image(genome, config, width, height)
         else:

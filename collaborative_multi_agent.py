@@ -33,6 +33,7 @@ import shutil
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from itertools import count
 
+import graphviz
 import hydra
 from hydra.conf import HelpConf, HydraConf
 from hydra.core.config_store import ConfigStore
@@ -51,7 +52,7 @@ from auto_evolve import (
     select_parents_from_grid,
     restore_chat_history_from_metadata,
 )
-from artifacts import build_generation_state, save_neat_population
+from artifacts import build_generation_state, save_neat_genome_diagrams, save_neat_population
 from experiment_cli import cap_select_k_for_engine
 from neat_components import (
     CHECKPOINT_SUFFIX,
@@ -85,8 +86,8 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "This is an open-ended search process. You may set out with certain goals in mind, but be willing to quickly adapt them as new forms arise. "
     "If a certain evolutionary direction is not progressing, do not choose the same partially-successful parent repeatedly. "
     "Be willing to give up on local optima and explore new areas of the search space, even without a pre-defined target. "
-    """At the first generation the initial grid will display an archive of images published by prior users as favorites (unless you are the first user). "
-    "You may choose to "branch" one of these images, or start instead from a random initial population. """
+    "At the first generation the initial grid will display an archive of images published by prior users as favorites (unless you are the first user). "
+    """You may choose to "branch" one of these images, or start instead from a random initial population. """
     "At each subsequent generation, you will be shown a grid of numbered images produced by CPPNs. "
     "{selection_prompt}"
     "If so inclined, you may also select an image to publish to the online archive. "
@@ -103,6 +104,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     # "(Also, for debugging, please tell me how many previous grids you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
     # "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
     "{archive_novelty_prompt}"
+    "{mutation_mode_prompt}"
 )
 
 ARCHIVE_NOVELTY_PROMPT = (
@@ -116,7 +118,6 @@ def gen_selection_prompt(select_k: Optional[int]) -> str:
     if select_k == 1:
         return "Pick one image by its numeric label--the corresponding CPPN will be used as the parent of the next generation. "
     return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. "
-
 
 
 PARENT_SELECTION_PROMPT = "Above is the grid at generation {generation}."
@@ -543,6 +544,7 @@ class CollaborativeAgentRunner:
             Callable[[int, Optional[Dict[str, Any]], Optional[Dict[str, Any]]], None]
         ] = None,
         resume_mode: bool = False,
+        render_genome_diagrams: bool = False,
     ) -> None:
         self.agent_id = agent_id
         self.agent_dir = agent_dir
@@ -588,7 +590,7 @@ class CollaborativeAgentRunner:
         self.population.add_reporter(GenerationCheckpointer(self.population_dir))
 
         self.prompt_template = PARENT_SELECTION_PROMPT
-        if self.scheme == "color":
+        if (self.scheme == "color" or self.scheme == "toggle"):
             color_prompt = "It would be nice to have color images in the online archive, but we do not want it to be domainated by high-frequency rainbow artefacts. "
         else:
             color_prompt = ""
@@ -598,11 +600,20 @@ class CollaborativeAgentRunner:
         else:
             archive_novelty_prompt = ""
 
+        if self.scheme == "toggle":
+            mutation_mode_prompt = (
+                "At each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
+                "or to mutate the entire CPPN. Indicate your choice in a `mutation_mode` field in your JSON response, set to either `color_only`, `structure_only`, or `all`. "
+            )
+        else:
+            mutation_mode_prompt = ""
+
         self.system_instruction = DEFAULT_SYSTEM_INSTRUCTION.format(
             selection_prompt=gen_selection_prompt(self.select_k),
             n_generations=self.generations,
             color_prompt=color_prompt,
             archive_novelty_prompt=archive_novelty_prompt,
+            mutation_mode_prompt=mutation_mode_prompt,
         )
         with open(self.agent_dir / "system_instruction.txt", "w", encoding="utf-8") as fp:
             fp.write(self.system_instruction)
@@ -632,6 +643,7 @@ class CollaborativeAgentRunner:
         self._lineage_log_path.touch(exist_ok=True)
         self._archive_seed_map: Dict[int, Dict[str, Any]] = {}
         self._genome_lineage: Dict[int, Dict[str, Any]] = {}
+        self.render_genome_diagrams = render_genome_diagrams
         if self.resume_mode:
             self._load_existing_publication_state()
 
@@ -808,6 +820,15 @@ class CollaborativeAgentRunner:
                 f"Expected {self.rows * self.cols} genomes, received {len(genomes)}."
             )
 
+        if self.render_genome_diagrams:
+            diagram_paths = save_neat_genome_diagrams(genomes, config, self.population_dir, generation)
+            if diagram_paths:
+                diagram_dir = diagram_paths[0].parent
+                print(f"Genome diagrams saved to {diagram_dir}")
+            elif graphviz is None and not self._diagram_warning_emitted:
+                print("Graphviz not available; skipping genome diagram export.")
+                self._diagram_warning_emitted = True
+
         state, cache = build_generation_state(
             genomes,
             config,
@@ -827,7 +848,9 @@ class CollaborativeAgentRunner:
 
         system_instruction = self.system_instruction
         prompt_template = self.prompt_template
+        require_selection = True
         if generation == self.generations - 1:
+            require_selection = False
             require_publish = self.favorite_archive_entry is None
             if require_publish:
                 prompt_template += (
@@ -856,7 +879,11 @@ class CollaborativeAgentRunner:
             self.select_k,
             system_instruction,
             self.chat_history_turns,
+            require_selection=require_selection,
         )
+        mutation_mode = selection_meta.get("mutation_mode")
+        if mutation_mode in ("color_only", "structure_only", "all"):
+            selection_meta["mutation_mode"] = mutation_mode
         selection_meta = dict(selection_meta)
         selection_path = Path(selection_meta.get("selection_path", grid_path))
         shutil.copy(selection_path, self.latest_img_path)
@@ -994,6 +1021,7 @@ class CollaborativeAgentRunner:
             generation,
             selected_indices,
             selection_meta.get("rationale", ""),
+            selection_meta.get("mutation_mode"),
             publish_details,
         )
         if self.progress_callback is not None:
@@ -1461,12 +1489,15 @@ class CollaborativeAgentRunner:
         generation: int,
         selected_indices: Sequence[int],
         rationale: str,
+        mutation_mode: Optional[str],
         publish_details: Optional[Dict[str, Any]],
     ) -> None:
         publish_index = publish_details.get("index") if publish_details else None
         publish_title = publish_details.get("title") if publish_details else None
         publish_rationale = publish_details.get("reason") if publish_details else None
         log_str = f"[{self.agent_id}] Gen {generation} selection: selected={list(selected_indices)}, rationale='{rationale}'"
+        if mutation_mode is not None:
+            log_str += f", mutation_mode='{mutation_mode}'"
         if publish_index is not None:
             log_str += f", publish_index={publish_index}, publish_title='{publish_title}', publish_rationale='{publish_rationale}'"
         print(log_str)
@@ -1490,6 +1521,7 @@ class CollaborativeMultiAgentOrchestrator:
         dry_run: bool,
         seed: Optional[int],
         chat_history_turns: int,
+        render_genome_diagrams: bool = False,
     ) -> None:
         self.experiment_dir = experiment_dir
         self.chat_history_turns = chat_history_turns
@@ -1504,6 +1536,7 @@ class CollaborativeMultiAgentOrchestrator:
         self.enable_output_activations = enable_output_activations
         self.dry_run = dry_run
         self.seed = seed
+        self.render_genome_diagrams = render_genome_diagrams
 
         self.archive_manager = ArchiveManager(self.experiment_dir / ARCHIVE_DIR_NAME)
         self.agents_dir = self.experiment_dir / "agents"
@@ -1729,6 +1762,7 @@ class CollaborativeMultiAgentOrchestrator:
             population=population,
             progress_callback=callback,
             resume_mode=resume,
+            render_genome_diagrams=self.render_genome_diagrams,
         )
 
     def _on_generation_progress(
@@ -1903,6 +1937,7 @@ class CollaborativeConfig:
     resume_agent_id: Optional[str] = None  # Specific agent identifier to resume (requires resume=true)
     test_mode: bool = False  # Shortened settings for quick validation runs
     seed: Optional[int] = None  # Random seed for deterministic behaviour
+    render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -1929,7 +1964,7 @@ def resolve_config_path(cfg: CollaborativeConfig) -> Path:
     if cfg.config_path is not None:
         return Path(cfg.config_path)
     base = REPO_ROOT / "picture2d"
-    config_name = "interactive_config_color" if cfg.scheme == "color" else "interactive_config_gray"
+    config_name = "interactive_config_color" if (cfg.scheme == "color" or cfg.scheme == "toggle") else "interactive_config_gray"
     return base / config_name
 
 
@@ -1970,7 +2005,11 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
     else:
         if cfg.experiment_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            relative = Path("logs_collaborative") / f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}-s{cfg.seed}_{timestamp}"
+            experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_na{cfg.num_agents}"
+            if cfg.scheme != "gray":
+                experiment_name += f"_scheme-{cfg.scheme}"
+            experiment_name += f"_{timestamp}"
+            relative = Path("logs_collaborative") / experiment_name
             exp_dir = _ensure_absolute(relative, original_cwd)
         else:
             exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)
@@ -2006,6 +2045,7 @@ def run(cfg: CollaborativeConfig) -> None:
         dry_run=cfg.dry_run,
         seed=cfg.seed,
         chat_history_turns=cfg.chat_history_turns,
+        render_genome_diagrams=cfg.render_genome_diagrams,
     )
 
     orchestrator.run_agents(

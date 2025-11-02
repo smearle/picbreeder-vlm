@@ -190,6 +190,7 @@ def select_parents_from_grid(
     select_k: Optional[int] = None,
     system_instruction: Optional[str] = None,
     chat_history_turns: Optional[int] = 0,
+    require_selection: bool = True,
 ) -> Dict[str, Any]:
     generation = int(state["generation"])
     grid_image = create_numbered_grid(state)
@@ -229,7 +230,7 @@ def select_parents_from_grid(
         if 0 <= idx <= max_index and idx not in cleaned:
             cleaned.append(idx)
 
-    if not cleaned:
+    if not cleaned and require_selection:
         raise ValueError("Gemini response did not contain any valid indices.")
 
     if select_k is not None:
@@ -245,12 +246,12 @@ def select_parents_from_grid(
         "rationale": parsed.get("rationale") or parsed.get("reason", ""),
         "response_text": response_text,
         "prompt": prompt,
-        "system_instruction": system_instruction,
         "generation": generation,
         "grid_path": str(base_grid_path),
         "selection_path": str(selection_path),
         "select_k": select_k,
         "chat_history_turns": chat_history_turns,
+        "mutation_mode": parsed.get("mutation_mode", None),
     }
     metadata_dir = query_dir / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)

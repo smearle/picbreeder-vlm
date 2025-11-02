@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import sys
@@ -67,14 +68,14 @@ def _execute_job(job: CollaborativeRun) -> int:
 @dataclass
 class SweepConfig(CollaborativeConfig):
     seeds: List[int] = field(default_factory=lambda: [0, 1, 2])  # Random seeds swept over collaborative runs
-    chat_history_turns: List[int] = field(default_factory=lambda: [-1, 0])  # Chat history lengths to evaluate
+    chat_history_turns: List[int] = field(default_factory=lambda: [0, 10, -1])  # Chat history lengths to evaluate
     extra_args: str = ""  # Additional Hydra overrides forwarded to collaborative_multi_agent
     experiment_prefix: Path = Path("logs_collaborative/submitit_sweeps")  # Base directory for experiment outputs
     log_dir: Path = Path("log/submitit")  # Submitit log directory
     slurm: bool = False  # Enable SLURM submission via Submitit
     partition: str = "cpu"  # SLURM partition name
     account: Optional[str] = None  # Optional SLURM account override
-    cpus_per_task: int = 4  # CPUs requested per task
+    cpus_per_task: int = 1  # CPUs requested per task
     timeout_hours: int = 24  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
     hydra: HydraConf = field(
@@ -107,8 +108,16 @@ def _ensure_absolute(path: Path, base: Path) -> Path:
 
 def build_command(cfg: SweepConfig, seed: int, chat_turns: int, experiment_prefix: Path) -> SweepCommand:
     exp_dir = experiment_prefix / f"seed_{seed}_chat{chat_turns}"
-    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    # If the experiment directory already exists, set to resume from it
+    if os.path.exists(exp_dir):
+        resume = "True"
+    else:
+        resume = "False"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+
     exp_dir_str = str(exp_dir)
+
     experiment_override = f'experiment_dir="{exp_dir_str}"' if " " in exp_dir_str else f"experiment_dir={exp_dir_str}"
 
     overrides: List[str] = [
@@ -120,6 +129,7 @@ def build_command(cfg: SweepConfig, seed: int, chat_turns: int, experiment_prefi
         f"scheme={cfg.scheme}",
         f"color_palette={cfg.color_palette}",
         f"chat_history_turns={chat_turns}",
+        f"resume={resume}",
         experiment_override,
     ]
     if cfg.dry_run:
