@@ -1,5 +1,6 @@
 graphviz
 google-genai
+hydra-core
 matplotlib
 neat-python
 Pillow

@@ -2,9 +2,11 @@ __pycache__/
 
 initial_populations/*
 interactive_runs/*
-logs_collaborative/*
+logs_collaborative*
 logs/*
 log/*
 .env
 .venv/*
 picture2d/rendered
+outputs/*
+submitit_logs/*

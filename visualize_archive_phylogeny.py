@@ -3,6 +3,7 @@
 
 import argparse
 import json
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 import html
@@ -41,7 +42,26 @@ def parse_args() -> argparse.Namespace:
             "Rendering style: 'annotated' shows thumbnails plus text, 'images' renders thumbnails only."
         ),
     )
+    parser.add_argument(
+        "--scope",
+        choices=("archive", "full"),
+        default="archive",
+        help="Select 'archive' to show only archive entries; 'full' includes all recorded genomes and archive entries.",
+    )
     return parser.parse_args()
+
+PALETTE: Tuple[str, ...] = (
+    "#8dd3c7",
+    "#80b1d3",
+    "#bebada",
+    "#fb8072",
+    "#b3de69",
+    "#fccde5",
+    "#d9d9d9",
+    "#bc80bd",
+    "#ccebc5",
+    "#ffed6f",
+)
 
 
 def _load_archive_entries(archive_dir: Path) -> List[Dict[str, Any]]:
@@ -65,6 +85,14 @@ def _load_archive_entries(archive_dir: Path) -> List[Dict[str, Any]]:
 
     entries.sort(key=sort_key)
     return entries
+
+
+def _init_graph(output_format: str) -> Digraph:
+    graph = Digraph("archive_phylogeny", format=output_format)
+    graph.attr(rankdir="LR", bgcolor="white", nodesep="0.6", ranksep="1")
+    graph.attr("node", fontname="Helvetica", fontsize="10", color="#333333")
+    graph.attr("edge", color="#666666")
+    return graph
 
 
 def _choose_color(agent_id: str, palette: Sequence[str], assigned: Dict[str, str]) -> str:
@@ -92,7 +120,29 @@ def _truncate_text(value: str, max_len: int = 40) -> str:
     return value
 
 
-def _build_node_attributes(
+def _load_selected_entry_ids(branch_path: Path) -> List[str]:
+    if not branch_path.exists():
+        return []
+    try:
+        data = json.loads(branch_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    selected = data.get("selected_entry_ids") or []
+    result: List[str] = []
+    for value in selected:
+        if value is None:
+            continue
+        result.append(str(value))
+    return result
+
+
+def _resolve_generation_image(agent_dir: Path, generation: int, image_index: int) -> Optional[Path]:
+    images_dir = agent_dir / "images" / f"gen_{generation:03d}"
+    image_path = images_dir / f"idx_{image_index:02d}.png"
+    return image_path.resolve() if image_path.exists() else None
+
+
+def _build_archive_node_attributes(
     *,
     entry: Dict[str, Any],
     image_path: Optional[Path],
@@ -154,98 +204,55 @@ def _build_node_attributes(
     return attrs
 
 
-def _collect_parent_links(
-    entry: Dict[str, Any],
-    *,
-    known_entry_ids: Set[str],
-    genome_to_entry_id: Dict[int, str],
-) -> Set[str]:
-    parents: Set[str] = set()
-
-    # Direct links recorded in the archive entry metadata.
-    for value in entry.get("source_entry_ids", []) or []:
-        if value is None:
-            continue
-        parent_id = str(value)
-        if parent_id in known_entry_ids and parent_id != entry.get("id"):
-            parents.add(parent_id)
-
-    # Fallback: infer parent candidates via recorded genome keys.
-    for raw_parent_key in entry.get("parent_genome_keys", []) or []:
-        try:
-            parent_key = int(raw_parent_key)
-        except (TypeError, ValueError):
-            continue
-        parent_id = genome_to_entry_id.get(parent_key)
-        if parent_id and parent_id in known_entry_ids and parent_id != entry.get("id"):
-            parents.add(parent_id)
-
-    return parents
-
-
-def build_phylogeny_graph(
+def _build_archive_graph(
     entries: Iterable[Dict[str, Any]],
     *,
+    experiment_dir: Path,
     archive_dir: Path,
     output_format: str,
     mode: str,
 ) -> Digraph:
-    graph = Digraph("archive_phylogeny", format=output_format)
-    graph.attr(rankdir="LR", bgcolor="white", nodesep="0.6", ranksep="1")
-    graph.attr("node", fontname="Helvetica", fontsize="10", color="#333333")
-    graph.attr("edge", color="#666666")
-
-    palette = (
-        "#8dd3c7",
-        "#80b1d3",
-        "#bebada",
-        "#fb8072",
-        "#b3de69",
-        "#fccde5",
-        "#d9d9d9",
-        "#bc80bd",
-        "#ccebc5",
-        "#ffed6f",
-    )
+    graph = _init_graph(output_format)
     assigned_colors: Dict[str, str] = {}
-
-    known_ids: Set[str] = set()
-    prepared_entries: List[Dict[str, Any]] = []
-    genome_to_entry_id: Dict[int, str] = {}
+    entries_by_id: Dict[str, Dict[str, Any]] = {}
     for entry in entries:
-        entry_id = str(entry.get("id")) if entry.get("id") is not None else None
-        if not entry_id:
+        entry_id_raw = entry.get("id")
+        if entry_id_raw is None:
             continue
-        known_ids.add(entry_id)
-        prepared_entries.append(entry)
-        try:
-            genome_key = int(entry.get("genome_key")) if entry.get("genome_key") is not None else None
-        except (TypeError, ValueError):
-            genome_key = None
-        if genome_key is not None and genome_key not in genome_to_entry_id:
-            genome_to_entry_id[genome_key] = entry_id
+        entry_id = str(entry_id_raw)
+        entries_by_id[entry_id] = entry
 
     edges: Set[Tuple[str, str]] = set()
-    root_ids: Set[str] = set()
 
-    for entry in prepared_entries:
-        entry_id = str(entry.get("id"))
+    for entry_id, entry in entries_by_id.items():
+        parent_ids: Set[str] = set()
+        source_experiment = entry.get("source_experiment")
+        if source_experiment:
+            agent_dir = Path(source_experiment)
+            if not agent_dir.is_absolute():
+                agent_dir = (experiment_dir / agent_dir).resolve()
+            branch_path = agent_dir / "logs" / "branching_selection.json"
+            for parent in _load_selected_entry_ids(branch_path):
+                if parent != entry_id and parent in entries_by_id:
+                    parent_ids.add(parent)
+        if not parent_ids:
+            for value in entry.get("source_entry_ids", []) or []:
+                parent = str(value)
+                if parent != entry_id and parent in entries_by_id:
+                    parent_ids.add(parent)
+        for parent in parent_ids:
+            edges.add((parent, entry_id))
+
+    incoming = defaultdict(int)
+    for _, dst in edges:
+        incoming[dst] += 1
+    root_ids = {entry_id for entry_id in entries_by_id if incoming.get(entry_id, 0) == 0}
+
+    for entry_id, entry in entries_by_id.items():
         agent_id = str(entry.get("agent_id", "unknown"))
-        parent_ids = _collect_parent_links(
-            entry,
-            known_entry_ids=known_ids,
-            genome_to_entry_id=genome_to_entry_id,
-        )
-
-        if parent_ids:
-            for parent in parent_ids:
-                edges.add((parent, entry_id))
-        else:
-            root_ids.add(entry_id)
-
-        fill_color = _choose_color(agent_id, palette, assigned_colors)
+        fill_color = _choose_color(agent_id, PALETTE, assigned_colors)
         image_path = _resolve_image_path(entry, archive_dir)
-        attrs = _build_node_attributes(
+        attrs = _build_archive_node_attributes(
             entry=entry,
             image_path=image_path,
             fill_color=fill_color,
@@ -254,10 +261,258 @@ def build_phylogeny_graph(
         )
         graph.node(entry_id, **attrs)
 
-    for parent_id, child_id in sorted(edges):
-        graph.edge(parent_id, child_id)
+    for parent, child in sorted(edges):
+        graph.edge(parent, child)
 
     return graph
+
+
+def _lighten_color(hex_color: str, amount: float = 0.35) -> str:
+    color = hex_color.lstrip("#")
+    if len(color) != 6:
+        return hex_color
+    try:
+        r = int(color[0:2], 16)
+        g = int(color[2:4], 16)
+        b = int(color[4:6], 16)
+    except ValueError:
+        return hex_color
+    r = int(r + (255 - r) * amount)
+    g = int(g + (255 - g) * amount)
+    b = int(b + (255 - b) * amount)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _build_genome_node_attributes(
+    *,
+    node_id: str,
+    record: Dict[str, Any],
+    agent_color: str,
+    is_root: bool,
+    image_path: Optional[Path],
+    mode: str,
+) -> Dict[str, str]:
+    generation = record.get("generation")
+    image_index = record.get("image_index")
+    genome_key = record.get("genome_key")
+    info_bits: List[str] = []
+    if generation is not None:
+        info_bits.append(f"g{generation}")
+    if image_index is not None:
+        info_bits.append(f"i{image_index}")
+    if genome_key is not None:
+        info_bits.append(f"k{genome_key}")
+    caption = " ".join(str(bit) for bit in info_bits) if info_bits else ""
+
+    if mode == "images" and image_path is not None:
+        attrs = {
+            "shape": "box",
+            "image": str(image_path),
+            "label": "",
+            "imagescale": "true",
+            "fixedsize": "false",
+            "color": agent_color,
+            "style": "rounded",
+        }
+        if caption:
+            attrs["xlabel"] = caption
+            attrs["labelloc"] = "b"
+        return attrs
+
+    image_tag = (
+        f'<TR><TD><IMG SRC="{html.escape(str(image_path))}" SCALE="TRUE"/></TD></TR>'
+        if image_path is not None
+        else ""
+    )
+    caption_tag = (
+        f"<TR><TD ALIGN='LEFT'><FONT POINT-SIZE='9'>{html.escape(caption)}</FONT></TD></TR>"
+        if caption
+        else ""
+    )
+    label = (
+        "<"
+        "<TABLE BORDER='0' CELLBORDER='0' CELLSPACING='2' BGCOLOR='white'>"
+        f"{image_tag}"
+        f"<TR><TD ALIGN='LEFT'><FONT POINT-SIZE='10'><B>{html.escape(node_id)}</B></FONT></TD></TR>"
+        f"{caption_tag}"
+        "</TABLE>"
+        ">"
+    )
+
+    attrs = {
+        "shape": "plaintext",
+        "label": label,
+        "style": "filled",
+        "fillcolor": _lighten_color(agent_color, 0.65),
+        "color": agent_color,
+    }
+    if is_root:
+        attrs["penwidth"] = "2"
+    return attrs
+
+
+#FIXME: Something here is broken
+def _build_full_phylogeny_graph(
+    entries: Iterable[Dict[str, Any]],
+    *,
+    experiment_dir: Path,
+    archive_dir: Path,
+    output_format: str,
+    mode: str,
+) -> Digraph:
+    graph = _init_graph(output_format)
+    assigned_colors: Dict[str, str] = {}
+    entries_by_id: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        entry_id_raw = entry.get("id")
+        if entry_id_raw is None:
+            continue
+        entry_id = str(entry_id_raw)
+        entries_by_id[entry_id] = entry
+
+    nodes: Dict[str, Dict[str, Any]] = {}
+    node_agent: Dict[str, str] = {}
+    for entry_id, entry in entries_by_id.items():
+        agent_id = str(entry.get("agent_id", "unknown"))
+        nodes[entry_id] = {"type": "archive", "record": entry}
+        node_agent[entry_id] = agent_id
+
+    edges: Set[Tuple[str, str]] = set()
+    node_index_map: Dict[Tuple[str, int, int], str] = {}
+
+    agents_dir = experiment_dir / "agents"
+    if agents_dir.exists():
+        for agent_dir in sorted(agents_dir.iterdir())[:1]:
+            if not agent_dir.is_dir():
+                continue
+            logs_path = agent_dir / "logs" / "lineage.jsonl"
+            if not logs_path.exists():
+                continue
+            latest_node_by_key: Dict[Tuple[str, int], str] = {}
+            with logs_path.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    agent_id = str(record.get("agent_id") or agent_dir.name)
+                    genome_key = record.get("genome_key")
+                    generation = record.get("generation")
+                    image_index = record.get("image_index")
+                    if genome_key is None or generation is None or image_index is None:
+                        continue
+                    try:
+                        genome_key_int = int(genome_key)
+                        generation_int = int(generation)
+                        image_index_int = int(image_index)
+                    except (TypeError, ValueError):
+                        continue
+                    node_id = f"{agent_id}#g{generation_int}#i{image_index_int}#k{genome_key_int}"
+                    image_path = _resolve_generation_image(agent_dir, generation_int, image_index_int)
+                    nodes[node_id] = {
+                        "type": "genome",
+                        "record": record,
+                        "image_path": image_path,
+                    }
+                    node_agent[node_id] = agent_id
+                    node_index_map[(agent_id, generation_int, image_index_int)] = node_id
+
+                    for parent_raw in record.get("parent_genome_keys") or []:
+                        try:
+                            parent_key = int(parent_raw)
+                        except (TypeError, ValueError):
+                            continue
+                        parent_node_id = latest_node_by_key.get((agent_id, parent_key))
+                        if parent_node_id:
+                            edges.add((parent_node_id, node_id))
+
+                    for source_raw in record.get("source_entry_ids") or []:
+                        if source_raw is None:
+                            continue
+                        source_id = str(source_raw)
+                        if source_id in entries_by_id:
+                            edges.add((source_id, node_id))
+
+                    latest_node_by_key[(agent_id, genome_key_int)] = node_id
+
+    for entry_id, entry in entries_by_id.items():
+        agent_id = str(entry.get("agent_id", "unknown"))
+        generation = entry.get("generation")
+        image_index = entry.get("image_index")
+        try:
+            generation_int = int(generation)
+            image_index_int = int(image_index)
+        except (TypeError, ValueError):
+            continue
+        node_id = node_index_map.get((agent_id, generation_int, image_index_int))
+        if node_id:
+            edges.add((node_id, entry_id))
+
+    incoming = defaultdict(int)
+    for _, dst in edges:
+        incoming[dst] += 1
+    for node_id in nodes:
+        incoming.setdefault(node_id, 0)
+    root_ids = {node_id for node_id, count in incoming.items() if count == 0}
+
+    for node_id, meta in nodes.items():
+        agent_id = node_agent.get(node_id, "unknown")
+        color = _choose_color(agent_id, PALETTE, assigned_colors)
+        if meta["type"] == "archive":
+            entry = meta["record"]
+            image_path = _resolve_image_path(entry, archive_dir)
+            attrs = _build_archive_node_attributes(
+                entry=entry,
+                image_path=image_path,
+                fill_color=color,
+                is_root=node_id in root_ids,
+                mode=mode,
+            )
+        else:
+            record = meta["record"]
+            attrs = _build_genome_node_attributes(
+                node_id=node_id,
+                record=record,
+                agent_color=color,
+                is_root=node_id in root_ids,
+                image_path=meta.get("image_path"),
+                mode=mode,
+            )
+        graph.node(node_id, **attrs)
+
+    for parent, child in sorted(edges):
+        graph.edge(parent, child)
+
+    return graph
+
+
+def build_phylogeny_graph(
+    entries: Iterable[Dict[str, Any]],
+    *,
+    experiment_dir: Path,
+    archive_dir: Path,
+    output_format: str,
+    mode: str,
+    scope: str,
+) -> Digraph:
+    if scope == "full":
+        return _build_full_phylogeny_graph(
+            entries,
+            experiment_dir=experiment_dir,
+            archive_dir=archive_dir,
+            output_format=output_format,
+            mode=mode,
+        )
+    return _build_archive_graph(
+        entries,
+        experiment_dir=experiment_dir,
+        archive_dir=archive_dir,
+        output_format=output_format,
+        mode=mode,
+    )
 
 
 def main() -> None:
@@ -270,9 +525,11 @@ def main() -> None:
 
     graph = build_phylogeny_graph(
         entries,
+        experiment_dir=experiment_dir,
         archive_dir=archive_dir,
         output_format=args.format,
         mode=args.mode,
+        scope=args.scope,
     )
 
     if args.output is None:

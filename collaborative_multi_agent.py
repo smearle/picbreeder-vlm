@@ -20,7 +20,6 @@ Key behaviours:
 
 from __future__ import annotations
 
-import argparse
 import copy
 import gzip
 import json
@@ -32,6 +31,12 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from itertools import count
+
+import hydra
+from hydra.conf import HelpConf, HydraConf
+from hydra.core.config_store import ConfigStore
+from hydra.utils import get_original_cwd
 
 import neat
 from neat.population import CompleteExtinctionException
@@ -77,20 +82,32 @@ GOAL_PROMPT = (
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You are playing with a collaborative online platform which allows users to interactively evolve small neural networks called Compositional Pattern Producing Networks (CPPNs) for generating images. "
     f"{GOAL_PROMPT} "
-    """At the first generation the initial grid will display an archive of images published by prior users as favorites (unless you are the first user). You may choose to "branch" one of these images, or start instead from a random initial population. """
+    "This is an open-ended search process. You may set out with certain goals in mind, but be willing to quickly adapt them as new forms arise. "
+    "If a certain evolutionary direction is not progressing, do not choose the same partially-successful parent repeatedly. "
+    "Be willing to give up on local optima and explore new areas of the search space, even without a pre-defined target. "
+    """At the first generation the initial grid will display an archive of images published by prior users as favorites (unless you are the first user). "
+    "You may choose to "branch" one of these images, or start instead from a random initial population. """
     "At each subsequent generation, you will be shown a grid of numbered images produced by CPPNs. "
     "{selection_prompt}"
-    "If so inclined, you may also select an image to publish to the online archive . "
-    "You must publish at least once during your session. Publishing multiple times is allowed, though the most recent publication replaces any prior favorite. "
+    "If so inclined, you may also select an image to publish to the online archive. "
+    "You must publish at least once during your session. Publishing multiple times is allowed, though the most recent publication overwrites any previous ones. "
     "Your session will run for {n_generations} generations. "
-    "Try to contribute something novel, interesting or useful to the online archive. {color_prompt}"
+    "Try to contribute something novel, interesting or useful to the online archive. "
+    "Do not add something to the archive that is identical to an existing image. "
+    "{color_prompt}"
     "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
-    """(During branching, set `selected` to null to start from a fresh population.) """
+    "(During branching, you may select only one image from which to branch; "
+    " set selected to null to start from a fresh population.) "
     "You may also include a \"publish\" field in the JSON response if you wish to publish an image from this grid. It should have the form: "
     '{{"index": image_index, "title": "image title", "reason": "brief publication note"}}. '
-    "When justifying your publication choice, explain why the selected contribution is valuable to the archive. "
     # "(Also, for debugging, please tell me how many previous grids you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
     # "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
+    "{archive_novelty_prompt}"
+)
+
+ARCHIVE_NOVELTY_PROMPT = (
+    "When justifying your publication choice, explain why the selected contribution is valuable to the archive. "
+    "Identify the most similar existing image in the archive and explain how your selection differs from it."
 )
 
 def gen_selection_prompt(select_k: Optional[int]) -> str:
@@ -435,6 +452,28 @@ def restore_population_from_checkpoint(checkpoint_path: Path) -> neat.Population
     return neat.Population(config, (population_data, species_set, next_generation))
 
 
+def _rehydrate_reproduction_state(population: neat.Population) -> None:
+    reproduction = getattr(population, "reproduction", None)
+    if not isinstance(reproduction, PicbreederReproduction):
+        return
+
+    population_keys: Set[int] = set(population.population.keys())
+    species_set = getattr(population, "species", None)
+    if species_set is not None:
+        for species in species_set.species.values():
+            population_keys.update(species.members.keys())
+
+    if not population_keys:
+        reproduction.genome_indexer = count(1)
+        reproduction.ancestors = {}
+        return
+
+    reproduction.genome_indexer = count(max(population_keys) + 1)
+    reproduction.ancestors = dict(getattr(reproduction, "ancestors", {}))
+    for key in population_keys:
+        reproduction.ancestors.setdefault(key, tuple())
+
+
 def _try_load_font(size: int) -> ImageFont.ImageFont:
     candidates = [
         "DejaVuSans.ttf",
@@ -554,10 +593,16 @@ class CollaborativeAgentRunner:
         else:
             color_prompt = ""
 
+        if self.chat_history_turns is None:
+            archive_novelty_prompt = ARCHIVE_NOVELTY_PROMPT
+        else:
+            archive_novelty_prompt = ""
+
         self.system_instruction = DEFAULT_SYSTEM_INSTRUCTION.format(
             selection_prompt=gen_selection_prompt(self.select_k),
             n_generations=self.generations,
             color_prompt=color_prompt,
+            archive_novelty_prompt=archive_novelty_prompt,
         )
         with open(self.agent_dir / "system_instruction.txt", "w", encoding="utf-8") as fp:
             fp.write(self.system_instruction)
@@ -661,7 +706,9 @@ class CollaborativeAgentRunner:
                 selected_images = parsed.get("selected", [])
                 selected_images = [] if selected_images is None else selected_images
                 selected_images = _ensure_int_list(selected_images)
-                selected_images = [idx for idx in selected_images if 0 <= idx < len(archive_entries)]
+                selected_images = [idx for idx in selected_images if 0 <= idx < len(archive_entries)][:1]
+                if len(selected_images) > 1:
+                    breakpoint()
                 rationale = str(parsed.get("rationale", ""))
                 choice = "branch" if selected_images else "fresh"
                 decision = {
@@ -673,8 +720,8 @@ class CollaborativeAgentRunner:
                     "archive_grid_path": str(archive_grid),
                     "archive_elite_names": elite_name_list,
                 }
-                preview_path = self._save_archive_branch_preview(decision, archive_entries)
-                if preview_path is not None:
+                if choice == "branch":
+                    preview_path = self._save_archive_branch_preview(decision, archive_entries)
                     decision["branch_preview_path"] = str(preview_path)
 
         if archive_entries:
@@ -788,6 +835,19 @@ class CollaborativeAgentRunner:
                     "you must include a publish object selecting exactly one image to share. "
                     "If you omit it, one of your selected parents will be published automatically."
                 )
+            else:
+                prompt_template += (
+                    " This is the final generation and your last chance to publish. "
+                    "You have already published during this session, "
+                    "but consider if anything in this final grid would make a better contribution to the archive. "
+                    "(Note that your parent selections from this generation will have no effect.)"
+                )
+
+        # If it's the first generation of the first agent, let it know that the first generation is not a branching step.
+        if generation == 0 and self.agent_id.endswith("0"):
+            prompt_template += (
+                " You are the first agent. This is an initial random population, and you may select one or more parents for the next step of evolution. "
+            )
 
         selection_meta = select_parents_from_grid(
             state,
@@ -1340,33 +1400,33 @@ class CollaborativeAgentRunner:
         archive_entries: List[Dict[str, Any]],
     ) -> Optional[Path]:
         if decision.get("choice") != "branch":
-            return None
+            raise ValueError("Branch preview can only be generated for branching decisions.")
         selected = _ensure_int_list(decision.get("selected_images", []))
         if not selected:
-            return None
+            raise ValueError("No selected images in branching decision.")
         grid_path_str = decision.get("archive_grid_path")
         if not grid_path_str:
-            return None
+            raise ValueError("Missing archive grid path in branching decision.")
         grid_path = Path(grid_path_str)
         if not grid_path.exists():
-            return None
+            raise FileNotFoundError(f"Archive grid image not found: {grid_path}")
 
         total_entries = len(archive_entries)
         if total_entries == 0:
-            return None
+            raise ValueError("No archive entries available for preview generation.")
 
         valid_indices: List[int] = []
         for entry_index, entry in enumerate(archive_entries):
             path_value = entry.get("image_path")
             if not path_value:
-                continue
+                raise ValueError(f"Missing image path for archive entry at index {entry_index}.")
             if Path(path_value).exists():
                 valid_indices.append(entry_index)
 
         if not valid_indices:
-            return None
+            raise ValueError("No valid archive entries with existing images found.")
 
-        columns = max(1, int(math.sqrt(len(valid_indices))))
+        columns = max(1, math.ceil(math.sqrt(len(valid_indices))))
         index_to_position = {entry_idx: pos for pos, entry_idx in enumerate(valid_indices)}
         tile_size = self.thumb_size
         margin = ARCHIVE_GRID_MARGIN
@@ -1378,7 +1438,7 @@ class CollaborativeAgentRunner:
             for idx in selected:
                 position = index_to_position.get(idx)
                 if position is None:
-                    continue
+                    raise ValueError(f"Selected index {idx} not found among valid archive entries.")
                 col = position % columns
                 row = position // columns
                 x0 = margin + col * (tile_size + margin)
@@ -1406,10 +1466,10 @@ class CollaborativeAgentRunner:
         publish_index = publish_details.get("index") if publish_details else None
         publish_title = publish_details.get("title") if publish_details else None
         publish_rationale = publish_details.get("reason") if publish_details else None
-        print((
-            f"[{self.agent_id}] Gen {generation} selection: selected={list(selected_indices)}, rationale='{rationale}',"
-            f" publish_index={publish_index}, publish_title='{publish_title}', publish_rationale='{publish_rationale}'"
-        ))
+        log_str = f"[{self.agent_id}] Gen {generation} selection: selected={list(selected_indices)}, rationale='{rationale}'"
+        if publish_index is not None:
+            log_str += f", publish_index={publish_index}, publish_title='{publish_title}', publish_rationale='{publish_rationale}'"
+        print(log_str)
 
 
 class CollaborativeMultiAgentOrchestrator:
@@ -1457,7 +1517,7 @@ class CollaborativeMultiAgentOrchestrator:
             with self.metadata_path.open("r", encoding="utf-8") as handle:
                 metadata = json.load(handle)
             metadata.setdefault("agents", [])
-            metadata.setdefault("next_agent_number", 1)
+            metadata.setdefault("next_agent_number", 0)
             metadata.setdefault("run_config", None)
             changed = False
             if self.seed is not None and metadata.get("seed") != self.seed:
@@ -1477,7 +1537,7 @@ class CollaborativeMultiAgentOrchestrator:
             return metadata
         metadata = {
             "created_at": datetime.now().isoformat(),
-            "next_agent_number": 1,
+            "next_agent_number": 0,
             "agents": [],
             "seed": self.seed,
             "run_config": None,
@@ -1518,7 +1578,7 @@ class CollaborativeMultiAgentOrchestrator:
             json.dump(metadata, handle, indent=2)
 
     def _allocate_agent_id(self) -> str:
-        agent_number = self._metadata.get("next_agent_number", 1)
+        agent_number = self._metadata.get("next_agent_number", 0)
         agent_id = f"{AGENT_DIR_PREFIX}{agent_number:03d}"
         self._metadata["next_agent_number"] = agent_number + 1
         self._persist_metadata(self._metadata)
@@ -1623,6 +1683,7 @@ class CollaborativeMultiAgentOrchestrator:
             enable_output_activations=self.enable_output_activations,
         )
         sync_population_output_activations(population, population.config.genome_config)
+        _rehydrate_reproduction_state(population)
         return population, checkpoint_path
 
     def _build_config(self) -> neat.Config:
@@ -1822,177 +1883,149 @@ class CollaborativeMultiAgentOrchestrator:
 # CLI
 # ----------------------------------------------------------------------
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Collaborative multi-agent Picbreeder workflow with shared archive",
+
+@dataclass
+class CollaborativeConfig:
+    rows: int = 4  # Rows in the CPPN grid
+    cols: int = 5  # Columns in the CPPN grid
+    thumb_size: int = 200  # Pixel size for rendered genome thumbnails
+    chat_history_turns: int = DEFAULT_CHAT_HISTORY_TURNS  # How many prior turns each agent sees (-1 keeps all)
+    scheme: str = "gray"  # Rendering scheme: color, gray, or mono
+    color_palette: str = "hsb"  # Palette choice when using color or gray rendering
+    config_path: Optional[Path] = None  # Optional override for the NEAT config file
+    select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
+    agent_generations: int = DEFAULT_AGENT_GENERATIONS  # Generations executed for each agent
+    num_agents: int = 100  # How many agents run sequentially in this session
+    experiment_dir: Optional[Path] = None  # Output directory for logs and artefacts
+    output_activations: bool = False  # Enable CPPN output activation mutations
+    dry_run: bool = False  # Skip VLM calls; randomise branching and favourite selections
+    resume: bool = False  # Resume a previously interrupted experiment
+    resume_agent_id: Optional[str] = None  # Specific agent identifier to resume (requires resume=true)
+    test_mode: bool = False  # Shortened settings for quick validation runs
+    seed: Optional[int] = None  # Random seed for deterministic behaviour
+    hydra: HydraConf = field(
+        default_factory=lambda: HydraConf(
+            help=HelpConf(
+                app_name="collaborative_multi_agent",
+                header=(
+                    "Collaborative multi-agent Picbreeder workflow with shared archive.\n"
+                    "\n"
+                    "Key options:\n"
+                    "  rows / cols             Grid dimensions rendered per generation.\n"
+                    "  chat_history_turns      Conversation context length (-1 keeps full history).\n"
+                    "  agent_generations       Generations executed by each agent.\n"
+                    "  num_agents              Sequential agents to schedule for this run.\n"
+                    "  experiment_dir          Destination for logs, grids, and archives.\n"
+                    "  dry_run                 Disable VLM calls and randomise agent choices.\n"
+                    "  resume / resume_agent_id Resume an interrupted run from disk records.\n"
+                ),
+                footer="Override with +option=value (e.g. +scheme=color) or pass --cfg=job to inspect the full config.",
+            )
+        )
     )
-    parser.add_argument("--rows", type=int, default=4, help="Rows in the CPPN grid")
-    parser.add_argument("--cols", type=int, default=5, help="Columns in the CPPN grid")
-    parser.add_argument(
-        "--thumb-size",
-        type=int,
-        default=200,
-        help="Thumbnail size for rendered genomes",
-    )
-    parser.add_argument(
-        "--chat-history-turns",
-        type=int,
-        default=DEFAULT_CHAT_HISTORY_TURNS,
-        help="Number of turns to keep in chat history",
-    )
-    parser.add_argument(
-        "--scheme",
-        choices=("color", "gray", "mono"),
-        default="gray",
-        help="Rendering scheme",
-    )
-    parser.add_argument(
-        "--color-palette",
-        choices=("hsb", "sigmoid"),
-        default="hsb",
-        help="Colour palette for color/gray schemes",
-    )
-    parser.add_argument(
-        "--config-path",
-        type=Path,
-        default=None,
-        help="Path to NEAT configuration file",
-    )
-    parser.add_argument(
-        "--select-k",
-        type=int,
-        default=None,
-        help="Maximum number of parents to select each generation",
-    )
-    parser.add_argument(
-        "--agent-generations",
-        type=int,
-        default=DEFAULT_AGENT_GENERATIONS,
-        help="Number of generations per agent run",
-    )
-    parser.add_argument(
-        "--num-agents",
-        type=int,
-        default=100,
-        help="Number of agents to execute sequentially",
-    )
-    parser.add_argument(
-        "--experiment-dir",
-        type=Path,
-        default=None,
-        help="Directory to store experiment artefacts",
-    )
-    parser.add_argument(
-        "--output-activations",
-        action="store_true",
-        help="Enable CPPN output activation mutations",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Skip VLM calls; randomise branch/favourite decisions",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume an interrupted experiment in the provided experiment directory",
-    )
-    parser.add_argument(
-        "--resume-agent-id",
-        type=str,
-        default=None,
-        help="Explicit agent identifier to resume (defaults to the newest in-progress agent)",
-    )
-    parser.add_argument(
-        "--test-mode",
-        action="store_true",
-        help="Use short runs for quick validation",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for deterministic runs",
-    )
-    return parser.parse_args()
 
 
-def resolve_config_path(args: argparse.Namespace) -> Path:
-    if args.config_path is not None:
-        return args.config_path.resolve()
+def resolve_config_path(cfg: CollaborativeConfig) -> Path:
+    if cfg.config_path is not None:
+        return Path(cfg.config_path)
     base = REPO_ROOT / "picture2d"
-    config_name = "interactive_config_color" if args.scheme == "color" else "interactive_config_gray"
-    return (base / config_name).resolve()
+    config_name = "interactive_config_color" if cfg.scheme == "color" else "interactive_config_gray"
+    return base / config_name
 
 
-def ensure_valid_args(args: argparse.Namespace) -> None:
-    if args.resume_agent_id and not args.resume:
+def _ensure_absolute(path: Path, base: Path) -> Path:
+    expanded = Path(path).expanduser()
+    if expanded.is_absolute():
+        return expanded.resolve()
+    return (base / expanded).resolve()
+
+
+def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> CollaborativeConfig:
+    cfg = copy.copy(cfg)
+    if cfg.resume_agent_id and not cfg.resume:
         raise ValueError("--resume-agent-id requires --resume")
-    if args.rows < 1 or args.cols < 1:
+    if cfg.rows < 1 or cfg.cols < 1:
         raise ValueError("rows and cols must be positive integers")
-    if args.thumb_size < 8:
+    if cfg.thumb_size < 8:
         raise ValueError("thumb-size must be at least 8")
-    if args.agent_generations < 1:
+    if cfg.agent_generations < 1:
         raise ValueError("agent-generations must be at least 1")
-    if args.num_agents < 1:
+    if cfg.num_agents < 1:
         raise ValueError("num-agents must be at least 1")
-    if args.select_k is not None and args.select_k < 1:
+    if cfg.select_k is not None and cfg.select_k < 1:
         raise ValueError("select-k must be at least 1 when provided")
-    args.config_path = resolve_config_path(args)
-    if not args.config_path.exists():
-        raise FileNotFoundError(f"Config file not found at {args.config_path}")
 
-    if args.resume:
-        if args.experiment_dir is None:
+    config_path = resolve_config_path(cfg)
+    config_path = _ensure_absolute(Path(config_path), original_cwd)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found at {config_path}")
+    cfg.config_path = config_path
+
+    if cfg.resume:
+        if cfg.experiment_dir is None:
             raise ValueError("--resume requires --experiment-dir pointing to an existing directory")
-        args.experiment_dir = args.experiment_dir.resolve()
-        if not args.experiment_dir.exists():
-            raise FileNotFoundError(f"Experiment directory not found at {args.experiment_dir}")
+        exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)
+        if not exp_dir.exists():
+            raise FileNotFoundError(f"Experiment directory not found at {exp_dir}")
     else:
-        if args.experiment_dir is None:
+        if cfg.experiment_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            args.experiment_dir = Path(
-                "logs_collaborative") / f"th{args.chat_history_turns}_ag{args.agent_generations}-s{args.seed}_{timestamp}"
-        args.experiment_dir = args.experiment_dir.resolve()
-        args.experiment_dir.mkdir(parents=True, exist_ok=True)
+            relative = Path("logs_collaborative") / f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}-s{cfg.seed}_{timestamp}"
+            exp_dir = _ensure_absolute(relative, original_cwd)
+        else:
+            exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)
+        exp_dir.mkdir(parents=True, exist_ok=True)
+    cfg.experiment_dir = exp_dir
 
-    if args.select_k is not None:
-        max_possible = args.rows * args.cols
-        args.select_k = min(max_possible, cap_select_k_for_engine("neat", args.select_k))
+    if cfg.select_k is not None:
+        max_possible = cfg.rows * cfg.cols
+        cfg.select_k = min(max_possible, cap_select_k_for_engine("neat", cfg.select_k))
 
-    if args.test_mode and not args.resume:
-        args.agent_generations = min(3, args.agent_generations)
-        args.num_agents = min(2, args.num_agents)
+    if cfg.test_mode and not cfg.resume:
+        cfg.agent_generations = min(3, cfg.agent_generations)
+        cfg.num_agents = min(2, cfg.num_agents)
+
+    return cfg
 
 
-def run(args: argparse.Namespace) -> None:
-    ensure_valid_args(args)
-    apply_random_seed(args.seed)
-    if not args.dry_run:
+def run(cfg: CollaborativeConfig) -> None:
+    apply_random_seed(cfg.seed)
+    if not cfg.dry_run:
         ensure_gemini_key()
     orchestrator = CollaborativeMultiAgentOrchestrator(
-        args.experiment_dir,
-        rows=args.rows,
-        cols=args.cols,
-        thumb_size=args.thumb_size,
-        scheme=args.scheme,
-        palette=args.color_palette,
-        config_path=args.config_path,
-        select_k=args.select_k,
-        agent_generations=args.agent_generations,
-        enable_output_activations=args.output_activations,
-        dry_run=args.dry_run,
-        seed=args.seed,
-        chat_history_turns=args.chat_history_turns,
+        cfg.experiment_dir,
+        rows=cfg.rows,
+        cols=cfg.cols,
+        thumb_size=cfg.thumb_size,
+        scheme=cfg.scheme,
+        palette=cfg.color_palette,
+        config_path=cfg.config_path,
+        select_k=cfg.select_k,
+        agent_generations=cfg.agent_generations,
+        enable_output_activations=cfg.output_activations,
+        dry_run=cfg.dry_run,
+        seed=cfg.seed,
+        chat_history_turns=cfg.chat_history_turns,
     )
 
     orchestrator.run_agents(
-        args.num_agents,
-        resume=args.resume,
-        resume_agent_id=args.resume_agent_id,
+        cfg.num_agents,
+        resume=cfg.resume,
+        resume_agent_id=cfg.resume_agent_id,
     )
-    orchestrator.archive_manager.create_archive_grid(args.thumb_size)
+    orchestrator.archive_manager.create_archive_grid(cfg.thumb_size)
+
+
+cs = ConfigStore.instance()
+cs.store(name="collaborative_base", node=CollaborativeConfig)
+
+
+@hydra.main(version_base=None, config_path=None, config_name="collaborative_base")
+def main(cfg: CollaborativeConfig) -> None:
+    original_cwd = Path(get_original_cwd())
+    cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
+    run(cfg)
 
 
 if __name__ == "__main__":
-    run(parse_args())
+    main()
