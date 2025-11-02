@@ -78,6 +78,8 @@ class SweepConfig(CollaborativeConfig):
     cpus_per_task: int = 1  # CPUs requested per task
     timeout_hours: int = 24  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
+    evaluate: bool = False  # If true, run evaluation instead of training
+    visualize: bool = False  # If true, run phylogeny visualization instead of training
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -118,28 +120,38 @@ def build_command(cfg: SweepConfig, seed: int, chat_turns: int, experiment_prefi
 
     exp_dir_str = str(exp_dir)
 
-    experiment_override = f'experiment_dir="{exp_dir_str}"' if " " in exp_dir_str else f"experiment_dir={exp_dir_str}"
-
-    overrides: List[str] = [
-        f"seed={seed}",
-        f"rows={cfg.rows}",
-        f"cols={cfg.cols}",
-        f"agent_generations={cfg.agent_generations}",
-        f"num_agents={cfg.num_agents}",
-        f"scheme={cfg.scheme}",
-        f"color_palette={cfg.color_palette}",
-        f"chat_history_turns={chat_turns}",
-        f"resume={resume}",
-        experiment_override,
-    ]
-    if cfg.dry_run:
-        overrides.append("dry_run=true")
-    if cfg.output_activations:
-        overrides.append("output_activations=true")
+    if cfg.evaluate or cfg.visualize:
+        experiment_override = f'--experiment-dir="{exp_dir_str}"' if " " in exp_dir_str else f"--experiment-dir={exp_dir_str}"
+        overrides: List[str] = [
+            experiment_override,
+        ]
+        if cfg.evaluate:
+            main_script = "embed_and_visualize.py"
+        if cfg.visualize:
+            main_script = "visualize_archive_phylogeny.py"
+    else:
+        main_script = "collaborative_multi_agent.py"
+        experiment_override = f'experiment_dir="{exp_dir_str}"' if " " in exp_dir_str else f"experiment_dir={exp_dir_str}"
+        overrides: List[str] = [
+            f"seed={seed}",
+            f"rows={cfg.rows}",
+            f"cols={cfg.cols}",
+            f"agent_generations={cfg.agent_generations}",
+            f"num_agents={cfg.num_agents}",
+            f"scheme={cfg.scheme}",
+            f"color_palette={cfg.color_palette}",
+            f"chat_history_turns={chat_turns}",
+            f"resume={resume}",
+            experiment_override,
+        ]
+        if cfg.dry_run:
+            overrides.append("dry_run=true")
+        if cfg.output_activations:
+            overrides.append("output_activations=true")
     if cfg.extra_args:
         overrides.extend(shlex.split(cfg.extra_args))
 
-    cmd: List[str] = [sys.executable, str(REPO_ROOT / "collaborative_multi_agent.py"), *overrides]
+    cmd: List[str] = [sys.executable, str(REPO_ROOT / main_script), *overrides]
     return SweepCommand(argv=cmd, workdir=REPO_ROOT, seed=seed, chat_history_turns=chat_turns)
 
 
