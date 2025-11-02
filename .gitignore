@@ -7,6 +7,7 @@ logs/*
 log/*
 .env
 .venv/*
+.vscode/*
 picture2d/rendered
 outputs/*
 submitit_logs/*
