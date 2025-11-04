@@ -4,9 +4,9 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
-
+import graphviz 
 import neat
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 from pyparsing import Iterable
 
 from picture2d.common import (
@@ -15,11 +15,6 @@ from picture2d.common import (
     eval_gray_image,
     eval_mono_image,
 )
-
-try:
-    import graphviz  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    graphviz = None  # type: ignore[assignment]
 
 
 def _format_float(value: float) -> str:
@@ -245,10 +240,28 @@ def render_genome_diagram(
     }
     dot = graphviz.Digraph(format=fmt, node_attr=node_attr)
 
-    input_keys = set(config.genome_config.input_keys)
+    input_keys_ordered = list(config.genome_config.input_keys)
+    input_keys = set(input_keys_ordered)
     output_keys = set(config.genome_config.output_keys)
 
-    def build_label(node_key: int, node_type: str, node_gene: Optional[Any]) -> str:
+    input_activation_map: Dict[int, str] = {}
+    activation_names: Optional[Sequence[str]] = None
+    for source in (effective_genome, genome):
+        names = getattr(source, "_input_activation_names", None)
+        if names:
+            activation_names = names
+            break
+    if activation_names:
+        for key, name in zip(input_keys_ordered, activation_names):
+            if name:
+                input_activation_map[key] = str(name)
+
+    def build_label(
+        node_key: int,
+        node_type: str,
+        node_gene: Optional[Any],
+        node_activation: Optional[str] = None,
+    ) -> str:
         alias = resolved_node_names.get(node_key, str(node_key))
         label_lines = [alias, f"id={node_key}", f"type={node_type}"]
         if node_gene is not None:
@@ -264,6 +277,8 @@ def render_genome_diagram(
                     f"resp={_format_float(response)}",
                 ]
             )
+        elif node_activation:
+            label_lines.append(f"act={node_activation}")
         return "\n".join(label_lines)
 
     for input_key in input_keys:
@@ -272,7 +287,12 @@ def render_genome_diagram(
             "style": "filled",
             "shape": "box",
             "fillcolor": resolved_node_colors.get(input_key, "lightgray"),
-            "label": build_label(input_key, "input", None),
+            "label": build_label(
+                input_key,
+                "input",
+                None,
+                node_activation=input_activation_map.get(input_key),
+            ),
         }
         dot.node(node_id, _attributes=attrs)
 
@@ -389,4 +409,3 @@ def _draw_dotted_rectangle(
             fill=color,
             width=width,
         )
-

@@ -110,6 +110,8 @@ def _ensure_absolute(path: Path, base: Path) -> Path:
 
 def build_command(cfg: SweepConfig, seed: int, chat_turns: int, experiment_prefix: Path) -> SweepCommand:
     exp_dir = experiment_prefix / f"seed_{seed}_chat{chat_turns}"
+    if cfg.scheme != "gray":
+        exp_dir = Path(f"{exp_dir}_scheme-{cfg.scheme}")
 
     # If the experiment directory already exists, set to resume from it
     if os.path.exists(exp_dir):

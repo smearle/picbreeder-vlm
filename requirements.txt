@@ -6,6 +6,7 @@ neat-python
 Pillow
 pygame
 python-dotenv
+submitit
 
 # javascript  # for neurogram only
 

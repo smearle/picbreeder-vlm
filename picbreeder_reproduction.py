@@ -118,6 +118,24 @@ class PicbreederReproduction(DefaultClassConfig):
         clone.nodes = {k: node.copy() for k, node in parent.nodes.items()}
         clone.connections = {k: conn.copy() for k, conn in parent.connections.items()}
         clone.fitness = None
+
+        if hasattr(parent, "_input_activation_names"):
+            names = list(getattr(parent, "_input_activation_names"))
+            setter = getattr(clone, "_set_input_activation_names", None)
+            setter(names)
+
+        if hasattr(parent, "_output_activations_enabled"):
+            clone._output_activations_enabled = getattr(parent, "_output_activations_enabled")
+
+        if hasattr(parent, "_output_activation_names"):
+            output_names = list(getattr(parent, "_output_activation_names"))
+            setter = getattr(clone, "_set_output_activation_names", None)
+            setter(output_names)
+
+        else:
+            clear_fn = getattr(clone, "_clear_output_activations", None)
+            clear_fn()
+
         return clone
 
     @staticmethod

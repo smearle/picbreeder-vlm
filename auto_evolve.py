@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from statistics import mean, pstdev
 
 import sys
@@ -120,10 +120,10 @@ def dump_initial_populations(
         save_neat_genome_diagrams(genomes, config, population_dir, 0)
 
 
-def extract_json_object(text: str) -> Dict[str, Any]:
+def extract_json_object(text: str) -> Union[Dict[str, Any], ValueError]:
     cleaned = text.strip()
     if not cleaned:
-        raise ValueError("empty response")
+        return ValueError("empty response")
 
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
@@ -140,7 +140,10 @@ def extract_json_object(text: str) -> Dict[str, Any]:
     else:
         candidate = cleaned
 
-    return json.loads(candidate)
+    try:
+        return json.loads(candidate)
+    except json.decoder.JSONDecodeError:
+        return ValueError("no valid JSON object found in response.")
 
 
 def _session_max_turns(chat_history_turns: Optional[int]) -> Optional[int]:
@@ -205,33 +208,106 @@ def select_parents_from_grid(
 
     total_images = len(state["images"])
     max_index = max(total_images - 1, 0)
-    prompt = prompt_template.format(generation=generation)
-
-    response = query_with_history(
-        image_bytes,
-        prompt=prompt,
-        system_instruction=system_instruction,
-        chat_history_turns=chat_history_turns,
-    )
-    response_text = getattr(response, "text", "") or ""
-    parsed = extract_json_object(response_text)
-
-    raw_selected = parsed.get("selected")
-    if not isinstance(raw_selected, list):
-        raise ValueError("Gemini response missing 'selected' list.")
-
+    base_prompt = prompt_template.format(generation=generation)
+    max_history_turns = _session_max_turns(chat_history_turns)
+    prompt = base_prompt
     max_index = int(state["rows"]) * int(state["cols"]) - 1
-    cleaned: List[int] = []
-    for value in raw_selected:
-        try:
-            idx = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= idx <= max_index and idx not in cleaned:
-            cleaned.append(idx)
 
-    if not cleaned and require_selection:
-        raise ValueError("Gemini response did not contain any valid indices.")
+    errors_dir = query_dir / "metadata" / "errors"
+    max_attempts = 5
+    response_text: str = ""
+    parsed: Dict[str, Any] = {}
+    raw_selected: Union[List[Any], None] = None
+    cleaned: List[int] = []
+
+    for attempt in range(1, max_attempts + 1):
+        response = query_with_history(
+            image_bytes,
+            prompt=prompt,
+            system_instruction=system_instruction,
+            chat_history_turns=chat_history_turns,
+        )
+        response_text = getattr(response, "text", "") or ""
+        parse_result = extract_json_object(response_text)
+
+        error_reason: Optional[str] = None
+        if isinstance(parse_result, ValueError):
+            error_reason = str(parse_result)
+            parsed = {}
+            raw_selected = None
+        elif not isinstance(parse_result, dict):
+            error_reason = "Response was not a JSON object."
+            parsed = {}
+            raw_selected = None
+        else:
+            parsed = parse_result
+            raw_selected = parsed.get("selected")
+            if not isinstance(raw_selected, list):
+                error_reason = "Response missing 'selected' list."
+            else:
+                cleaned = []
+                for value in raw_selected:
+                    try:
+                        idx = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if 0 <= idx <= max_index and idx not in cleaned:
+                        cleaned.append(idx)
+
+                if not cleaned:
+                    error_reason = "Response did not contain any valid selection indices."
+
+        if error_reason is None:
+            break
+
+        errors_dir.mkdir(parents=True, exist_ok=True)
+        error_payload = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "generation": generation,
+            "attempt": attempt,
+            "prompt": prompt,
+            "response_text": response_text,
+            "error": error_reason,
+        }
+        if isinstance(parsed, dict) and parsed:
+            error_payload["parsed_json"] = parsed
+
+        error_path = errors_dir / f"gen_{generation:03d}_attempt_{attempt:02d}.json"
+        error_path.write_text(json.dumps(error_payload, indent=2), encoding="utf-8")
+
+        if attempt >= max_attempts:
+            raise ValueError(f"Exceeded {max_attempts} attempts while querying Gemini: {error_reason}")
+
+        correction_instructions = [
+            f"Your previous response could not be processed because: {error_reason}",
+        ]
+        include_previous_response = max_history_turns == 0
+        if include_previous_response:
+            correction_instructions.extend(
+                [
+                    "Previous response:",
+                    response_text.strip() or "<empty response>",
+                ]
+            )
+        correction_instructions.append("")
+        correction_instructions.extend(
+            [
+                "Please reply with JSON only in the format "
+                '{"selected": [indices], "rationale": "brief explanation"}',
+                f"Use zero-based numeric indices between 0 and {max_index}.",
+            ]
+        )
+        if select_k is not None:
+            correction_instructions.append(f"Select at most {select_k} unique indices.")
+        correction_instructions.append("Do not include code fences or extra commentary.")
+
+        prompt = (
+            f"{base_prompt}\n\n"
+            + "\n".join(correction_instructions)
+        )
+
+    else:
+        raise ValueError("Failed to obtain a valid Gemini response.")
 
     if select_k is not None:
         cleaned = cleaned[:select_k]
@@ -252,6 +328,7 @@ def select_parents_from_grid(
         "select_k": select_k,
         "chat_history_turns": chat_history_turns,
         "mutation_mode": parsed.get("mutation_mode", None),
+        "response_attempts": attempt,
     }
     metadata_dir = query_dir / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)

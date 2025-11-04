@@ -142,3 +142,24 @@ def eval_color_image(genome, config, width, height):
         image.append(row)
 
     return image
+
+
+def eval_color_image_as_grayscale(genome, config, width, height):
+    net = neat.nn.FeedForwardNetwork.create(genome, config)
+    image = []
+    for coord_row in _canvas_coords(width, height):
+        row = []
+        for coords in coord_row:
+            inputs = list(coords)
+            transformer = getattr(genome, "transform_inputs", None)
+            if transformer is not None:
+                inputs = transformer(inputs)
+            output = net.activate(inputs)
+            output_transformer = getattr(genome, "transform_outputs", None)
+            if output_transformer is not None:
+                output = output_transformer(output)
+            hue, saturation, brightness = restrict_hsb_channels(output[:3])
+            row.append(brightness)
+        image.append(row)
+
+    return image
