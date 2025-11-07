@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         default="archive",
         help="Select 'archive' to show only archive entries; 'full' includes all recorded genomes and archive entries.",
     )
+    parser.add_argument(
+        "--archive-limit",
+        type=int,
+        default=None,
+        help="If provided, only consider the first N archive entries (default: all).",
+    )
     return parser.parse_args()
 
 PALETTE: Tuple[str, ...] = (
@@ -89,7 +95,7 @@ def _load_archive_entries(archive_dir: Path) -> List[Dict[str, Any]]:
 
 def _init_graph(output_format: str) -> Digraph:
     graph = Digraph("archive_phylogeny", format=output_format)
-    graph.attr(rankdir="LR", bgcolor="white", nodesep="0.6", ranksep="1")
+    graph.attr(rankdir="TB", bgcolor="white", nodesep="0.1", ranksep="1")
     graph.attr("node", fontname="Helvetica", fontsize="10", color="#333333")
     graph.attr("edge", color="#666666")
     return graph
@@ -103,14 +109,76 @@ def _choose_color(agent_id: str, palette: Sequence[str], assigned: Dict[str, str
     return color
 
 
-def _resolve_image_path(entry: Dict[str, Any], archive_dir: Path) -> Optional[Path]:
-    raw_path = entry.get("image_path")
-    if not raw_path:
+def _rebase_submitit_path(raw_path: Path, experiment_prefix: Optional[Path]) -> Optional[Path]:
+    if not (experiment_prefix and raw_path.is_absolute()):
         return None
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = (archive_dir / path).resolve()
-    return path if path.exists() else None
+    parts = raw_path.parts
+    try:
+        submitit_idx = parts.index("submitit_sweeps")
+    except ValueError:
+        return None
+    suffix_parts = parts[submitit_idx + 1 :]
+    if not suffix_parts:
+        return None
+    # Note that the agent_dir is the first suffix part, but already included in experiment_prefix, so we skip it.
+    rebased = (experiment_prefix / Path(*suffix_parts[1:])).resolve()
+    return rebased if rebased.exists() else None
+
+
+def _resolve_image_path(
+    entry: Dict[str, Any],
+    archive_dir: Path,
+    experiment_prefix: Optional[Path],
+) -> Optional[Path]:
+    raw_value = entry.get("image_path")
+    if not raw_value:
+        return None
+    raw_path = Path(raw_value)
+
+    candidates: List[Path] = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+        rebased = _rebase_submitit_path(raw_path, experiment_prefix)
+        if rebased:
+            candidates.append(rebased)
+    else:
+        candidates.append((archive_dir / raw_path).resolve())
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _resolve_source_experiment_dir(
+    entry: Dict[str, Any],
+    *,
+    experiment_dir: Path,
+    experiment_prefix: Optional[Path],
+) -> Optional[Path]:
+    raw_value = entry.get("source_experiment")
+    agent_id = entry.get("agent_id")
+    candidates: List[Path] = []
+
+    if raw_value:
+        raw_path = Path(raw_value)
+        if raw_path.is_absolute():
+            candidates.append(raw_path)
+            rebased = _rebase_submitit_path(raw_path, experiment_prefix)
+            if rebased:
+                candidates.append(rebased)
+        else:
+            candidates.append((experiment_dir / raw_path).resolve())
+
+    if agent_id:
+        candidates.append((experiment_dir / "agents" / str(agent_id)).resolve())
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
 
 
 def _truncate_text(value: str, max_len: int = 40) -> str:
@@ -211,6 +279,7 @@ def _build_archive_graph(
     archive_dir: Path,
     output_format: str,
     mode: str,
+    experiment_prefix: Optional[Path],
 ) -> Digraph:
     graph = _init_graph(output_format)
     assigned_colors: Dict[str, str] = {}
@@ -226,11 +295,12 @@ def _build_archive_graph(
 
     for entry_id, entry in entries_by_id.items():
         parent_ids: Set[str] = set()
-        source_experiment = entry.get("source_experiment")
-        if source_experiment:
-            agent_dir = Path(source_experiment)
-            if not agent_dir.is_absolute():
-                agent_dir = (experiment_dir / agent_dir).resolve()
+        agent_dir = _resolve_source_experiment_dir(
+            entry,
+            experiment_dir=experiment_dir,
+            experiment_prefix=experiment_prefix,
+        )
+        if agent_dir:
             branch_path = agent_dir / "logs" / "branching_selection.json"
             for parent in _load_selected_entry_ids(branch_path):
                 if parent != entry_id and parent in entries_by_id:
@@ -251,7 +321,7 @@ def _build_archive_graph(
     for entry_id, entry in entries_by_id.items():
         agent_id = str(entry.get("agent_id", "unknown"))
         fill_color = _choose_color(agent_id, PALETTE, assigned_colors)
-        image_path = _resolve_image_path(entry, archive_dir)
+        image_path = _resolve_image_path(entry, archive_dir, experiment_prefix)
         attrs = _build_archive_node_attributes(
             entry=entry,
             image_path=image_path,
@@ -359,6 +429,7 @@ def _build_full_phylogeny_graph(
     archive_dir: Path,
     output_format: str,
     mode: str,
+    experiment_prefix: Optional[Path],
 ) -> Digraph:
     graph = _init_graph(output_format)
     assigned_colors: Dict[str, str] = {}
@@ -463,7 +534,7 @@ def _build_full_phylogeny_graph(
         color = _choose_color(agent_id, PALETTE, assigned_colors)
         if meta["type"] == "archive":
             entry = meta["record"]
-            image_path = _resolve_image_path(entry, archive_dir)
+            image_path = _resolve_image_path(entry, archive_dir, experiment_prefix)
             attrs = _build_archive_node_attributes(
                 entry=entry,
                 image_path=image_path,
@@ -497,6 +568,7 @@ def build_phylogeny_graph(
     output_format: str,
     mode: str,
     scope: str,
+    experiment_prefix: Optional[Path],
 ) -> Digraph:
     if scope == "full":
         return _build_full_phylogeny_graph(
@@ -505,6 +577,7 @@ def build_phylogeny_graph(
             archive_dir=archive_dir,
             output_format=output_format,
             mode=mode,
+            experiment_prefix=experiment_prefix,
         )
     return _build_archive_graph(
         entries,
@@ -512,14 +585,20 @@ def build_phylogeny_graph(
         archive_dir=archive_dir,
         output_format=output_format,
         mode=mode,
+        experiment_prefix=experiment_prefix,
     )
 
 
 def main() -> None:
     args = parse_args()
     experiment_dir = args.experiment_dir.resolve()
+    experiment_prefix = args.experiment_dir.resolve() if args.experiment_dir else None
     archive_dir = experiment_dir / "archive"
     entries = _load_archive_entries(archive_dir)
+    if args.archive_limit is not None:
+        if args.archive_limit <= 0:
+            raise SystemExit("--archive-limit must be a positive integer.")
+        entries = entries[: args.archive_limit]
     if not entries:
         raise SystemExit("Archive metadata contains no entries to visualise.")
 
@@ -530,6 +609,7 @@ def main() -> None:
         output_format=args.format,
         mode=args.mode,
         scope=args.scope,
+        experiment_prefix=experiment_prefix,
     )
 
     if args.output is None:

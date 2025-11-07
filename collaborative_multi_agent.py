@@ -44,6 +44,7 @@ from neat.population import CompleteExtinctionException
 from PIL import Image, ImageDraw, ImageFont
 
 from auto_evolve import (
+    DEFAULT_BASELINE_SELECTION_LIMIT,
     query_with_history,
     extract_json_object,
     ensure_gemini_key,
@@ -51,9 +52,10 @@ from auto_evolve import (
     reset_chat_session,
     select_parents_from_grid,
     restore_chat_history_from_metadata,
+    summarize_genome_structure,
 )
 from artifacts import build_generation_state, save_neat_genome_diagrams, save_neat_population
-from experiment_cli import cap_select_k_for_engine
+from experiment_cli import SELECTION_BASELINES, cap_select_k_for_engine
 from neat_components import (
     CHECKPOINT_SUFFIX,
     GenerationCheckpointer,
@@ -73,16 +75,20 @@ DEFAULT_CHAT_HISTORY_TURNS = -1  # Unlimited conversational history.
 AGENT_DIR_PREFIX = "agent_"
 ARCHIVE_GRID_MARGIN = 12
 
-GOAL_PROMPT = (
-    "Your goal is to evolve images that resemble familiar real-world objects."
-    # "Your goal is to evolve images that resemble familiar real-world objects. We want the object to be colored, but try to move away from the high-frequency rainbow artefact. "
-    # "Your goal is to evolve an image that looks like a fish."
-    # "Your goal is to generate a lizard."
-)
+GOAL_PROMPTS = {
+    "familiar_objects": "Your goal is to evolve images that resemble familiar real-world objects.",
+    "unfamiliar_objects": "Your goal is to evolve images that resemble unfamiliar objects that may or may not exist.",
+    "lizards": "Your goal is to evolve images that resemble lizards.",
+    "fish": "Your goal is to evolve images that resemble fish.",
+    "skulls": "Your goal is to evolve images that resemble skulls.",
+    "apples": "Your goal is to evolve images that resemble apples.",
+    "butterflies": "Your goal is to evolve images that resemble butterflies.",
+    "flowers": "Your goal is to evolve images that resemble flowers.",
+}
 
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You are playing with a collaborative online platform which allows users to interactively evolve small neural networks called Compositional Pattern Producing Networks (CPPNs) for generating images. "
-    f"{GOAL_PROMPT} "
+    "{goal_prompt} "
     "This is an open-ended search process. You may set out with certain goals in mind, but be willing to quickly adapt them as new forms arise. "
     "If a certain evolutionary direction is not progressing, do not choose the same partially-successful parent repeatedly. "
     "Be willing to give up on local optima and explore new areas of the search space, even without a pre-defined target. "
@@ -527,7 +533,8 @@ class CollaborativeAgentRunner:
         self,
         agent_id: str,
         agent_dir: Path,
-        config: neat.Config,
+        config: CollaborativeConfig,
+        neat_config: neat.Config,
         archive_manager: ArchiveManager,
         *,
         generations: int = DEFAULT_AGENT_GENERATIONS,
@@ -538,16 +545,18 @@ class CollaborativeAgentRunner:
         palette: str,
         select_k: Optional[int],
         chat_history_turns: int,
-        dry_run: bool,
+        selection_baseline: str = "none",
         population: Optional[neat.Population] = None,
         progress_callback: Optional[
             Callable[[int, Optional[Dict[str, Any]], Optional[Dict[str, Any]]], None]
         ] = None,
         resume_mode: bool = False,
+        warm_start_active: bool = False,
         render_genome_diagrams: bool = False,
     ) -> None:
         self.agent_id = agent_id
         self.agent_dir = agent_dir
+        self.config = config
         # Save running latest image in parent of agent directory
         self.latest_img_path = agent_dir.parent / "latest_image.png"
         self.archive_manager = archive_manager
@@ -559,9 +568,10 @@ class CollaborativeAgentRunner:
         self.palette = palette
         self.select_k = select_k
         self.chat_history_turns = chat_history_turns
-        self.dry_run = dry_run
-        self.config = config
+        self.selection_baseline = selection_baseline
+        self.neat_config = neat_config
         self.progress_callback = progress_callback
+        self.warm_start_active = bool(warm_start_active)
         self.resume_mode = resume_mode or (population is not None)
 
         # Start each agent with a fresh conversation history before any VLM calls.
@@ -583,11 +593,19 @@ class CollaborativeAgentRunner:
 
         # Reporter & population
         if population is None:
-            self.population = neat.Population(self.config)
+            self.population = neat.Population(self.neat_config)
         else:
             self.population = population
-        sync_population_output_activations(self.population, self.config.genome_config)
+        sync_population_output_activations(self.population, self.neat_config.genome_config)
         self.population.add_reporter(GenerationCheckpointer(self.population_dir))
+
+        initial_mode = "structure_only" if self.warm_start_active else getattr(
+            self.neat_config.genome_config,
+            "picbreeder_mutation_mode",
+            "all",
+        )
+        self._mutation_mode = self._normalize_mutation_mode(initial_mode)
+        self._apply_mutation_mode(self._mutation_mode)
 
         self.prompt_template = PARENT_SELECTION_PROMPT
         if (self.scheme == "color" or self.scheme == "toggle"):
@@ -601,25 +619,33 @@ class CollaborativeAgentRunner:
             archive_novelty_prompt = ""
 
         if self.scheme == "toggle":
-            mutation_mode_prompt = (
-                "At each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
-                "or to mutate the entire CPPN. Indicate your choice in a `mutation_mode` field in your JSON response, set to either `color_only`, `structure_only`, or `all`. "
-            )
+            if self.warm_start_active:
+                mutation_mode_prompt = (
+                    "For the warm-start phase we are focusing on grayscale structure. "
+                    "Keep the `mutation_mode` field set to `structure_only` so only the brightness channel mutates."
+                )
+            else:
+                mutation_mode_prompt = (
+                    "At each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
+                    "or to mutate the entire CPPN. Indicate your choice in a `mutation_mode` field in your JSON response, set to either `color_only`, `structure_only`, or `all`. "
+                )
         else:
             mutation_mode_prompt = ""
 
         self.system_instruction = DEFAULT_SYSTEM_INSTRUCTION.format(
+            goal_prompt=GOAL_PROMPTS[self.config.goal],
             selection_prompt=gen_selection_prompt(self.select_k),
             n_generations=self.generations,
             color_prompt=color_prompt,
             archive_novelty_prompt=archive_novelty_prompt,
             mutation_mode_prompt=mutation_mode_prompt,
         )
-        with open(self.agent_dir / "system_instruction.txt", "w", encoding="utf-8") as fp:
-            fp.write(self.system_instruction)
+        if self.agent_id == 0:
+            with open(self.agent_dir / "system_instruction.txt", "w", encoding="utf-8") as fp:
+                fp.write(self.system_instruction)
 
         self._restored_chat_turns = 0
-        should_restore_chat = (not self.dry_run) and (self.chat_history_turns is None or self.chat_history_turns != 0)
+        should_restore_chat = (self.selection_baseline == "none") and (self.chat_history_turns is None or self.chat_history_turns != 0)
         if should_restore_chat:
             restored = restore_chat_history_from_metadata(
                 self.query_dir,
@@ -644,8 +670,55 @@ class CollaborativeAgentRunner:
         self._archive_seed_map: Dict[int, Dict[str, Any]] = {}
         self._genome_lineage: Dict[int, Dict[str, Any]] = {}
         self.render_genome_diagrams = render_genome_diagrams
+        self._diagram_warning_emitted = False
         if self.resume_mode:
             self._load_existing_publication_state()
+
+    def _normalize_mutation_mode(self, mode: Optional[str]) -> str:
+        candidate = str(mode).lower() if mode is not None else ""
+        valid = {"all", "color_only", "structure_only"}
+        return candidate if candidate in valid else "all"
+
+    def _apply_mutation_mode(self, mode: str) -> None:
+        normalized = self._normalize_mutation_mode(mode)
+        setattr(self.neat_config, "picbreeder_mutation_mode", normalized)
+        setattr(self.neat_config.genome_config, "picbreeder_mutation_mode", normalized)
+        setattr(self.population.config, "picbreeder_mutation_mode", normalized)
+        setattr(self.population.config.genome_config, "picbreeder_mutation_mode", normalized)
+
+    def _update_mutation_mode(self, requested_mode: Optional[str]) -> str:
+        target = "structure_only" if self.warm_start_active else self._normalize_mutation_mode(requested_mode)
+        if target != self._mutation_mode:
+            self._mutation_mode = target
+            self._apply_mutation_mode(self._mutation_mode)
+        else:
+            # Keep config in sync even if mode unchanged (useful after resume).
+            self._apply_mutation_mode(self._mutation_mode)
+        return self._mutation_mode
+
+    def _color_output_keys(self) -> Tuple[int, ...]:
+        output_keys = list(getattr(self.neat_config.genome_config, "output_keys", ()))
+        if len(output_keys) >= 3:
+            return tuple(int(key) for key in output_keys[:2])
+        if len(output_keys) >= 2:
+            return tuple(int(key) for key in output_keys[:-1])
+        return tuple()
+
+    def _zero_color_weights(self, genomes: Iterable[neat.DefaultGenome]) -> None:
+        if not self.warm_start_active:
+            return
+        color_keys = self._color_output_keys()
+        if not color_keys:
+            return
+        for genome in genomes:
+            for (src, dst), connection in genome.connections.items():
+                if int(dst) in color_keys:
+                    connection.weight = 0.0
+
+    def _enforce_structure_only_population(self) -> None:
+        if not self.warm_start_active:
+            return
+        self._zero_color_weights(self.population.population.values())
 
     # ------------------------------------------------------------------
     # Population initialisation and branching
@@ -667,7 +740,7 @@ class CollaborativeAgentRunner:
                 "archive_elite_names": elite_name_list,
             }
 
-        elif self.dry_run:
+        elif self.selection_baseline != "none":
             rationale = "Dry-run mode; random decision."
             selected_images: List[int] = []
             choice = "fresh" if random.random() < 0.5 else "branch"
@@ -757,7 +830,8 @@ class CollaborativeAgentRunner:
         self._genome_lineage.clear()
 
         if decision.get("choice") != "branch" or not decision.get("selected_images"):
-            seed_initial_population(self.population, self.config.genome_config)
+            seed_initial_population(self.population, self.neat_config.genome_config)
+            self._enforce_structure_only_population()
             return
 
         archive_entries = self.archive_manager.entries
@@ -773,7 +847,8 @@ class CollaborativeAgentRunner:
             selected_records.append((entry, genome))
 
         if not selected_records:
-            seed_initial_population(self.population, self.config.genome_config)
+            seed_initial_population(self.population, self.neat_config.genome_config)
+            self._enforce_structure_only_population()
             return
 
         population_keys = list(self.population.population.keys())
@@ -791,9 +866,9 @@ class CollaborativeAgentRunner:
                 "generation": entry_dict.get("generation"),
             }
 
-        sync_population_output_activations(self.population, self.config.genome_config)
+        sync_population_output_activations(self.population, self.neat_config.genome_config)
         self.population.species.speciate(
-            self.config,
+            self.neat_config,
             self.population.population,
             self.population.generation,
         )
@@ -804,6 +879,7 @@ class CollaborativeAgentRunner:
             self.population.generation,
         )
 
+        self._enforce_structure_only_population()
         self._write_branching_summary(decision, len(selected_records))
 
     # ------------------------------------------------------------------
@@ -819,6 +895,8 @@ class CollaborativeAgentRunner:
             raise ValueError(
                 f"Expected {self.rows * self.cols} genomes, received {len(genomes)}."
             )
+
+        self._zero_color_weights(genome for _, genome in genomes)
 
         if self.render_genome_diagrams:
             diagram_paths = save_neat_genome_diagrams(genomes, config, self.population_dir, generation)
@@ -866,25 +944,45 @@ class CollaborativeAgentRunner:
                     "(Note that your parent selections from this generation will have no effect.)"
                 )
 
+        if generation == 0 and self.chat_history_turns == 0:
+            decision = self.branching_decision or {}
+            if decision.get("choice") == "branch":
+                prompt_template += (
+                    " You have already branched from the archive; treat this as the first grid of your branch and select parents from it."
+                )
+            else:
+                prompt_template += (
+                    " You are starting from a fresh population; treat this as the first grid of your session and select parents from it."
+                )
+
         # If it's the first generation of the first agent, let it know that the first generation is not a branching step.
         if generation == 0 and self.agent_id.endswith("0"):
             prompt_template += (
                 " You are the first agent. This is an initial random population, and you may select one or more parents for the next step of evolution. "
             )
 
-        selection_meta = select_parents_from_grid(
-            state,
-            prompt_template,
-            self.query_dir,
-            self.select_k,
-            system_instruction,
-            self.chat_history_turns,
-            require_selection=require_selection,
-        )
-        mutation_mode = selection_meta.get("mutation_mode")
-        if mutation_mode in ("color_only", "structure_only", "all"):
-            selection_meta["mutation_mode"] = mutation_mode
-        selection_meta = dict(selection_meta)
+        if self.selection_baseline == "none":
+            selection_meta_raw = select_parents_from_grid(
+                state,
+                prompt_template,
+                self.query_dir,
+                self.select_k,
+                system_instruction,
+                self.chat_history_turns,
+                require_selection=require_selection,
+            )
+        else:
+            selection_meta_raw = self._select_parents_baseline(
+                generation,
+                genomes,
+                config,
+                state,
+            )
+        selection_meta = dict(selection_meta_raw)
+        resolved_mode = self._update_mutation_mode(selection_meta.get("mutation_mode"))
+        selection_meta["mutation_mode"] = resolved_mode
+        if self.warm_start_active:
+            selection_meta["mutation_mode_forced"] = True
         selection_path = Path(selection_meta.get("selection_path", grid_path))
         shutil.copy(selection_path, self.latest_img_path)
         selected_indices: Sequence[int] = selection_meta["selected"]
@@ -915,10 +1013,10 @@ class CollaborativeAgentRunner:
         self._log_generation_lineage(generation, genomes)
 
         publish_payload = None
-        if not self.dry_run:
+        if self.selection_baseline == "none":
             publish_payload = self._parse_publish_payload(selection_meta.get("response_text", ""))
         else:
-            if self.favorite_archive_entry is None and random.random() < 0.25:
+            if random.random() < 0.25:
                 publish_payload = {
                     "index": next(iter(record.image_paths.keys()), 0),
                     "reason": "Dry-run random publication",
@@ -1502,12 +1600,109 @@ class CollaborativeAgentRunner:
             log_str += f", publish_index={publish_index}, publish_title='{publish_title}', publish_rationale='{publish_rationale}'"
         print(log_str)
 
+    def _select_parents_baseline(
+        self,
+        generation: int,
+        genomes: List[Tuple[int, neat.DefaultGenome]],
+        config: neat.Config,
+        state: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        genome_config = config.genome_config
+        metrics: List[Dict[str, Any]] = []
+        for idx, (genome_id, genome) in enumerate(genomes):
+            summary = summarize_genome_structure(genome, genome_config)
+            summary.update(
+                {
+                    "index": idx,
+                    "genome_id": genome_id,
+                }
+            )
+            metrics.append(summary)
+
+        max_selection = self.select_k if self.select_k is not None else DEFAULT_BASELINE_SELECTION_LIMIT
+        selection_count = max(1, min(max_selection, len(genomes)))
+        selected_indices: List[int]
+        rationale: str
+
+        if self.selection_baseline == "random":
+            selected_indices = random.sample(range(len(genomes)), k=selection_count)
+            rationale = f"Random baseline selected {selected_indices}."
+        else:
+            if self.selection_baseline == "max-depth":
+                scoring_key = "depth"
+                baseline_label = "maximum depth"
+            else:
+                scoring_key = "hidden_node_count"
+                baseline_label = "maximum hidden-node count"
+
+            max_score = max(metric[scoring_key] for metric in metrics) if metrics else 0
+            top_candidates = [metric for metric in metrics if metric[scoring_key] == max_score]
+            random.shuffle(top_candidates)
+            selected_entries = top_candidates[:selection_count]
+            if len(selected_entries) < selection_count:
+                remaining = [metric for metric in metrics if metric[scoring_key] < max_score]
+                random.shuffle(remaining)
+                selected_entries.extend(remaining[: selection_count - len(selected_entries)])
+            selected_indices = [entry["index"] for entry in selected_entries]
+            rationale = (
+                f"Baseline favoring {baseline_label} selected {selected_indices} "
+                f"(score={max_score})."
+            )
+
+        metadata: Dict[str, Any] = {
+            "selected": selected_indices,
+            "rationale": rationale,
+            "baseline": self.selection_baseline,
+            "metrics": metrics,
+            "select_k": self.select_k,
+            "selection_count": selection_count,
+        }
+
+        return self._write_baseline_artifacts(generation, state, metadata)
+
+    def _write_baseline_artifacts(
+        self,
+        generation: int,
+        state: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        self.query_dir.mkdir(parents=True, exist_ok=True)
+        selected = metadata.get("selected", [])
+        grid_image = create_numbered_grid(state)
+        selection_image = create_numbered_grid(state, selected=selected)
+
+        grid_path = self.query_dir / f"gen_{generation:03d}_grid.png"
+        selection_path = self.query_dir / f"gen_{generation:03d}_selection.png"
+        grid_image.save(grid_path, format="PNG")
+        selection_image.save(selection_path, format="PNG")
+
+        payload = dict(metadata)
+        payload.update(
+            {
+                "generation": generation,
+                "grid_path": str(grid_path),
+                "selection_path": str(selection_path),
+                "select_k": self.select_k,
+                "chat_history_turns": self.chat_history_turns,
+                "response_text": None,
+            }
+        )
+
+        metadata_dir = self.query_dir / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        meta_path = metadata_dir / f"gen_{generation:03d}_selection.json"
+        meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        payload["metadata_path"] = str(meta_path)
+
+        return payload
+
 
 class CollaborativeMultiAgentOrchestrator:
     """Coordinates sequential agent runs and archive management."""
 
     def __init__(
         self,
+        config: CollaborativeConfig,
         experiment_dir: Path,
         rows: int,
         cols: int,
@@ -1517,12 +1712,14 @@ class CollaborativeMultiAgentOrchestrator:
         config_path: Path,
         select_k: Optional[int],
         agent_generations: int,
+        warm_start_structure: int,
         enable_output_activations: bool,
-        dry_run: bool,
+        selection_baseline: str,
         seed: Optional[int],
         chat_history_turns: int,
         render_genome_diagrams: bool = False,
     ) -> None:
+        self.config = config
         self.experiment_dir = experiment_dir
         self.chat_history_turns = chat_history_turns
         self.rows = rows
@@ -1533,8 +1730,9 @@ class CollaborativeMultiAgentOrchestrator:
         self.config_path = config_path
         self.select_k = select_k
         self.agent_generations = agent_generations
+        self.warm_start_structure = warm_start_structure
         self.enable_output_activations = enable_output_activations
-        self.dry_run = dry_run
+        self.selection_baseline = selection_baseline
         self.seed = seed
         self.render_genome_diagrams = render_genome_diagrams
 
@@ -1588,12 +1786,20 @@ class CollaborativeMultiAgentOrchestrator:
             "select_k": self.select_k,
             "agent_generations": self.agent_generations,
             "enable_output_activations": self.enable_output_activations,
+            "warm_start_structure": self.warm_start_structure,
+            "selection_baseline": self.selection_baseline,
         }
         existing = self._metadata.get("run_config")
         if existing is None:
             self._metadata["run_config"] = run_config
             self._persist_metadata(self._metadata)
             return
+        if "warm_start_structure" not in existing:
+            existing["warm_start_structure"] = 0
+            self._persist_metadata(self._metadata)
+        if "selection_baseline" not in existing:
+            existing["selection_baseline"] = "none"
+            self._persist_metadata(self._metadata)
         mismatches = {
             key: (existing.get(key), value) for key, value in run_config.items() if existing.get(key) != value
         }
@@ -1616,6 +1822,21 @@ class CollaborativeMultiAgentOrchestrator:
         self._metadata["next_agent_number"] = agent_number + 1
         self._persist_metadata(self._metadata)
         return agent_id
+
+    def _parse_agent_index(self, agent_id: str) -> Optional[int]:
+        if not agent_id.startswith(AGENT_DIR_PREFIX):
+            return None
+        suffix = agent_id[len(AGENT_DIR_PREFIX) :]
+        try:
+            return int(suffix)
+        except ValueError:
+            return None
+
+    def _is_warm_start_agent(self, agent_id: str) -> bool:
+        if self.warm_start_structure <= 0:
+            return False
+        index = self._parse_agent_index(agent_id)
+        return index is not None and index < self.warm_start_structure
 
     def _find_agent_record(self, agent_id: str) -> Optional[Dict[str, Any]]:
         for record in self._metadata.get("agents", []):
@@ -1738,7 +1959,7 @@ class CollaborativeMultiAgentOrchestrator:
         self,
         agent_id: str,
         agent_dir: Path,
-        config: neat.Config,
+        neat_config: neat.Config,
         population: Optional[neat.Population],
         resume: bool,
     ) -> CollaborativeAgentRunner:
@@ -1748,8 +1969,9 @@ class CollaborativeMultiAgentOrchestrator:
         return CollaborativeAgentRunner(
             agent_id,
             agent_dir,
-            config,
-            self.archive_manager,
+            config=self.config,
+            neat_config=neat_config,
+            archive_manager=self.archive_manager,
             generations=self.agent_generations,
             rows=self.rows,
             cols=self.cols,
@@ -1758,10 +1980,11 @@ class CollaborativeMultiAgentOrchestrator:
             palette=self.palette,
             select_k=self.select_k,
             chat_history_turns=self.chat_history_turns,
-            dry_run=self.dry_run,
+            selection_baseline=self.selection_baseline,
             population=population,
             progress_callback=callback,
             resume_mode=resume,
+            warm_start_active=self._is_warm_start_agent(agent_id),
             render_genome_diagrams=self.render_genome_diagrams,
         )
 
@@ -1920,6 +2143,7 @@ class CollaborativeMultiAgentOrchestrator:
 
 @dataclass
 class CollaborativeConfig:
+    goal: str = "familiar_objects"
     rows: int = 4  # Rows in the CPPN grid
     cols: int = 5  # Columns in the CPPN grid
     thumb_size: int = 200  # Pixel size for rendered genome thumbnails
@@ -1930,9 +2154,10 @@ class CollaborativeConfig:
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = DEFAULT_AGENT_GENERATIONS  # Generations executed for each agent
     num_agents: int = 100  # How many agents run sequentially in this session
+    warm_start_structure: int = 0  # Number of initial agents restricted to structure-only mutation
     experiment_dir: Optional[Path] = None  # Output directory for logs and artefacts
     output_activations: bool = False  # Enable CPPN output activation mutations
-    dry_run: bool = False  # Skip VLM calls; randomise branching and favourite selections
+    selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes
     resume: bool = False  # Resume a previously interrupted experiment
     resume_agent_id: Optional[str] = None  # Specific agent identifier to resume (requires resume=true)
     test_mode: bool = False  # Shortened settings for quick validation runs
@@ -1951,7 +2176,7 @@ class CollaborativeConfig:
                     "  agent_generations       Generations executed by each agent.\n"
                     "  num_agents              Sequential agents to schedule for this run.\n"
                     "  experiment_dir          Destination for logs, grids, and archives.\n"
-                    "  dry_run                 Disable VLM calls and randomise agent choices.\n"
+                    "  selection_baseline      Automated parent selection (none/random/max-depth/max-nodes).\n"
                     "  resume / resume_agent_id Resume an interrupted run from disk records.\n"
                 ),
                 footer="Override with +option=value (e.g. +scheme=color) or pass --cfg=job to inspect the full config.",
@@ -1977,6 +2202,7 @@ def _ensure_absolute(path: Path, base: Path) -> Path:
 
 def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> CollaborativeConfig:
     cfg = copy.copy(cfg)
+    cfg.selection_baseline = str(cfg.selection_baseline).lower()
     if cfg.resume_agent_id and not cfg.resume:
         raise ValueError("--resume-agent-id requires --resume")
     if cfg.rows < 1 or cfg.cols < 1:
@@ -1989,6 +2215,10 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
         raise ValueError("num-agents must be at least 1")
     if cfg.select_k is not None and cfg.select_k < 1:
         raise ValueError("select-k must be at least 1 when provided")
+    if cfg.warm_start_structure < 0:
+        raise ValueError("warm-start-structure must be non-negative")
+    if cfg.selection_baseline not in SELECTION_BASELINES:
+        raise ValueError(f"selection-baseline must be one of {sorted(SELECTION_BASELINES)}")
 
     config_path = resolve_config_path(cfg)
     config_path = _ensure_absolute(Path(config_path), original_cwd)
@@ -2006,8 +2236,14 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
         if cfg.experiment_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_na{cfg.num_agents}"
+            if cfg.goal != "familiar_objects":
+                experiment_name += f"_goal-{cfg.goal}"
             if cfg.scheme != "gray":
                 experiment_name += f"_scheme-{cfg.scheme}"
+            if cfg.warm_start_structure > 0:
+                experiment_name += f"_warmstart{cfg.warm_start_structure}"
+            if cfg.selection_baseline != "none":
+                experiment_name += f"_baseline-{cfg.selection_baseline}"
             experiment_name += f"_{timestamp}"
             relative = Path("logs_collaborative") / experiment_name
             exp_dir = _ensure_absolute(relative, original_cwd)
@@ -2029,10 +2265,11 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
 
 def run(cfg: CollaborativeConfig) -> None:
     apply_random_seed(cfg.seed)
-    if not cfg.dry_run:
+    if cfg.selection_baseline == "none":
         ensure_gemini_key()
     orchestrator = CollaborativeMultiAgentOrchestrator(
-        cfg.experiment_dir,
+        config=cfg,
+        experiment_dir=cfg.experiment_dir,
         rows=cfg.rows,
         cols=cfg.cols,
         thumb_size=cfg.thumb_size,
@@ -2041,8 +2278,9 @@ def run(cfg: CollaborativeConfig) -> None:
         config_path=cfg.config_path,
         select_k=cfg.select_k,
         agent_generations=cfg.agent_generations,
+        warm_start_structure=cfg.warm_start_structure,
         enable_output_activations=cfg.output_activations,
-        dry_run=cfg.dry_run,
+        selection_baseline=cfg.selection_baseline,
         seed=cfg.seed,
         chat_history_turns=cfg.chat_history_turns,
         render_genome_diagrams=cfg.render_genome_diagrams,

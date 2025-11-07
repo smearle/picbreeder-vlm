@@ -215,6 +215,12 @@ def main():
     parser.add_argument("--method", choices=["umap", "tsne", "pca"], default="umap", help="Dimensionality reduction method")
     parser.add_argument("--batch-size", type=int, default=64, help="Image embedding batch size")
     parser.add_argument("--thumbs-limit", type=int, default=200, help="Max number of thumbnails to draw on the plot")
+    parser.add_argument(
+        "--archive-limit",
+        type=int,
+        default=None,
+        help="Only consider the first N archive images before embedding (default: all).",
+    )
     parser.add_argument("--device", default=None, help="torch device string (auto-detect if not provided)")
     parser.add_argument(
         "--pairwise-sample-limit",
@@ -236,6 +242,11 @@ def main():
         sys.exit(1)
 
     image_paths = load_image_paths(exp_dir)
+    if args.archive_limit is not None:
+        if args.archive_limit <= 0:
+            print("--archive-limit must be a positive integer.")
+            sys.exit(1)
+        image_paths = image_paths[: args.archive_limit]
     if len(image_paths) == 0:
         print("No PNG images found in archive/images")
         sys.exit(1)
