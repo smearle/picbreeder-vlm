@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<genome age="33">
+    <identifier branch="" id="484"/>
+    <parents count="1">
+        <identifier branch="" id="467"/>
+    </parents>
+    <nodes count="16">
+        <node label="bias" type="in">
+            <marking branch="" id="0"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="d" type="in">
+            <marking branch="" id="1"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="x" type="in">
+            <marking branch="" id="2"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="y" type="in">
+            <marking branch="" id="3"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="brightness" type="out">
+            <marking branch="" id="4"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node label="hue" type="out">
+            <marking branch="" id="5"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node label="saturation" type="out">
+            <marking branch="" id="6"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="7"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="31"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="43"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="270"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="318"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="330"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="347"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="386"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="394"/>
+            <activation>gaussian(x)</activation>
+        </node>
+    </nodes>
+    <links count="32">
+        <link>
+            <marking branch="" id="8"/>
+            <source branch="" id="0"/>
+            <target branch="" id="7"/>
+            <weight>-2.035532388218022</weight>
+        </link>
+        <link>
+            <marking branch="" id="9"/>
+            <source branch="" id="1"/>
+            <target branch="" id="7"/>
+            <weight>1.434776662322318</weight>
+        </link>
+        <link>
+            <marking branch="" id="10"/>
+            <source branch="" id="2"/>
+            <target branch="" id="7"/>
+            <weight>0.07078330688682566</weight>
+        </link>
+        <link>
+            <marking branch="" id="11"/>
+            <source branch="" id="3"/>
+            <target branch="" id="7"/>
+            <weight>-2.3915497961572276</weight>
+        </link>
+        <link>
+            <marking branch="" id="12"/>
+            <source branch="" id="7"/>
+            <target branch="" id="4"/>
+            <weight>-0.28154258218688544</weight>
+        </link>
+        <link>
+            <marking branch="" id="13"/>
+            <source branch="" id="7"/>
+            <target branch="" id="5"/>
+            <weight>-2.679537021879861</weight>
+        </link>
+        <link>
+            <marking branch="" id="14"/>
+            <source branch="" id="7"/>
+            <target branch="" id="6"/>
+            <weight>-3.0</weight>
+        </link>
+        <link>
+            <marking branch="" id="32"/>
+            <source branch="" id="7"/>
+            <target branch="" id="31"/>
+            <weight>-2.164421847464178</weight>
+        </link>
+        <link>
+            <marking branch="" id="33"/>
+            <source branch="" id="31"/>
+            <target branch="" id="4"/>
+            <weight>-1.6631883597393253</weight>
+        </link>
+        <link>
+            <marking branch="" id="44"/>
+            <source branch="" id="7"/>
+            <target branch="" id="43"/>
+            <weight>1.1552628135803658</weight>
+        </link>
+        <link>
+            <marking branch="" id="45"/>
+            <source branch="" id="43"/>
+            <target branch="" id="6"/>
+            <weight>0.735855989233675</weight>
+        </link>
+        <link>
+            <marking branch="" id="77"/>
+            <source branch="" id="1"/>
+            <target branch="" id="5"/>
+            <weight>0.5989571276592158</weight>
+        </link>
+        <link>
+            <marking branch="" id="112"/>
+            <source branch="" id="0"/>
+            <target branch="" id="6"/>
+            <weight>-2.3905425776535174</weight>
+        </link>
+        <link>
+            <marking branch="" id="180"/>
+            <source branch="" id="2"/>
+            <target branch="" id="4"/>
+            <weight>-1.8444642402199127</weight>
+        </link>
+        <link>
+            <marking branch="" id="228"/>
+            <source branch="" id="31"/>
+            <target branch="" id="6"/>
+            <weight>-0.24088670864967754</weight>
+        </link>
+        <link>
+            <marking branch="" id="241"/>
+            <source branch="" id="1"/>
+            <target branch="" id="31"/>
+            <weight>-2.1319131529309914</weight>
+        </link>
+        <link>
+            <marking branch="" id="263"/>
+            <source branch="" id="3"/>
+            <target branch="" id="31"/>
+            <weight>-1.6808190696245455</weight>
+        </link>
+        <link>
+            <marking branch="" id="271"/>
+            <source branch="" id="7"/>
+            <target branch="" id="270"/>
+            <weight>-1.3401757267568066</weight>
+        </link>
+        <link>
+            <marking branch="" id="272"/>
+            <source branch="" id="270"/>
+            <target branch="" id="31"/>
+            <weight>0.9626689557269938</weight>
+        </link>
+        <link>
+            <marking branch="" id="302"/>
+            <source branch="" id="0"/>
+            <target branch="" id="31"/>
+            <weight>-0.8589297373524132</weight>
+        </link>
+        <link>
+            <marking branch="" id="304"/>
+            <source branch="" id="31"/>
+            <target branch="" id="43"/>
+            <weight>-0.4021390002975844</weight>
+        </link>
+        <link>
+            <marking branch="" id="319"/>
+            <source branch="" id="0"/>
+            <target branch="" id="318"/>
+            <weight>0.98701828634927</weight>
+        </link>
+        <link>
+            <marking branch="" id="320"/>
+            <source branch="" id="318"/>
+            <target branch="" id="31"/>
+            <weight>-1.056447465621738</weight>
+        </link>
+        <link>
+            <marking branch="" id="331"/>
+            <source branch="" id="0"/>
+            <target branch="" id="330"/>
+            <weight>1.090953832104262</weight>
+        </link>
+        <link>
+            <marking branch="" id="332"/>
+            <source branch="" id="330"/>
+            <target branch="" id="7"/>
+            <weight>3.0</weight>
+        </link>
+        <link>
+            <marking branch="" id="348"/>
+            <source branch="" id="31"/>
+            <target branch="" id="347"/>
+            <weight>0.0801657694937743</weight>
+        </link>
+        <link>
+            <marking branch="" id="349"/>
+            <source branch="" id="347"/>
+            <target branch="" id="43"/>
+            <weight>-0.4276158047273184</weight>
+        </link>
+        <link>
+            <marking branch="" id="363"/>
+            <source branch="" id="2"/>
+            <target branch="" id="5"/>
+            <weight>-0.45883677250674326</weight>
+        </link>
+        <link>
+            <marking branch="" id="387"/>
+            <source branch="" id="7"/>
+            <target branch="" id="386"/>
+            <weight>-0.37911999313793876</weight>
+        </link>
+        <link>
+            <marking branch="" id="388"/>
+            <source branch="" id="386"/>
+            <target branch="" id="4"/>
+            <weight>2.81306227747842</weight>
+        </link>
+        <link>
+            <marking branch="" id="395"/>
+            <source branch="" id="7"/>
+            <target branch="" id="394"/>
+            <weight>2.2380852202654946</weight>
+        </link>
+        <link>
+            <marking branch="" id="396"/>
+            <source branch="" id="394"/>
+            <target branch="" id="4"/>
+            <weight>0.14480853736793287</weight>
+        </link>
+    </links>
+</genome>

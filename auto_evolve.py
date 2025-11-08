@@ -86,13 +86,13 @@ def dump_initial_populations(
     rows: int,
     cols: int,
     thumb_size: int,
-    scheme: str,
-    palette: str,
     enable_output_activations: bool,
+    enable_input_activations: bool,
 ) -> None:
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    supports_color_outputs = None
     for index in range(count):
         config = neat.Config(
             PicbreederGenome,
@@ -101,21 +101,38 @@ def dump_initial_populations(
             InteractiveStagnation,
             str(config_path),
         )
-        apply_picbreeder_config_defaults(config, enable_output_activations=enable_output_activations)
+        apply_picbreeder_config_defaults(
+            config,
+            enable_output_activations=enable_output_activations,
+            enable_input_activations=enable_input_activations,
+        )
         config.pop_size = rows * cols
 
         population = neat.Population(config)
         sync_population_output_activations(population, config.genome_config)
         seed_initial_population(population, config.genome_config)
 
+        if supports_color_outputs is None:
+            supports_color_outputs = len(getattr(config.genome_config, "output_keys", ())) >= 3
+
         genomes = sorted(population.population.items(), key=lambda item: item[0])
-        state, png_cache = build_generation_state(genomes, config, 0, rows, cols, thumb_size, scheme, palette)
 
         population_dir = output_dir / f"population_{index:03d}"
         # save_neat_population(state, population_dir, 0, png_cache)
 
-        grid_image = create_numbered_grid(state)
-        grid_image.save(os.path.join(output_dir, f"pop-{index:03d}_grid.png"), format="PNG")
+        states, _ = build_generation_state(
+            genomes,
+            config,
+            0,
+            rows,
+            cols,
+            thumb_size,
+            variant="both",
+        )
+        for k, state in states.items():
+            grid_image = create_numbered_grid(state)
+            grid_path = output_dir / f"pop-{index:03d}_{k}.png"
+            grid_image.save(grid_path, format="PNG")
 
         save_neat_genome_diagrams(genomes, config, population_dir, 0)
 
@@ -194,12 +211,19 @@ def select_parents_from_grid(
     system_instruction: Optional[str] = None,
     chat_history_turns: Optional[int] = 0,
     require_selection: bool = True,
+    allow_color_toggle: bool = False,
+    current_color: Optional[bool] = None,
+    *,
+    view_index: Optional[int] = None,
+    metadata_subdir: Optional[str] = None,
 ) -> Dict[str, Any]:
     generation = int(state["generation"])
     grid_image = create_numbered_grid(state)
 
     query_dir.mkdir(parents=True, exist_ok=True)
-    base_grid_path = query_dir / f"gen_{generation:03d}_grid.png"
+    suffix = f"_view_{view_index:02d}" if view_index is not None else ""
+
+    base_grid_path = query_dir / f"gen_{generation:03d}{suffix}_grid.png"
     grid_image.save(base_grid_path, format="PNG")
 
     buffer = BytesIO()
@@ -219,6 +243,23 @@ def select_parents_from_grid(
     parsed: Dict[str, Any] = {}
     raw_selected: Union[List[Any], None] = None
     cleaned: List[int] = []
+    color_value: Optional[bool] = None
+
+    def _coerce_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+        return None
+
+    color_value: Optional[bool] = None
+    color_toggle_only = False
 
     for attempt in range(1, max_attempts + 1):
         response = query_with_history(
@@ -242,10 +283,8 @@ def select_parents_from_grid(
         else:
             parsed = parse_result
             raw_selected = parsed.get("selected")
-            if not isinstance(raw_selected, list):
-                error_reason = "Response missing 'selected' list."
-            else:
-                cleaned = []
+            cleaned = []
+            if isinstance(raw_selected, list):
                 for value in raw_selected:
                     try:
                         idx = int(value)
@@ -253,9 +292,30 @@ def select_parents_from_grid(
                         continue
                     if 0 <= idx <= max_index and idx not in cleaned:
                         cleaned.append(idx)
+            elif raw_selected is None:
+                cleaned = []
+            else:
+                error_reason = "Response missing 'selected' list."
 
-                if not cleaned:
-                    error_reason = "Response did not contain any valid selection indices."
+            color_value = _coerce_bool(parsed.get("color"))
+            color_toggle_requested = (
+                allow_color_toggle
+                and color_value is not None
+                and (
+                    current_color is None
+                    or bool(color_value) != bool(current_color)
+                )
+            )
+            if color_toggle_requested:
+                cleaned = []
+            if (
+                error_reason is None
+                and require_selection
+                and not cleaned
+                and not color_toggle_requested
+            ):
+                error_reason = "Response did not contain any valid selection indices."
+            color_toggle_only = error_reason is None and color_toggle_requested
 
         if error_reason is None:
             break
@@ -309,12 +369,14 @@ def select_parents_from_grid(
     else:
         raise ValueError("Failed to obtain a valid Gemini response.")
 
-    if select_k is not None:
+    if select_k is not None and not color_toggle_only:
         cleaned = cleaned[:select_k]
 
-    selection_image = create_numbered_grid(state, selected=cleaned)
-    selection_path = query_dir / f"gen_{generation:03d}_selection.png"
-    selection_image.save(selection_path, format="PNG")
+    selection_path: Optional[Path] = None
+    if not color_toggle_only:
+        selection_image = create_numbered_grid(state, selected=cleaned)
+        selection_path = query_dir / f"gen_{generation:03d}{suffix}_selection.png"
+        selection_image.save(selection_path, format="PNG")
 
     metadata = {
         "selected": cleaned,
@@ -324,22 +386,31 @@ def select_parents_from_grid(
         "prompt": prompt,
         "generation": generation,
         "grid_path": str(base_grid_path),
-        "selection_path": str(selection_path),
+        "selection_path": str(selection_path) if selection_path else None,
         "select_k": select_k,
         "chat_history_turns": chat_history_turns,
         "mutation_mode": parsed.get("mutation_mode", None),
+        "mutation_strength": parsed.get("mutation_strength", None),
+        "color": color_value if color_value is not None else parsed.get("color", None),
+        "view_index": view_index,
+        "color_toggle_only": color_toggle_only,
         "response_attempts": attempt,
     }
     metadata_dir = query_dir / "metadata"
+    if metadata_subdir:
+        metadata_dir = metadata_dir / metadata_subdir
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    meta_path = metadata_dir / f"gen_{generation:03d}_selection.json"
+    meta_path = metadata_dir / f"gen_{generation:03d}{suffix}_selection.json"
     meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     metadata["metadata_path"] = str(meta_path)
 
     return metadata
 
 
-_METADATA_FILENAME_PATTERN = re.compile(r"gen_(\d+)_selection\.json$", re.IGNORECASE)
+_METADATA_FILENAME_PATTERN = re.compile(
+    r"gen_(\d+)(?:_view_(\d+))?_selection\.json$",
+    re.IGNORECASE,
+)
 
 
 def _iter_query_metadata(query_dir: Path) -> List[Tuple[int, Dict[str, Any], Path]]:
@@ -347,32 +418,53 @@ def _iter_query_metadata(query_dir: Path) -> List[Tuple[int, Dict[str, Any], Pat
     if not metadata_dir.exists():
         return []
 
-    records: List[Tuple[int, Dict[str, Any], Path]] = []
-    for meta_path in sorted(metadata_dir.glob("gen_*_selection.json")):
-        match = _METADATA_FILENAME_PATTERN.match(meta_path.name)
-        generation_value: Optional[int]
-        if match is not None:
-            try:
-                generation_value = int(match.group(1))
-            except ValueError:
+    candidate_dirs = [metadata_dir]
+    views_dir = metadata_dir / "views"
+    if views_dir.exists():
+        candidate_dirs.append(views_dir)
+
+    interim: List[Tuple[int, Optional[int], Dict[str, Any], Path]] = []
+    for directory in candidate_dirs:
+        for meta_path in sorted(directory.glob("gen_*_selection.json")):
+            match = _METADATA_FILENAME_PATTERN.match(meta_path.name)
+            generation_value: Optional[int]
+            view_index: Optional[int]
+            if match is not None:
+                try:
+                    generation_value = int(match.group(1))
+                except ValueError:
+                    generation_value = None
+                try:
+                    view_index = int(match.group(2)) if match.group(2) is not None else None
+                except ValueError:
+                    view_index = None
+            else:
                 generation_value = None
-        else:
-            generation_value = None
+                view_index = None
 
-        try:
-            payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        if isinstance(payload, dict):
-            if generation_value is None:
-                stored_generation = payload.get("generation")
-                generation_value = int(stored_generation) if isinstance(stored_generation, int) else None
-            if generation_value is None:
+            try:
+                payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
                 continue
-            records.append((generation_value, payload, meta_path))
 
-    return records
+            if isinstance(payload, dict):
+                if generation_value is None:
+                    stored_generation = payload.get("generation")
+                    generation_value = int(stored_generation) if isinstance(stored_generation, int) else None
+                if generation_value is None:
+                    continue
+                interim.append((generation_value, view_index, payload, meta_path))
+
+    interim.sort(
+        key=lambda item: (
+            item[0],
+            item[1] if item[1] is not None else -1,
+            item[3].stat().st_mtime,
+            item[3].name,
+        )
+    )
+
+    return [(generation, payload, meta_path) for generation, _, payload, meta_path in interim]
 
 
 def restore_chat_history_from_metadata(
@@ -517,7 +609,6 @@ class AutomatedNeatEvolver:
         cols: int,
         thumb_size: int,
         scheme: str,
-        palette: str,
         prompt: str,
         system_instruction: Optional[str],
         experiment_dir: Path,
@@ -532,7 +623,6 @@ class AutomatedNeatEvolver:
         self.cols = cols
         self.thumb_size = thumb_size
         self.scheme = scheme
-        self.palette = palette
         self.prompt = prompt
         self.system_instruction = system_instruction
         self.experiment_dir = experiment_dir
@@ -583,16 +673,17 @@ class AutomatedNeatEvolver:
             )
 
         print(f"\n--- Generation {generation} ---")
-        state, cache = build_generation_state(
+        states, caches = build_generation_state(
             genomes,
             config,
             generation,
             self.rows,
             self.cols,
             self.thumb_size,
-            self.scheme,
-            self.palette,
+            variant="both",
         )
+        state = states['color']
+        cache = caches['color']
 
         state_path = save_neat_population(state, self.population_dir, generation, cache)
         if render_diagrams:
@@ -715,8 +806,9 @@ class AutomatedNeatEvolver:
         grid_image = create_numbered_grid(state)
         selection_image = create_numbered_grid(state, selected=selected)
 
-        grid_path = self.query_dir / f"gen_{generation:03d}_grid.png"
-        selection_path = self.query_dir / f"gen_{generation:03d}_selection.png"
+        suffix = "_view_00"
+        grid_path = self.query_dir / f"gen_{generation:03d}{suffix}_grid.png"
+        selection_path = self.query_dir / f"gen_{generation:03d}{suffix}_selection.png"
         grid_image.save(grid_path, format="PNG")
         selection_image.save(selection_path, format="PNG")
 
@@ -726,12 +818,15 @@ class AutomatedNeatEvolver:
                 "grid_path": str(grid_path),
                 "selection_path": str(selection_path),
                 "generation": generation,
+                "view_index": 0,
+                "color": bool(state.get("variant") == "color"),
+                "color_toggle_only": False,
             }
         )
 
         metadata_dir = self.query_dir / "metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
-        meta_path = metadata_dir / f"gen_{generation:03d}_selection.json"
+        meta_path = metadata_dir / f"gen_{generation:03d}{suffix}_selection.json"
         meta_path.write_text(json.dumps(enriched, indent=2), encoding="utf-8")
         enriched["metadata_path"] = str(meta_path)
         return enriched
@@ -805,7 +900,6 @@ def write_run_metadata(experiment_dir: Path, args: argparse.Namespace) -> None:
     if args.engine == "neat":
         metadata["scheme"] = args.scheme
         metadata["config_path"] = str(args.config_path) if args.config_path else None
-        metadata["color_palette"] = args.color_palette
         metadata["output_activations"] = args.output_activations
     else:
         metadata["module_path"] = str(args.module_path) if args.module_path else None
@@ -933,6 +1027,7 @@ def run_neat(args: argparse.Namespace, experiment_dir: Path, population_dir: Pat
         apply_picbreeder_config_defaults(
             population.config,
             enable_output_activations=enable_output_activations,
+            enable_input_activations=bool(args.input_activations),
         )
         sync_population_output_activations(population, population.config.genome_config)
         print(
@@ -966,7 +1061,6 @@ def run_neat(args: argparse.Namespace, experiment_dir: Path, population_dir: Pat
         args.cols,
         args.thumb_size,
         args.scheme,
-        args.color_palette,
         args.prompt,
         args.system_instruction,
         experiment_dir,
@@ -1022,9 +1116,8 @@ def main() -> None:
             args.rows,
             args.cols,
             args.thumb_size,
-            args.scheme,
-            args.color_palette,
             bool(args.output_activations),
+            bool(args.input_activations),
         )
         print(f"Initial populations saved to {output_dir}")
         return
@@ -1096,7 +1189,6 @@ def main() -> None:
 
         if args.engine == "neat":
             args.scheme = metadata.get("scheme", args.scheme)
-            args.color_palette = metadata.get("color_palette", args.color_palette)
             stored_output_activations = metadata.get("output_activations", args.output_activations)
             if isinstance(stored_output_activations, str):
                 stored_output_activations = stored_output_activations.lower() == "on"

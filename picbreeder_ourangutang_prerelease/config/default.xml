@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<data version="1.0">
+	<parameters>
+		<group name="meta">
+			<parameter name="project" value="Orangutan Picbreeder"/>
+			<parameter name="interpretation" value="grey scale image"/>
+			<parameter name="bipolar" value="true"/>
+		</group>
+		<set name="inputs">
+			<item value="x"/>
+			<item value="y"/>
+			<item value="d"/>
+			<item value="bias"/>
+		</set>
+		<set name="outputs">
+	
+			<item value="hue"/>
+			<item value="saturation"/>
+			<item value="brightness"/>
+			<!--<item value="red"/>
+			<item value="green"/>
+			<item value="blue"/>
+
+			<item value="ink"/>-->
+		</set>
+		<set name="activations">
+			<item value="sigmoid(x)"/>
+			<item value="gaussian(x)"/>
+			<item value="sin(x)"/>
+		</set>
+		<set name="generators">
+			<item value="client.evolution.generators.MutateLinks" weight="4"/>
+			<item value="client.evolution.generators.AddAcyclicLink" weight="2"/>
+			<item value="client.evolution.generators.AddNodes" weight="2"/>
+			<item value="client.evolution.generators.MutateActivation" weight="1"/>
+		<!--
+			<item value="client.evolution.generators.SimplifyGenome"/>
+			<item value="client.evolution.generators.DeFactoMutator"/>
+			<item value="client.evolution.generators.CrossoverCombiner"/>
+		-->
+		</set>
+		<group name="activation">
+			<parameter name="bias" value="1.0"/>
+			<parameter name="x scale" value="1.0"/>
+			<parameter name="y scale" value="1.0"/>
+			<parameter name="distance scale" value="1.4142135623730950488016887242097"/>
+		</group>
+		<group name="evolution">
+			<parameter name="weight mutation rate" value="0.20"/>
+			<parameter name="activation mutation rate" value="0.05"/>
+			<parameter name="max link weight" value="3.0"/>
+			<parameter name="add node rate" value="0.07"/>
+			<parameter name="add link rate" value="0.10"/>
+			<parameter name="hidden nodes" value="1"/>
+			<parameter name="population size" value="15"/>
+		</group>
+		<group name="display">
+			<parameter name="rows" value="2"/>
+			<parameter name="columns" value="3"/>
+			<parameter name="width" value="428"/>
+			<parameter name="height" value="428"/>
+			<parameter name="low resolution stride" value="4"/>
+			<parameter name="unselected color" value="#202080"/>
+			<parameter name="selected color" value="#FF0000"/>
+		</group>
+	</parameters>
+</data>

@@ -7,11 +7,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import graphviz 
 import neat
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+import numpy as np
 from pyparsing import Iterable
 
 from picture2d.common import (
     _canvas_coords,
     eval_color_image,
+    eval_genome_as_grayscale_and_color,
     eval_gray_image,
     eval_mono_image,
 )
@@ -180,35 +182,13 @@ def render_genome_image(
     config: neat.Config,
     width: int,
     height: int,
-    scheme: str,
-    palette: str,
 ) -> Image.Image:
-    if scheme == "color" or scheme == "toggle":
-        if palette == "sigmoid":
-            image_data = legacy_eval_color_image(genome, config, width, height)
-        else:
-            image_data = eval_color_image(genome, config, width, height)
-        mode = "RGB"
-    elif scheme == "gray":
-        if palette == "sigmoid":
-            image_data = legacy_eval_gray_image(genome, config, width, height)
-        else:
-            image_data = eval_gray_image(genome, config, width, height)
-        mode = "L"
-    else:
-        if palette == "sigmoid":
-            image_data = legacy_eval_mono_image(genome, config, width, height)
-        else:
-            image_data = eval_mono_image(genome, config, width, height)
-        mode = "L"
-
-    image = Image.new(mode, (width, height))
-    flat_pixels: List[Any] = [pixel for row in image_data for pixel in row]
-    image.putdata(flat_pixels)
-    if mode != "RGB":
-        image = image.convert("RGB")
-    return image
-
+    gray_image_data, color_image_data = eval_genome_as_grayscale_and_color(genome, config, width, height)
+    gray_image = Image.fromarray((np.array(gray_image_data) * 255).astype(np.uint8), mode="L")
+    color_image = Image.fromarray(np.array(color_image_data, dtype=np.uint8), mode="RGB")
+    color_image.save("debug_color.png")
+    gray_image.save("debug_gray.png")
+    return gray_image, color_image
 
 def render_genome_diagram(
     genome: neat.DefaultGenome,

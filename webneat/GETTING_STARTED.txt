@@ -1,0 +1,131 @@
+Getting Started
+
+Prepared by: Nick Beato
+
+This should hopefully help someone run and modify the
+code without understand everything.
+
+For now, I have a few tutorials in here...
+
+1) How to run the program
+2) How to customize evolution
+3) How to customize representation
+
+**************************************************************************
+How to run the program:
+**************************************************************************
+
+The main class is client.gui.MainApplication. You should
+be able to invoke java client.gui.MainApplication to start
+this up (it will not be an applet).
+
+When the pop-up occurs, you have 3 options...
+
+Genome: This let's you select a genome file to branch (using a file
+browser).
+
+Series: This let's you select a series file to load and continue.
+
+Null: This starts evolution from scratch.
+
+From here, the program behaves like the applet. Saving or publishing
+will ask you to write to a file.
+
+
+**************************************************************************
+How to change evolution:
+**************************************************************************
+
+This next part, we are going to modify how evolution works. All evolution
+happens through "generators" (client.evolution.generators package). There
+are a bunch of objects in here, but let's be basic. Suppose we want to
+mutate a genome by forcing all activations to be sigmoids.
+
+1) Create a new Mutator (tutorials.generators.ForceSigmoidsMutator)
+Create a new java object (preferably in your own package).
+extend AbstractMutator
+implement the mutate method
+
+The mutate method receives the offspring during evolution, so modify it all
+you want... for us, we just need code like:
+
+for(Node n : genome.getNodes())
+	n.setActivation("sigmoid(x)");
+	
+Now there is a problem with this... we modified the activation of an input node.
+Unlike standard ANNs, we thought it was easier to just set input activations to
+identify functions, so let's do that instead...
+
+for(Node n : genome.getNodes())
+	if(!n.getType().equals("in")
+		n.setActivation("sigmoid(x)");
+
+That's how easy it is to implement a new mutation operator! You literally only need
+a 3 line function and a new object! Sweet!
+
+2) Make the system use your mutation operator
+
+There are two ways to do this.
+The first (easiest and currently compatible with the applet).
+In the test package, you will see a TestParameters object. You need to change the
+generators in there. You should see these 3 lines...
+
+		addItemToSet("generators", "client.evolution.generators.MutateLinks", 2);
+		addItemToSet("generators", "client.evolution.generators.AddAcyclicLink");
+		addItemToSet("generators", "client.evolution.generators.AddNodes");
+		
+You want to add the line (note, these are the names of the java objects)
+
+		addItemToSet("generators", "myproject.generators.ForceSigmoids");
+	
+The other way to do it is to modify the config file (in the config directory).
+The config file is being worked on still. I think you'll need to modify this
+for the application. The applet still uses the TestParameters object.
+
+
+**************************************************************************
+How to change representation:
+**************************************************************************
+
+Ok, for this one, we are going to add some input nodes and interpret
+the output differently.
+
+First, you need to understand that the system was designed for images!
+These means... the only variants per pixel are x and y. The only output
+is the rgb values. This was a design decision. We can still get "distance
+from center", "bias", etc. into our cppns. There is a just a common
+interface point to do so. The same is true for our output.
+
+Let's change the "distance from center" to use manhatten distance
+instead of euclidean distance and interpret 3 outputs for color (using
+hue, saturation, brightness). Again, we will add code, not change existing
+code.
+
+1) We need to implement a new InputLayer (in the client.cppn package).
+let's call it tutorials.cppn.ManhattenDistanceInputLayer.
+
+When writeInput(x, y) is invoked, we can handle this as we want. So for
+now, we'll assume that the bias is 1.0 (not, you can tie this to a gui slider
+or whatever!). We then look for the input nodes x, y, d, and bias. You don't have
+to use these names... those are the webneat ones.
+
+2) Let's use HSB outputs. Luckily, I already coded this in the
+client.cppn.impl.HSBOutputLayer. So give it a look to see how it works. It looks
+for 3 specific output nodes in the CPPN and maps them to RGB values for the applet.
+
+3) Make sure the new networks have your inputs/outputs! You can change this in
+the config file from before. Just add the inputs you need. Likewise, add the outputs.
+
+4) Make sure the Factories allocate your objects (these will be moved to
+the config file eventually). You need to go in the
+client.cppn.impl.DefaultCPPNFactory and change the 2 create methods
+to allocate the tutorials objects.
+
+**************************************************************************
+More advanced modifications.
+**************************************************************************
+
+From a general standpoint, I tried to make sure everything was pluggable using
+interfaces. You should be able to get things working by simply implementing
+an interface and changing the factory method. If you have questions, email me
+and I'll try to add on to the tutorials.

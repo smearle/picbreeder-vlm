@@ -64,6 +64,7 @@ from neat_components import (
     apply_picbreeder_config_defaults,
     seed_initial_population,
     sync_population_output_activations,
+    sync_population_node_indexer,
 )
 from picbreeder_reproduction import PicbreederReproduction
 from rendering import _draw_dotted_rectangle, create_numbered_grid
@@ -101,7 +102,6 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "Your session will run for {n_generations} generations. "
     "Try to contribute something novel, interesting or useful to the online archive. "
     "Do not add something to the archive that is identical to an existing image. "
-    "{color_prompt}"
     "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
     "(During branching, you may select only one image from which to branch; "
     " set selected to null to start from a fresh population.) "
@@ -109,8 +109,10 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     '{{"index": image_index, "title": "image title", "reason": "brief publication note"}}. '
     # "(Also, for debugging, please tell me how many previous grids you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
     # "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
-    "{archive_novelty_prompt}"
+    "{color_prompt}"
     "{mutation_mode_prompt}"
+    "{mutation_strength_prompt}"
+    "{archive_novelty_prompt}"
 )
 
 ARCHIVE_NOVELTY_PROMPT = (
@@ -118,12 +120,18 @@ ARCHIVE_NOVELTY_PROMPT = (
     "Identify the most similar existing image in the archive and explain how your selection differs from it."
 )
 
+MUTATION_STRENGTH_PROMPT = (
+    "You also control a mutation-strength slider: "
+    "set a `mutation_strength` value between 0.0 (\"Small Changes\" – extremely gentle mutations) and 1.0 "
+    "(\"Big Changes\" – very strong mutations). If you omit the field, the slider remains at its previous value."
+)
+
 def gen_selection_prompt(select_k: Optional[int]) -> str:
     if select_k is None:
-        return "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. "
+        return "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation (using mutation only; no crossover)."
     if select_k == 1:
         return "Pick one image by its numeric label--the corresponding CPPN will be used as the parent of the next generation. "
-    return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. "
+    return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. (using mutation only; no crossover)."
 
 
 PARENT_SELECTION_PROMPT = "Above is the grid at generation {generation}."
@@ -156,6 +164,7 @@ class ArchiveEntry:
     parent_genome_keys: List[int] = field(default_factory=list)
     source_entry_ids: List[str] = field(default_factory=list)
     ancestor_genome_keys: List[int] = field(default_factory=list)
+    color_enabled: bool = False
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -177,6 +186,7 @@ class ArchiveEntry:
             "parent_genome_keys": list(self.parent_genome_keys),
             "source_entry_ids": list(self.source_entry_ids),
             "ancestor_genome_keys": list(self.ancestor_genome_keys),
+            "color_enabled": bool(self.color_enabled),
         }
 
     @classmethod
@@ -195,6 +205,13 @@ class ArchiveEntry:
             genome_key = int(genome_key_raw) if genome_key_raw is not None else None
         except (TypeError, ValueError):
             genome_key = None
+        color_raw = payload.get("color_enabled", False)
+        if isinstance(color_raw, str):
+            lowered = color_raw.strip().lower()
+            color_enabled = lowered in {"1", "true", "yes", "on"}
+        else:
+            color_enabled = bool(color_raw)
+
         return cls(
             entry_id=payload["id"],
             title=str(title),
@@ -214,6 +231,7 @@ class ArchiveEntry:
                 str(value) for value in payload.get("source_entry_ids", []) if value is not None
             ],
             ancestor_genome_keys=_ensure_int_list(payload.get("ancestor_genome_keys", [])),
+            color_enabled=color_enabled,
         )
 
 
@@ -309,6 +327,7 @@ class ArchiveManager:
         parent_genome_keys: Optional[Sequence[int]] = None,
         source_entry_ids: Optional[Sequence[str]] = None,
         ancestor_genome_keys: Optional[Sequence[int]] = None,
+        color_enabled: bool = False,
     ) -> ArchiveEntry:
         """Persist a favourite image and genome into the shared archive."""
 
@@ -339,6 +358,7 @@ class ArchiveManager:
             parent_genome_keys=list(parent_genome_keys or []),
             source_entry_ids=[str(value) for value in (source_entry_ids or [])],
             ancestor_genome_keys=list(ancestor_genome_keys or []),
+            color_enabled=bool(color_enabled),
         )
 
         self._metadata.setdefault("entries", []).append(archive_entry.as_dict())
@@ -542,7 +562,6 @@ class CollaborativeAgentRunner:
         cols: int,
         thumb_size: int,
         scheme: str,
-        palette: str,
         select_k: Optional[int],
         chat_history_turns: int,
         selection_baseline: str = "none",
@@ -565,7 +584,6 @@ class CollaborativeAgentRunner:
         self.cols = cols
         self.thumb_size = thumb_size
         self.scheme = scheme
-        self.palette = palette
         self.select_k = select_k
         self.chat_history_turns = chat_history_turns
         self.selection_baseline = selection_baseline
@@ -606,10 +624,25 @@ class CollaborativeAgentRunner:
         )
         self._mutation_mode = self._normalize_mutation_mode(initial_mode)
         self._apply_mutation_mode(self._mutation_mode)
+        self._mutation_strength = 0.5
+        initial_strength = getattr(
+            self.neat_config.genome_config,
+            "picbreeder_mutation_strength",
+            self._mutation_strength,
+        )
+        self._mutation_strength = self._normalize_mutation_strength(initial_strength)
+        self._apply_mutation_strength(self._mutation_strength)
+        self._color_enabled = False
 
         self.prompt_template = PARENT_SELECTION_PROMPT
         if (self.scheme == "color" or self.scheme == "toggle"):
-            color_prompt = "It would be nice to have color images in the online archive, but we do not want it to be domainated by high-frequency rainbow artefacts. "
+            color_prompt = (
+                "By default, you will be presented with grayscale versions of the images. "
+                "Respond with a JSON containing a single `color` field set to true/false to instead view color/grayscale images. "
+                "(This response does not affect which images are selected for breeding; it only changes how the current grid is displayed. Include no other fields in the JSON in this case.) "
+                "It would be nice to have color images in the online archive, but we do not want it to be domainated by high-frequency rainbow artefacts. "
+                "It's probably a good idea to focus largely on evolving grayscale structure first, only playing with color every once in a while to enhance a compelling structural form. "
+            )
         else:
             color_prompt = ""
 
@@ -626,21 +659,23 @@ class CollaborativeAgentRunner:
                 )
             else:
                 mutation_mode_prompt = (
-                    "At each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
+                    "If `color` is on, then at each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
                     "or to mutate the entire CPPN. Indicate your choice in a `mutation_mode` field in your JSON response, set to either `color_only`, `structure_only`, or `all`. "
                 )
         else:
             mutation_mode_prompt = ""
 
+        mutation_strength_prompt = MUTATION_STRENGTH_PROMPT
         self.system_instruction = DEFAULT_SYSTEM_INSTRUCTION.format(
             goal_prompt=GOAL_PROMPTS[self.config.goal],
             selection_prompt=gen_selection_prompt(self.select_k),
             n_generations=self.generations,
             color_prompt=color_prompt,
             archive_novelty_prompt=archive_novelty_prompt,
+            mutation_strength_prompt=mutation_strength_prompt,
             mutation_mode_prompt=mutation_mode_prompt,
         )
-        if self.agent_id == 0:
+        if self.agent_id == 'agent_000':
             with open(self.agent_dir / "system_instruction.txt", "w", encoding="utf-8") as fp:
                 fp.write(self.system_instruction)
 
@@ -687,7 +722,10 @@ class CollaborativeAgentRunner:
         setattr(self.population.config.genome_config, "picbreeder_mutation_mode", normalized)
 
     def _update_mutation_mode(self, requested_mode: Optional[str]) -> str:
-        target = "structure_only" if self.warm_start_active else self._normalize_mutation_mode(requested_mode)
+        if self.warm_start_active or not self._color_enabled:
+            target = "structure_only"
+        else:
+            target = self._normalize_mutation_mode(requested_mode)
         if target != self._mutation_mode:
             self._mutation_mode = target
             self._apply_mutation_mode(self._mutation_mode)
@@ -695,6 +733,86 @@ class CollaborativeAgentRunner:
             # Keep config in sync even if mode unchanged (useful after resume).
             self._apply_mutation_mode(self._mutation_mode)
         return self._mutation_mode
+
+    def _normalize_mutation_strength(self, value: Optional[Any]) -> float:
+        if value is None:
+            return getattr(self, "_mutation_strength", 0.5)
+        if isinstance(value, (int, float)):
+            candidate = float(value)
+        elif isinstance(value, str):
+            lowered = value.strip().lower()
+            label_map = {
+                "small": 0.1,
+                "tiny": 0.0,
+                "gentle": 0.25,
+                "medium": 0.5,
+                "balanced": 0.5,
+                "default": 0.5,
+                "large": 0.9,
+                "big": 0.9,
+                "aggressive": 0.85,
+                "huge": 1.0,
+                "max": 1.0,
+                "min": 0.0,
+            }
+            if lowered in label_map:
+                candidate = label_map[lowered]
+            else:
+                try:
+                    candidate = float(lowered)
+                except ValueError:
+                    return getattr(self, "_mutation_strength", 0.5)
+        else:
+            return getattr(self, "_mutation_strength", 0.5)
+        if math.isnan(candidate) or math.isinf(candidate):
+            return getattr(self, "_mutation_strength", 0.5)
+        return max(0.0, min(1.0, candidate))
+
+    def _apply_mutation_strength(self, strength: float) -> None:
+        setattr(self.neat_config, "picbreeder_mutation_strength", strength)
+        setattr(self.neat_config.genome_config, "picbreeder_mutation_strength", strength)
+        setattr(self.population.config, "picbreeder_mutation_strength", strength)
+        setattr(self.population.config.genome_config, "picbreeder_mutation_strength", strength)
+
+    def _update_mutation_strength(self, requested_strength: Optional[Any]) -> float:
+        target = self._normalize_mutation_strength(requested_strength)
+        if target != self._mutation_strength:
+            self._mutation_strength = target
+            self._apply_mutation_strength(self._mutation_strength)
+        else:
+            self._apply_mutation_strength(self._mutation_strength)
+        return self._mutation_strength
+
+    def _prompt_with_settings(self, base_template: str) -> str:
+        status = (
+            "Current settings: "
+            f"color={'ON' if self._color_enabled else 'OFF'}, "
+            f"mutation_mode={self._mutation_mode}, "
+            f"mutation_strength={self._mutation_strength:.2f}."
+        )
+        return f"{base_template}\n{status}"
+
+    def _resolve_query_path(self, path_value: Optional[str]) -> Optional[Path]:
+        if not path_value:
+            return None
+        candidate = Path(path_value)
+        if not candidate.is_absolute():
+            candidate = (self.query_dir / candidate.name).resolve()
+        return candidate
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+        return None
 
     def _color_output_keys(self) -> Tuple[int, ...]:
         output_keys = list(getattr(self.neat_config.genome_config, "output_keys", ()))
@@ -821,16 +939,19 @@ class CollaborativeAgentRunner:
 
         self._write_branching_log(decision)
         print(
-            f"[{self.agent_id}] Branching decision: choice={choice}, selected={selected_images}, rationale='{rationale}'"
+            f"[{self.agent_id}] Branching decision:\nChoice: {choice}\nSelected: {selected_images}\nRationale: {rationale}"
         )
         return decision
 
     def initialise_population(self, decision: Dict[str, Any]) -> None:
         self._archive_seed_map.clear()
         self._genome_lineage.clear()
-
+        # Default to grayscale view unless overridden by branching metadata.
+        self._color_enabled = False
+        self._update_mutation_mode(self._mutation_mode)
         if decision.get("choice") != "branch" or not decision.get("selected_images"):
             seed_initial_population(self.population, self.neat_config.genome_config)
+            sync_population_node_indexer(self.population)
             self._enforce_structure_only_population()
             return
 
@@ -848,6 +969,7 @@ class CollaborativeAgentRunner:
 
         if not selected_records:
             seed_initial_population(self.population, self.neat_config.genome_config)
+            sync_population_node_indexer(self.population)
             self._enforce_structure_only_population()
             return
 
@@ -855,6 +977,7 @@ class CollaborativeAgentRunner:
         random.shuffle(population_keys)
         self.population.population.clear()
 
+        branch_color_pref: Optional[bool] = None
         for key, (entry_dict, genome) in zip(population_keys, selected_records):
             clone = copy.deepcopy(genome)
             clone.key = key
@@ -865,7 +988,10 @@ class CollaborativeAgentRunner:
                 "agent_id": entry_dict.get("agent_id"),
                 "generation": entry_dict.get("generation"),
             }
+            if branch_color_pref is None and isinstance(entry_dict, dict):
+                branch_color_pref = bool(entry_dict.get("color_enabled", False))
 
+        sync_population_node_indexer(self.population)
         sync_population_output_activations(self.population, self.neat_config.genome_config)
         self.population.species.speciate(
             self.neat_config,
@@ -880,6 +1006,9 @@ class CollaborativeAgentRunner:
         )
 
         self._enforce_structure_only_population()
+        if branch_color_pref is not None:
+            self._color_enabled = bool(branch_color_pref)
+            self._update_mutation_mode(self._mutation_mode)
         self._write_branching_summary(decision, len(selected_records))
 
     # ------------------------------------------------------------------
@@ -907,22 +1036,20 @@ class CollaborativeAgentRunner:
                 print("Graphviz not available; skipping genome diagram export.")
                 self._diagram_warning_emitted = True
 
-        state, cache = build_generation_state(
+        states, caches = build_generation_state(
             genomes,
             config,
             generation,
             self.rows,
             self.cols,
             self.thumb_size,
-            self.scheme,
-            self.palette,
+            variant="both",
         )
+        color_state = states["color"]
+        gray_state = states["gray"]
+        cache = caches["color"]
 
-        state_path = save_neat_population(state, self.population_dir, generation, cache)
-        grid_image = create_numbered_grid(state)
-        grid_path = self.query_dir / f"gen_{generation:03d}_grid.png"
-        grid_image.save(grid_path, format="PNG")
-        shutil.copy(grid_path, self.latest_img_path)
+        state_path = save_neat_population(color_state, self.population_dir, generation, cache)
 
         system_instruction = self.system_instruction
         prompt_template = self.prompt_template
@@ -961,30 +1088,72 @@ class CollaborativeAgentRunner:
                 " You are the first agent. This is an initial random population, and you may select one or more parents for the next step of evolution. "
             )
 
+        grid_path: Optional[Path] = None
+        view_index = 0
+
         if self.selection_baseline == "none":
-            selection_meta_raw = select_parents_from_grid(
-                state,
-                prompt_template,
-                self.query_dir,
-                self.select_k,
-                system_instruction,
-                self.chat_history_turns,
-                require_selection=require_selection,
-            )
+            selection_meta_raw: Dict[str, Any]
+            while True:
+                prompt_with_settings = self._prompt_with_settings(prompt_template)
+                variant_key = "color" if self._color_enabled else "gray"
+                state_variant = color_state if variant_key == "color" else gray_state
+                selection_meta_candidate = select_parents_from_grid(
+                    state_variant,
+                    prompt_with_settings,
+                    self.query_dir,
+                    self.select_k,
+                    system_instruction,
+                    self.chat_history_turns,
+                    require_selection=require_selection,
+                    allow_color_toggle=True,
+                    current_color=self._color_enabled,
+                    view_index=view_index,
+                )
+                grid_path_candidate = self._resolve_query_path(selection_meta_candidate.get("grid_path"))
+                if grid_path_candidate is not None and grid_path_candidate.exists():
+                    shutil.copy(grid_path_candidate, self.latest_img_path)
+                requested_color = self._coerce_bool(selection_meta_candidate.get("color"))
+                if requested_color is not None and requested_color != self._color_enabled:
+                    self._color_enabled = requested_color
+                    self._update_mutation_mode(self._mutation_mode)
+                    view_index += 1
+                    continue
+                selection_meta_raw = selection_meta_candidate
+                state = state_variant
+                grid_path = grid_path_candidate
+                break
         else:
+            state = color_state
+            grid_image = create_numbered_grid(state)
+            grid_path = self.query_dir / f"gen_{generation:03d}_view_{view_index:02d}_grid.png"
+            grid_image.save(grid_path, format="PNG")
+            shutil.copy(grid_path, self.latest_img_path)
             selection_meta_raw = self._select_parents_baseline(
                 generation,
                 genomes,
                 config,
                 state,
             )
+            selection_meta_raw["grid_path"] = str(grid_path)
         selection_meta = dict(selection_meta_raw)
+        if grid_path is None:
+            resolved_grid_str = selection_meta.get("grid_path")
+            if resolved_grid_str:
+                grid_path = Path(resolved_grid_str)
+            else:
+                grid_path = self.query_dir / f"gen_{generation:03d}_view_{view_index:02d}_grid.png"
+        selection_meta["grid_path"] = str(grid_path)
+        selection_meta["color"] = self._color_enabled
         resolved_mode = self._update_mutation_mode(selection_meta.get("mutation_mode"))
         selection_meta["mutation_mode"] = resolved_mode
+        resolved_strength = self._update_mutation_strength(selection_meta.get("mutation_strength"))
+        selection_meta["mutation_strength"] = resolved_strength
         if self.warm_start_active:
             selection_meta["mutation_mode_forced"] = True
-        selection_path = Path(selection_meta.get("selection_path", grid_path))
-        shutil.copy(selection_path, self.latest_img_path)
+        selection_path_value = selection_meta.get("selection_path")
+        selection_path = Path(selection_path_value) if selection_path_value else Path(grid_path)
+        if selection_path.exists():
+            shutil.copy(selection_path, self.latest_img_path)
         selected_indices: Sequence[int] = selection_meta["selected"]
         publish_details: Optional[Dict[str, Any]] = None
         for idx, (_, genome) in enumerate(genomes):
@@ -1120,6 +1289,8 @@ class CollaborativeAgentRunner:
             selected_indices,
             selection_meta.get("rationale", ""),
             selection_meta.get("mutation_mode"),
+            selection_meta.get("mutation_strength"),
+            self._color_enabled,
             publish_details,
         )
         if self.progress_callback is not None:
@@ -1168,6 +1339,7 @@ class CollaborativeAgentRunner:
             parent_genome_keys=favorite.get("parent_genome_keys"),
             source_entry_ids=favorite.get("source_archive_entry_ids"),
             ancestor_genome_keys=favorite.get("ancestor_genome_keys"),
+            color_enabled=favorite.get("color_enabled", False),
         )
         return entry
 
@@ -1412,6 +1584,7 @@ class CollaborativeAgentRunner:
         payload["timestamp"] = datetime.now().isoformat()
         payload["forced"] = forced
         payload["source"] = source
+        payload["color_enabled"] = bool(self._color_enabled)
         if response_text is not None:
             payload["response_text"] = response_text
         if replaced_entry_id is not None:
@@ -1588,16 +1761,29 @@ class CollaborativeAgentRunner:
         selected_indices: Sequence[int],
         rationale: str,
         mutation_mode: Optional[str],
+        mutation_strength: Optional[float],
+        color_enabled: bool,
         publish_details: Optional[Dict[str, Any]],
     ) -> None:
         publish_index = publish_details.get("index") if publish_details else None
         publish_title = publish_details.get("title") if publish_details else None
         publish_rationale = publish_details.get("reason") if publish_details else None
-        log_str = f"[{self.agent_id}] Gen {generation} selection: selected={list(selected_indices)}, rationale='{rationale}'"
+        log_str = (
+            f"[{self.agent_id}] Gen {generation} selection:\n"
+            f"Selected: {list(selected_indices)}\n"
+            f"Rationale: {rationale}\n"
+            f"Color: {'ON' if color_enabled else 'OFF'}"
+        )
         if mutation_mode is not None:
-            log_str += f", mutation_mode='{mutation_mode}'"
+            log_str += f"\nMutation Mode: '{mutation_mode}'"
+        if mutation_strength is not None:
+            log_str += f"\nMutation Strength: {mutation_strength:.2f}"
         if publish_index is not None:
-            log_str += f", publish_index={publish_index}, publish_title='{publish_title}', publish_rationale='{publish_rationale}'"
+            log_str += (
+                f"\n\nPublish Index: {publish_index}"
+                f"\nPublish Title: '{publish_title}'"
+                f"\nPublish Rationale: {publish_rationale}\n"
+            )
         print(log_str)
 
     def _select_parents_baseline(
@@ -1671,8 +1857,9 @@ class CollaborativeAgentRunner:
         grid_image = create_numbered_grid(state)
         selection_image = create_numbered_grid(state, selected=selected)
 
-        grid_path = self.query_dir / f"gen_{generation:03d}_grid.png"
-        selection_path = self.query_dir / f"gen_{generation:03d}_selection.png"
+        suffix = "_view_00"
+        grid_path = self.query_dir / f"gen_{generation:03d}{suffix}_grid.png"
+        selection_path = self.query_dir / f"gen_{generation:03d}{suffix}_selection.png"
         grid_image.save(grid_path, format="PNG")
         selection_image.save(selection_path, format="PNG")
 
@@ -1685,12 +1872,15 @@ class CollaborativeAgentRunner:
                 "select_k": self.select_k,
                 "chat_history_turns": self.chat_history_turns,
                 "response_text": None,
+                "view_index": 0,
+                "color": bool(state.get("variant") == "color"),
+                "color_toggle_only": False,
             }
         )
 
         metadata_dir = self.query_dir / "metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
-        meta_path = metadata_dir / f"gen_{generation:03d}_selection.json"
+        meta_path = metadata_dir / f"gen_{generation:03d}{suffix}_selection.json"
         meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         payload["metadata_path"] = str(meta_path)
 
@@ -1708,7 +1898,6 @@ class CollaborativeMultiAgentOrchestrator:
         cols: int,
         thumb_size: int,
         scheme: str,
-        palette: str,
         config_path: Path,
         select_k: Optional[int],
         agent_generations: int,
@@ -1726,7 +1915,6 @@ class CollaborativeMultiAgentOrchestrator:
         self.cols = cols
         self.thumb_size = thumb_size
         self.scheme = scheme
-        self.palette = palette
         self.config_path = config_path
         self.select_k = select_k
         self.agent_generations = agent_generations
@@ -1782,7 +1970,6 @@ class CollaborativeMultiAgentOrchestrator:
             "cols": self.cols,
             "thumb_size": self.thumb_size,
             "scheme": self.scheme,
-            "palette": self.palette,
             "select_k": self.select_k,
             "agent_generations": self.agent_generations,
             "enable_output_activations": self.enable_output_activations,
@@ -1951,6 +2138,7 @@ class CollaborativeMultiAgentOrchestrator:
         apply_picbreeder_config_defaults(
             config,
             enable_output_activations=self.enable_output_activations,
+            enable_input_activations=self.config.input_activations,
         )
         config.pop_size = self.rows * self.cols
         return config
@@ -1977,7 +2165,6 @@ class CollaborativeMultiAgentOrchestrator:
             cols=self.cols,
             thumb_size=self.thumb_size,
             scheme=self.scheme,
-            palette=self.palette,
             select_k=self.select_k,
             chat_history_turns=self.chat_history_turns,
             selection_baseline=self.selection_baseline,
@@ -2144,12 +2331,11 @@ class CollaborativeMultiAgentOrchestrator:
 @dataclass
 class CollaborativeConfig:
     goal: str = "familiar_objects"
-    rows: int = 4  # Rows in the CPPN grid
+    rows: int = 3  # Rows in the CPPN grid (legacy Picbreeder default)
     cols: int = 5  # Columns in the CPPN grid
     thumb_size: int = 200  # Pixel size for rendered genome thumbnails
     chat_history_turns: int = DEFAULT_CHAT_HISTORY_TURNS  # How many prior turns each agent sees (-1 keeps all)
-    scheme: str = "gray"  # Rendering scheme: color, gray, or mono
-    color_palette: str = "hsb"  # Palette choice when using color or gray rendering
+    scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
     config_path: Optional[Path] = None  # Optional override for the NEAT config file
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = DEFAULT_AGENT_GENERATIONS  # Generations executed for each agent
@@ -2157,6 +2343,7 @@ class CollaborativeConfig:
     warm_start_structure: int = 0  # Number of initial agents restricted to structure-only mutation
     experiment_dir: Optional[Path] = None  # Output directory for logs and artefacts
     output_activations: bool = False  # Enable CPPN output activation mutations
+    input_activations: bool = False
     selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes
     resume: bool = False  # Resume a previously interrupted experiment
     resume_agent_id: Optional[str] = None  # Specific agent identifier to resume (requires resume=true)
@@ -2274,7 +2461,6 @@ def run(cfg: CollaborativeConfig) -> None:
         cols=cfg.cols,
         thumb_size=cfg.thumb_size,
         scheme=cfg.scheme,
-        palette=cfg.color_palette,
         config_path=cfg.config_path,
         select_k=cfg.select_k,
         agent_generations=cfg.agent_generations,

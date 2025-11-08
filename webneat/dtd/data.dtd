@@ -1,0 +1,66 @@
+<!ELEMENT data (storage|genome)>
+<!ATTLIST data
+	version CDATA #REQUIRED
+	date CDATA #IMPLIED
+>
+
+<!ELEMENT storage (generation+)>
+<!ATTLIST storage
+	minimum CDATA #REQUIRED
+	maximum CDATA #REQUIRED
+	name CDATA #REQUIRED
+>
+
+<!ELEMENT generation (genome+)>
+<!ATTLIST generation
+	number CDATA #REQUIRED
+	size CDATA #REQUIRED
+>
+
+<!ELEMENT genome (identifier, parents, nodes, links)>
+<!ATTLIST genome age CDATA #REQUIRED>
+
+<!ELEMENT identifier EMPTY>
+<!ATTLIST identifier
+	branch CDATA #REQUIRED
+	id CDATA #REQUIRED
+>
+
+<!ELEMENT parents (identifier)*>
+<!ATTLIST parents count CDATA #REQUIRED>
+
+<!ELEMENT nodes (node+)>
+<!ATTLIST nodes count CDATA #REQUIRED>
+
+<!ELEMENT links (link+)>
+<!ATTLIST links count CDATA #REQUIRED>
+
+<!ELEMENT node (marking, activation)>
+<!ATTLIST node
+	label CDATA #IMPLIED
+	type CDATA #IMPLIED
+>
+
+<!ELEMENT activation ANY>
+
+<!ELEMENT link (marking, source, target, weight)>
+
+<!ELEMENT marking EMPTY>
+<!ATTLIST marking
+	branch CDATA #REQUIRED
+	id CDATA #REQUIRED
+>
+
+<!ELEMENT source EMPTY>
+<!ATTLIST source
+	branch CDATA #REQUIRED
+	id CDATA #REQUIRED
+>
+
+<!ELEMENT target EMPTY>
+<!ATTLIST target
+	branch CDATA #REQUIRED
+	id CDATA #REQUIRED
+>
+
+<!ELEMENT weight ANY>

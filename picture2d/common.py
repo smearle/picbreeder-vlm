@@ -42,6 +42,7 @@ def restrict_hsb_channels(outputs):
     hue = (outputs[0] + 1) % 1
     saturation = clamp(outputs[1], 0.0, 1.0)
     brightness = clamp(abs(outputs[2]), 0.0, 1.0)
+    # brightness = clamp(outputs[2], 0.0, 1.0)
     return hue, saturation, brightness
 
 
@@ -61,16 +62,16 @@ def _canvas_coords(width, height):
         return
 
     def _scale(value, max_dimension):
-        if max_dimension <= 1:
+        if max_dimension <= 0:
             return 0.0
-        return (value / (max_dimension - 1)) * 2.0 - 1.0
+        return ((value * 2.0) - (max_dimension - 1)) / float(max_dimension)
 
     for y in range(height):
         scaled_y = _scale(y, height)
         row = []
         for x in range(width):
             scaled_x = _scale(x, width)
-            radius = math.hypot(scaled_x, scaled_y) * math.sqrt(2.0)
+            radius = math.hypot(scaled_x, scaled_y) * math.sqrt(2.0)  # Picbreeder distance scale
             row.append((scaled_x, scaled_y, radius, 1.0))
         yield row
 
@@ -144,11 +145,13 @@ def eval_color_image(genome, config, width, height):
     return image
 
 
-def eval_color_image_as_grayscale(genome, config, width, height):
+def eval_genome_as_grayscale_and_color(genome, config, width, height):
     net = neat.nn.FeedForwardNetwork.create(genome, config)
-    image = []
+    grayscale_image = []
+    color_image = []
     for coord_row in _canvas_coords(width, height):
-        row = []
+        grayscale_row = []
+        color_row = []
         for coords in coord_row:
             inputs = list(coords)
             transformer = getattr(genome, "transform_inputs", None)
@@ -159,7 +162,10 @@ def eval_color_image_as_grayscale(genome, config, width, height):
             if output_transformer is not None:
                 output = output_transformer(output)
             hue, saturation, brightness = restrict_hsb_channels(output[:3])
-            row.append(brightness)
-        image.append(row)
+            grayscale_row.append(brightness)
+            rgb = hsb_to_rgb(output[:3])
+            color_row.append(rgb)
+        color_image.append(color_row)
+        grayscale_image.append(grayscale_row)
 
-    return image
+    return grayscale_image, color_image

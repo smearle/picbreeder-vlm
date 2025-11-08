@@ -21,7 +21,7 @@ from neat_components import (
     sync_population_output_activations,
 )
 from picbreeder_reproduction import PicbreederReproduction
-from picture2d.common import eval_color_image, eval_color_image_as_grayscale
+from picture2d.common import eval_color_image, eval_genome_as_grayscale_and_color
 from rendering import create_numbered_grid, render_genome_image
 
 
@@ -49,12 +49,6 @@ def parse_args() -> argparse.Namespace:
         choices=("color", "gray", "toggle"),
         default="gray",
         help="Rendering scheme for the CPPN outputs.",
-    )
-    parser.add_argument(
-        "--color-palette",
-        choices=("hsb", "sigmoid"),
-        default="hsb",
-        help="Palette to use when rendering color outputs.",
     )
     parser.add_argument(
         "--config-path",
@@ -366,7 +360,6 @@ class HumanDrivenEvolver:
         cols: int,
         thumb_size: int,
         scheme: str,
-        palette: str,
         render_size: int,
         select_limit: Optional[int],
         save_genome_diagrams: bool,
@@ -379,7 +372,6 @@ class HumanDrivenEvolver:
         self.cols = cols
         self.thumb_size = thumb_size
         self.scheme = scheme
-        self.palette = palette
         self.render_size = max(thumb_size, render_size)
         self.select_limit = select_limit
         self.save_genome_diagrams = save_genome_diagrams
@@ -471,9 +463,8 @@ class HumanDrivenEvolver:
                 self.render_size,
                 self.render_size,
                 self.scheme,
-                self.palette,
             )
-            gray_image_data = eval_color_image_as_grayscale(genome, config, self.render_size, self.render_size)
+            gray_image_data, color_image_data = eval_genome_as_grayscale_and_color(genome, config, self.render_size, self.render_size)
             gray_image = Image.new(mode="L", size=(self.render_size, self.render_size))
             flat_pixels: List[Any] = [int(pixel * 255) for row in gray_image_data for pixel in row]
             gray_image.putdata(flat_pixels)
@@ -508,16 +499,17 @@ class HumanDrivenEvolver:
                 print(f"Grayscale renders saved to {self.gray_render_dir}")
                 self._gray_notice_emitted = True
 
-        state, cache = build_generation_state(
+        states, caches = build_generation_state(
             genomes,
             config,
             generation,
             self.rows,
             self.cols,
             self.thumb_size,
-            self.scheme,
-            self.palette,
+            variant="both"
         )
+        state = states['color']
+        cache = caches['color']
         save_neat_population(state, self.snapshot_dir, generation, cache)
 
         def render_high_res(index: int) -> Optional[Path]:
@@ -530,7 +522,6 @@ class HumanDrivenEvolver:
                 self.render_size,
                 self.render_size,
                 self.scheme,
-                self.palette,
             )
             filename = f"gen_{generation:03d}_idx_{index:02d}_id_{genome_id}.png"
             path = self.render_dir / filename
@@ -600,7 +591,6 @@ def main() -> None:
         args.cols,
         args.thumb_size,
         args.scheme,
-        args.color_palette,
         args.render_size,
         args.select_k,
         args.save_genome_diagrams,

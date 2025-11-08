@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<data version="1.0">
+    <genome age="1" phenotype="color">
+        <identifier branch="shouldBeBranch" id="4"/>
+        <parents count="1">
+            <identifier branch="shouldBeBranch" id="3"/>
+        </parents>
+        <nodes count="10">
+            <node affinity="grey" bias="0.0" label="bias" type="in">
+                <marking branch="shouldBeBranch" id="0"/>
+                <activation>identity(x)</activation>
+            </node>
+            <node affinity="grey" bias="0.0" label="d" type="in">
+                <marking branch="shouldBeBranch" id="1"/>
+                <activation>identity(x)</activation>
+            </node>
+            <node affinity="grey" bias="0.0" label="x" type="in">
+                <marking branch="shouldBeBranch" id="2"/>
+                <activation>identity(x)</activation>
+            </node>
+            <node affinity="grey" bias="0.0" label="y" type="in">
+                <marking branch="shouldBeBranch" id="3"/>
+                <activation>identity(x)</activation>
+            </node>
+            <node affinity="grey" bias="0.0" label="brightness" type="out">
+                <marking branch="shouldBeBranch" id="4"/>
+                <activation>gaussian(x)</activation>
+            </node>
+            <node affinity="grey" bias="0.0" type="hidden">
+                <marking branch="shouldBeBranch" id="5"/>
+                <activation>sin(x)</activation>
+            </node>
+            <node affinity="color" bias="0.0" label="hue" type="out">
+                <marking branch="shouldBeBranch" id="31"/>
+                <activation>sin(x)</activation>
+            </node>
+            <node affinity="color" bias="0.0" label="saturation" type="out">
+                <marking branch="shouldBeBranch" id="32"/>
+                <activation>sigmoid(x)</activation>
+            </node>
+            <node affinity="color" bias="0.0" type="hidden">
+                <marking branch="shouldBeBranch" id="35"/>
+                <activation>gaussian(x)</activation>
+            </node>
+            <node affinity="color" bias="0.0" type="hidden">
+                <marking branch="shouldBeBranch" id="36"/>
+                <activation>gaussian(x)</activation>
+            </node>
+        </nodes>
+        <links count="21">
+            <link>
+                <marking branch="shouldBeBranch" id="6"/>
+                <source branch="shouldBeBranch" id="0"/>
+                <target branch="shouldBeBranch" id="5"/>
+                <weight>1.459529272462595</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="7"/>
+                <source branch="shouldBeBranch" id="1"/>
+                <target branch="shouldBeBranch" id="5"/>
+                <weight>-2.527675861369044</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="8"/>
+                <source branch="shouldBeBranch" id="2"/>
+                <target branch="shouldBeBranch" id="5"/>
+                <weight>-1.5710415846480619</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="9"/>
+                <source branch="shouldBeBranch" id="3"/>
+                <target branch="shouldBeBranch" id="5"/>
+                <weight>2.1208887455004284</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="10"/>
+                <source branch="shouldBeBranch" id="5"/>
+                <target branch="shouldBeBranch" id="4"/>
+                <weight>-1.1748916305835853</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="33"/>
+                <source branch="shouldBeBranch" id="4"/>
+                <target branch="shouldBeBranch" id="31"/>
+                <weight>-2.693409973793762</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="34"/>
+                <source branch="shouldBeBranch" id="4"/>
+                <target branch="shouldBeBranch" id="32"/>
+                <weight>-0.5943588402484701</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="37"/>
+                <source branch="shouldBeBranch" id="0"/>
+                <target branch="shouldBeBranch" id="35"/>
+                <weight>-1.3244842016300251</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="38"/>
+                <source branch="shouldBeBranch" id="0"/>
+                <target branch="shouldBeBranch" id="36"/>
+                <weight>0.6035680951529685</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="39"/>
+                <source branch="shouldBeBranch" id="1"/>
+                <target branch="shouldBeBranch" id="35"/>
+                <weight>-1.0968530999528991</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="40"/>
+                <source branch="shouldBeBranch" id="1"/>
+                <target branch="shouldBeBranch" id="36"/>
+                <weight>1.9442333389756372</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="41"/>
+                <source branch="shouldBeBranch" id="2"/>
+                <target branch="shouldBeBranch" id="35"/>
+                <weight>2.3758054974555733</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="42"/>
+                <source branch="shouldBeBranch" id="2"/>
+                <target branch="shouldBeBranch" id="36"/>
+                <weight>1.5844879528180087</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="43"/>
+                <source branch="shouldBeBranch" id="3"/>
+                <target branch="shouldBeBranch" id="35"/>
+                <weight>-0.35169925234139154</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="44"/>
+                <source branch="shouldBeBranch" id="3"/>
+                <target branch="shouldBeBranch" id="36"/>
+                <weight>-2.798730384733331</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="45"/>
+                <source branch="shouldBeBranch" id="4"/>
+                <target branch="shouldBeBranch" id="35"/>
+                <weight>2.562067202353883</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="46"/>
+                <source branch="shouldBeBranch" id="4"/>
+                <target branch="shouldBeBranch" id="36"/>
+                <weight>-1.7562661632467345</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="47"/>
+                <source branch="shouldBeBranch" id="35"/>
+                <target branch="shouldBeBranch" id="31"/>
+                <weight>0.0</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="48"/>
+                <source branch="shouldBeBranch" id="35"/>
+                <target branch="shouldBeBranch" id="32"/>
+                <weight>0.0</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="49"/>
+                <source branch="shouldBeBranch" id="36"/>
+                <target branch="shouldBeBranch" id="31"/>
+                <weight>0.0</weight>
+            </link>
+            <link>
+                <marking branch="shouldBeBranch" id="50"/>
+                <source branch="shouldBeBranch" id="36"/>
+                <target branch="shouldBeBranch" id="32"/>
+                <weight>0.0</weight>
+            </link>
+        </links>
+    </genome>
+</data>

@@ -15,8 +15,8 @@ class PicbreederReproduction(DefaultClassConfig):
         return DefaultClassConfig(
             param_dict,
             [
-                ConfigParameter("mating", bool, True),
-                ConfigParameter("crossover_rate", float, 0.3),
+                ConfigParameter("mating", bool, False),
+                ConfigParameter("crossover_rate", float, 0.0),
                 ConfigParameter("mutation_repeats", int, 0),
             ],
         )
@@ -118,6 +118,13 @@ class PicbreederReproduction(DefaultClassConfig):
         clone.nodes = {k: node.copy() for k, node in parent.nodes.items()}
         clone.connections = {k: conn.copy() for k, conn in parent.connections.items()}
         clone.fitness = None
+
+        if not hasattr(parent, "_node_affinities"):
+            raise RuntimeError(
+                "Cannot clone Picbreeder genome: parent is missing _node_affinities. "
+                "Ensure genomes are initialized via PicbreederGenome.configure_new."
+            )
+        clone._node_affinities = {int(k): str(v) for k, v in parent._node_affinities.items()}
 
         if hasattr(parent, "_input_activation_names"):
             names = list(getattr(parent, "_input_activation_names"))

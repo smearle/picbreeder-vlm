@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<genome age="7">
+    <identifier branch="" id="91"/>
+    <parents count="1">
+        <identifier branch="" id="80"/>
+    </parents>
+    <nodes count="10">
+        <node label="bias" type="in">
+            <marking branch="" id="0"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="d" type="in">
+            <marking branch="" id="1"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="x" type="in">
+            <marking branch="" id="2"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="y" type="in">
+            <marking branch="" id="3"/>
+            <activation>identity(x)</activation>
+        </node>
+        <node label="brightness" type="out">
+            <marking branch="" id="4"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node label="hue" type="out">
+            <marking branch="" id="5"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node label="saturation" type="out">
+            <marking branch="" id="6"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="7"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="31"/>
+            <activation>gaussian(x)</activation>
+        </node>
+        <node type="hidden">
+            <marking branch="" id="43"/>
+            <activation>gaussian(x)</activation>
+        </node>
+    </nodes>
+    <links count="12">
+        <link>
+            <marking branch="" id="8"/>
+            <source branch="" id="0"/>
+            <target branch="" id="7"/>
+            <weight>-2.826176202217888</weight>
+        </link>
+        <link>
+            <marking branch="" id="9"/>
+            <source branch="" id="1"/>
+            <target branch="" id="7"/>
+            <weight>0.5520327485945686</weight>
+        </link>
+        <link>
+            <marking branch="" id="10"/>
+            <source branch="" id="2"/>
+            <target branch="" id="7"/>
+            <weight>0.684887243510693</weight>
+        </link>
+        <link>
+            <marking branch="" id="11"/>
+            <source branch="" id="3"/>
+            <target branch="" id="7"/>
+            <weight>-2.3935891748170066</weight>
+        </link>
+        <link>
+            <marking branch="" id="12"/>
+            <source branch="" id="7"/>
+            <target branch="" id="4"/>
+            <weight>-0.007941915184074722</weight>
+        </link>
+        <link>
+            <marking branch="" id="13"/>
+            <source branch="" id="7"/>
+            <target branch="" id="5"/>
+            <weight>-2.5300578536871265</weight>
+        </link>
+        <link>
+            <marking branch="" id="14"/>
+            <source branch="" id="7"/>
+            <target branch="" id="6"/>
+            <weight>-2.410490975907721</weight>
+        </link>
+        <link>
+            <marking branch="" id="32"/>
+            <source branch="" id="7"/>
+            <target branch="" id="31"/>
+            <weight>-2.1317299646223216</weight>
+        </link>
+        <link>
+            <marking branch="" id="33"/>
+            <source branch="" id="31"/>
+            <target branch="" id="4"/>
+            <weight>-1.6631883597393253</weight>
+        </link>
+        <link>
+            <marking branch="" id="44"/>
+            <source branch="" id="7"/>
+            <target branch="" id="43"/>
+            <weight>2.983703845433751</weight>
+        </link>
+        <link>
+            <marking branch="" id="45"/>
+            <source branch="" id="43"/>
+            <target branch="" id="6"/>
+            <weight>-2.737756338860994</weight>
+        </link>
+        <link>
+            <marking branch="" id="72"/>
+            <source branch="" id="1"/>
+            <target branch="" id="31"/>
+            <weight>-2.4563660654414097</weight>
+        </link>
+    </links>
+</genome>

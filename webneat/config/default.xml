@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<data version="1.0">
+	<parameters>
+		<group name="meta">
+			<parameter name="project" value="picbreeder"/>
+			<parameter name="interpretation" value="hsb color network"/>
+			<parameter name="bipolar" value="true"/>
+		</group>
+		<set name="inputs">
+			<item value="x"/>
+			<item value="y"/>
+			<item value="d"/>
+			<item value="bias"/>
+		</set>
+		<set name="outputs">
+		<!--
+			<item value="hue"/>
+			<item value="saturation"/>
+			<item value="brightness"/>
+		-->
+			<item value="ink"/>
+		</set>
+		<set name="activations">
+			<item value="sigmoid(x)"/>
+			<item value="gaussian(x)"/>
+			<item value="sin(x)"/>
+		</set>
+		<set name="generators">
+			<item value="client.gui.SliderTempMutateLinksGenerator" weight="10"/>
+			<!--<item value="client.evolution.generators.AddAcyclicLink" weight="5"/> -->
+			<item value="client.evolution.generators.CrazyNewLinkAdder" weight="5"/>
+			<item value="client.evolution.generators.AddNodes" weight="5"/>
+			<item value="client.evolution.generators.MutateActivation" weight="1"/>
+		<!--
+			<item value="client.evolution.generators.CrossoverCombiner" weight="2"/>
+			<item value="client.evolution.generators.MutateLinks" weight="4"/>
+			<item value="client.evolution.generators.SimplifyGenome"/>
+			<item value="client.evolution.generators.DeFactoMutator"/>
+		-->
+		</set>
+		<group name="activation">
+			<parameter name="bias" value="1.0"/>
+			<parameter name="x scale" value="1.0"/>
+			<parameter name="y scale" value="1.0"/>
+			<parameter name="distance scale" value="1.4142135623730950488016887242097"/>
+		</group>
+		<group name="evolution">
+			<parameter name="weight mutation rate" value="0.20"/>
+			<parameter name="weight mutation power" value="1.0"/>
+			<parameter name="min weight mutation power" value="0.0"/>
+			<parameter name="max weight mutation power" value="2.0"/>
+			<parameter name="activation mutation rate" value="0.05"/>
+			<parameter name="max link weight" value="3.0"/>
+			<parameter name="add node rate" value="0.07"/>
+			<parameter name="add link rate" value="0.10"/>
+			<parameter name="hidden nodes" value="1"/>
+			<parameter name="hidden color nodes" value="2"/>
+			<parameter name="population size" value="15"/>
+			<parameter name="add color link rate" value="0.50"/>
+			<parameter name="add grey link rate" value="0.50"/>
+			<parameter name="add grey-color link rate" value="0.10"/>
+		</group>
+		<group name="display">
+			<parameter name="rows" value="3"/>
+			<parameter name="columns" value="5"/>
+			<parameter name="width" value="128"/>
+			<parameter name="height" value="128"/>
+			<parameter name="low resolution stride" value="4"/>
+			<parameter name="unselected color" value="#202080"/>
+			<parameter name="selected color" value="#30A030"/>
+		</group>
+	</parameters>
+</data>

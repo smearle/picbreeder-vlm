@@ -115,13 +115,30 @@ def parse_generation_index(generation_prefix: str) -> int:
         raise ValueError(f"Unable to parse generation number from prefix: {generation_prefix}")
 
 
+def _resolve_recorded_path(path_value: Optional[str], base_dir: Path) -> Optional[Path]:
+    if not path_value:
+        return None
+    candidate = Path(path_value)
+    if candidate.is_absolute():
+        return candidate
+    return (base_dir / candidate).resolve()
+
+
 def collect_grid_frames(queries_dir: Path, selection_files: List[Path]) -> List[GifFrame]:
     frames: List[GifFrame] = []
     for selection_file in selection_files:
         generation_prefix = selection_file.stem.replace("_selection", "")
         generation_index = parse_generation_index(generation_prefix)
-        grid_path = queries_dir / f"{generation_prefix}_grid.png"
-        selection_path = queries_dir / f"{generation_prefix}_selection.png"
+        try:
+            payload = json.loads(selection_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+
+        recorded_grid = _resolve_recorded_path(payload.get("grid_path"), queries_dir)
+        recorded_selection = _resolve_recorded_path(payload.get("selection_path"), queries_dir)
+
+        grid_path = recorded_grid or (queries_dir / f"{generation_prefix}_grid.png")
+        selection_path = recorded_selection or (queries_dir / f"{generation_prefix}_selection.png")
 
         if grid_path.exists():
             frames.append(GifFrame(generation_index, "grid", grid_path))

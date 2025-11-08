@@ -14,7 +14,7 @@ def add_experiment_cli_arguments(parser: argparse.ArgumentParser) -> argparse.Ar
         help="Evolution engine to use ('neat' for NEAT-Python, 'neurogram' for the JavaScript runtime).",
     )
     parser.add_argument("--generations", type=int, default=200, help="Number of generations to evolve.")
-    parser.add_argument("--rows", type=int, default=4, help="Number of rows in the grid (Picbreeder uses 4).")
+    parser.add_argument("--rows", type=int, default=3, help="Number of rows in the grid (Picbreeder uses 3).")
     parser.add_argument("--cols", type=int, default=5, help="Number of columns in the grid (Picbreeder uses 5).")
     parser.add_argument(
         "--thumb-size",
@@ -25,19 +25,20 @@ def add_experiment_cli_arguments(parser: argparse.ArgumentParser) -> argparse.Ar
     parser.add_argument(
         "--scheme",
         choices=("color", "gray"),
-        default="gray",
+        default="color",
         help="Image rendering scheme to use.",
     )
     parser.add_argument(
-        "--color-palette",
-        choices=("hsb", "sigmoid"),
-        default="hsb",
-        help="Color palette to use for rendering ('hsb' matches CPPNArtEvolution, 'sigmoid' uses the older sigmoid-based palette).",
+        "--output-activations",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable CPPN output activation functions (enabled by default; pass --no-output-activations to disable).",
     )
     parser.add_argument(
-        "--output-activations",
-        action="store_true",
-        help="Enable CPPN output activation functions (disabled by default).",
+        "--input-activations",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable CPPN input activation functions (enabled by default; pass --no-input-activations to disable).",
     )
     parser.add_argument(
         "--config-path",
@@ -136,7 +137,6 @@ def build_experiment_slug(args: argparse.Namespace) -> str:
         f"eng-{args.engine}",
     ]
     if args.engine == "neat":
-        slug_parts.append(f"pal-{args.color_palette}")
         slug_parts.append(args.scheme)
         if args.output_activations:
             slug_parts.append("outact")

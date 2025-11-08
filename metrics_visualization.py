@@ -358,7 +358,6 @@ def _regenerate_first_selection_image(
         return None
 
     scheme = str(state.get("scheme", "color"))
-    palette = str(state.get("palette", "hsb"))
 
     width = target_entry.get("width") or state.get("thumbSize")
     height = target_entry.get("height") or state.get("thumbSize")
@@ -391,7 +390,6 @@ def _regenerate_first_selection_image(
         width_int,
         height_int,
         scheme,
-        palette,
     )
 
     primary_path = populations_dir / f"{generation_prefix}_idx_{selected_index:03d}.png"

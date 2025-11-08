@@ -1,0 +1,80 @@
+Progress Sheet for the WebNEAT client
+
+Prepared by: Nick
+Prepared on: 12/15/06
+Updated on: 4/10/07
+
+Note: This is handled on the mlforge site now.
+
+Organization:
+Overall
+XML Representation
+Java Representation
+Evolution
+Activation
+Rendering
+GUI
+Network
+Parameter Information
+Utilities
+Documentation
+
+Overall:
+I have a test that runs and evolves using sigmoids only.
+I can select multiple parents per generation
+Only mutations right now.
+I have not tested loading a saved series and continuing it. I've only tested a fresh start.
+All images are cached, so going back/forward is instantaneous.
+Rendering occurs on a thread, but for now all controls are disabled until it finishes.
+Evolution is not checking for recurrencies ATM :(
+
+XML
+Genome done
+Series needs approval
+
+Java
+Representation Done
+Some clean up needed, but minimal.
+
+Evolution
+Working.
+Does not check for recurrencies yet (it does now!)
+Does not do crossover now
+No speciation
+
+Activation
+Working and uses look up tables
+Number of activations for recursion still open (Adam, Verify?)
+
+Rendering
+GreyScale
+Caches results, so browsing is instantaneous (works, but memory is not considered yet)
+Flexable interface allows easy addition of color if needed.  I will be trying this soon :)
+
+GUI
+"Quick" GUI works as a JFrame.
+Applet version works.
+Back/Forward/Spawn Work ("Spawn is the equivalent of "next gen")
+Restart: pops up a box telling you that it cannot be "undone"
+Save/Publish Not working... I'm not sure about how this will work without the network stuff.
+Highlights currently selected parents (remember parents as you browse, so you don't have to re-select)
+Considering adding aome "statistics" to the GUI to keep track of things like memory usage, render time, etc.
+Uses LayoutManagers, so everything should look ok in smaller resolutions.
+
+Network
+Unsure, afaik, there has not been a good test yet. (David?)
+
+Parameter Information
+Hardcoded in a pretty gross way, we need to discuss what is in the table and how to represent it over the network.
+
+Utilities
+ASCII-to-Binary Compression working
+PNG creation from a genome is not implemented yet (this will take me about 10-15 minutes).
+
+Documentation
+About 40% of the objects are javadoced
+Outdated UML class diagrams for 2 packages (about 6 packages total)
+I'll work on documentation some more and create javadocs for everything.
+
+Bugs
+Back+Select+Forward invalidates the actual parents that are highlighted, should it change?
