@@ -20,13 +20,17 @@ Key behaviours:
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import copy
 import gzip
 import json
 import math
+import multiprocessing
+import os
 import pickle
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 import shutil
@@ -70,6 +74,16 @@ from picbreeder_reproduction import PicbreederReproduction
 from rendering import _draw_dotted_rectangle, create_numbered_grid
 from utils import apply_random_seed
 
+try:
+    import fcntl  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - platform specific
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - platform specific
+    msvcrt = None  # type: ignore[assignment]
+
 ARCHIVE_DIR_NAME = "archive"
 DEFAULT_AGENT_GENERATIONS = 20
 DEFAULT_CHAT_HISTORY_TURNS = -1  # Unlimited conversational history.
@@ -90,12 +104,11 @@ GOAL_PROMPTS = {
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You are playing with a collaborative online platform which allows users to interactively evolve small neural networks called Compositional Pattern Producing Networks (CPPNs) for generating images. "
     "{goal_prompt} "
-    "This is an open-ended search process. You may set out with certain goals in mind, but be willing to quickly adapt them as new forms arise. "
-    "If a certain evolutionary direction is not progressing, do not choose the same partially-successful parent repeatedly. "
-    "Be willing to give up on local optima and explore new areas of the search space, even without a pre-defined target. "
+    # "This is an open-ended search process. You may set out with certain goals in mind, but be willing to quickly adapt them as new forms arise. "
+    # "If a certain evolutionary direction is not progressing, be willing to explore new areas of the search space, even without a pre-defined target. "
     "At the first generation the initial grid will display an archive of images published by prior users as favorites (unless you are the first user). "
     """You may choose to "branch" one of these images, or start instead from a random initial population. """
-    "At each subsequent generation, you will be shown a grid of numbered images produced by CPPNs. "
+    "At each subsequent generation, you will be shown a set of numbered images produced by CPPNs. "
     "{selection_prompt}"
     "If so inclined, you may also select an image to publish to the online archive. "
     "You must publish at least once during your session. Publishing multiple times is allowed, though the most recent publication overwrites any previous ones. "
@@ -104,7 +117,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "Do not add something to the archive that is identical to an existing image. "
     "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
     "(During branching, you may select only one image from which to branch; "
-    " set selected to null to start from a fresh population.) "
+    " set \"selected\" to null to start from a fresh population.) "
     "You may also include a \"publish\" field in the JSON response if you wish to publish an image from this grid. It should have the form: "
     '{{"index": image_index, "title": "image title", "reason": "brief publication note"}}. '
     # "(Also, for debugging, please tell me how many previous grids you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
@@ -128,10 +141,10 @@ MUTATION_STRENGTH_PROMPT = (
 
 def gen_selection_prompt(select_k: Optional[int]) -> str:
     if select_k is None:
-        return "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation (using mutation only; no crossover)."
+        return "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation (using mutation only; no crossover). "
     if select_k == 1:
         return "Pick one image by its numeric label--the corresponding CPPN will be used as the parent of the next generation. "
-    return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. (using mutation only; no crossover)."
+    return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. (using mutation only; no crossover). "
 
 
 PARENT_SELECTION_PROMPT = "Above is the grid at generation {generation}."
@@ -142,6 +155,52 @@ ARCHIVE_BRANCHING_PROMPT = (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent
+PATH_FIELDS = {"config_path", "experiment_dir"}
+
+
+def _lock_file_handle(handle: Any) -> bool:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return True
+    if msvcrt is not None:  # pragma: no cover - windows specific
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return True
+    return False
+
+
+def _unlock_file_handle(handle: Any) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    elif msvcrt is not None:  # pragma: no cover - windows specific
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+@contextlib.contextmanager
+def interprocess_lock(lock_path: Path) -> Iterable[None]:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        locked = _lock_file_handle(handle)
+        try:
+            yield
+        finally:
+            if locked:
+                _unlock_file_handle(handle)
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        tmp_path.replace(path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @dataclass
@@ -241,6 +300,7 @@ class ArchiveManager:
     def __init__(self, archive_dir: Path) -> None:
         self.archive_dir = archive_dir
         self.metadata_file = archive_dir / "archive_metadata.json"
+        self._lock_path = self.metadata_file.with_suffix(".lock")
         self.images_dir = archive_dir / "images"
         self.genomes_dir = archive_dir / "genomes"
         self.checkpoints_dir = archive_dir / "checkpoints"
@@ -274,17 +334,22 @@ class ArchiveManager:
             self._persist()
 
     def _persist(self) -> None:
-        with self.metadata_file.open("w", encoding="utf-8") as fp:
-            json.dump(self._metadata, fp, indent=2)
+        _atomic_write_json(self.metadata_file, self._metadata)
+
+    def refresh(self) -> None:
+        """Reload metadata from disk to incorporate external updates."""
+        self._load()
 
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
     @property
     def entries(self) -> List[Dict[str, Any]]:
+        self.refresh()
         return list(self._metadata.get("entries", []))
 
     def get_elite_names(self, max_length: int = 80) -> List[str]:
+        self.refresh()
         names: List[str] = []
         for entry in self._metadata.get("entries", []):
             title = str(entry.get("title") or "").strip()
@@ -302,6 +367,7 @@ class ArchiveManager:
         return names
 
     def get_entry(self, entry_id: str) -> Optional[ArchiveEntry]:
+        self.refresh()
         for raw in self._metadata.get("entries", []):
             if raw.get("id") == entry_id:
                 try:
@@ -331,42 +397,45 @@ class ArchiveManager:
     ) -> ArchiveEntry:
         """Persist a favourite image and genome into the shared archive."""
 
-        entry_id = f"img_{self._metadata['next_id']:06d}"
-        self._metadata["next_id"] += 1
+        with interprocess_lock(self._lock_path):
+            self.refresh()
+            entry_id = f"img_{self._metadata['next_id']:06d}"
+            self._metadata["next_id"] += 1
 
-        image_path = self.images_dir / f"{entry_id}.png"
-        image_path.write_bytes(image_bytes)
+            image_path = self.images_dir / f"{entry_id}.png"
+            image_path.write_bytes(image_bytes)
 
-        genome_path = self.genomes_dir / f"{entry_id}.pkl"
-        with genome_path.open("wb") as handle:
-            pickle.dump(genome, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            genome_path = self.genomes_dir / f"{entry_id}.pkl"
+            with genome_path.open("wb") as handle:
+                pickle.dump(genome, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        archive_entry = ArchiveEntry(
-            entry_id=entry_id,
-            title=title,
-            image_path=image_path,
-            genome_path=genome_path,
-            agent_id=agent_id,
-            generation=generation,
-            image_index=image_index,
-            rationale=rationale,
-            source_experiment=source_experiment,
-            added_at=datetime.now(),
-            metadata_path=favorite_log_path,
-            selection_grid_path=selection_grid_path,
-            genome_key=genome_key,
-            parent_genome_keys=list(parent_genome_keys or []),
-            source_entry_ids=[str(value) for value in (source_entry_ids or [])],
-            ancestor_genome_keys=list(ancestor_genome_keys or []),
-            color_enabled=bool(color_enabled),
-        )
+            archive_entry = ArchiveEntry(
+                entry_id=entry_id,
+                title=title,
+                image_path=image_path,
+                genome_path=genome_path,
+                agent_id=agent_id,
+                generation=generation,
+                image_index=image_index,
+                rationale=rationale,
+                source_experiment=source_experiment,
+                added_at=datetime.now(),
+                metadata_path=favorite_log_path,
+                selection_grid_path=selection_grid_path,
+                genome_key=genome_key,
+                parent_genome_keys=list(parent_genome_keys or []),
+                source_entry_ids=[str(value) for value in (source_entry_ids or [])],
+                ancestor_genome_keys=list(ancestor_genome_keys or []),
+                color_enabled=bool(color_enabled),
+            )
 
-        self._metadata.setdefault("entries", []).append(archive_entry.as_dict())
-        self._persist()
-        self._write_checkpoint(archive_entry)
-        return archive_entry
+            self._metadata.setdefault("entries", []).append(archive_entry.as_dict())
+            self._persist()
+            self._write_checkpoint(archive_entry)
+            return archive_entry
 
     def load_genome(self, entry_id: str) -> Optional[neat.DefaultGenome]:
+        self.refresh()
         for entry in self._metadata.get("entries", []):
             if entry.get("id") != entry_id:
                 continue
@@ -378,6 +447,7 @@ class ArchiveManager:
         return None
 
     def create_archive_grid(self, thumb_size: int = 200) -> Optional[Path]:
+        self.refresh()
         entries = self.entries
         if not entries:
             return None
@@ -445,22 +515,24 @@ class ArchiveManager:
             json.dump(snapshot, fp, indent=2)
 
     def remove_entry(self, entry_id: str) -> bool:
-        entries = self._metadata.get("entries", [])
-        for index, entry in enumerate(entries):
-            if entry.get("id") != entry_id:
-                continue
-            for key in ("image_path", "genome_path"):
-                path_value = entry.get(key)
-                if not path_value:
+        with interprocess_lock(self._lock_path):
+            self.refresh()
+            entries = self._metadata.get("entries", [])
+            for index, entry in enumerate(entries):
+                if entry.get("id") != entry_id:
                     continue
-                try:
-                    Path(path_value).unlink(missing_ok=True)
-                except OSError:
-                    pass
-            del entries[index]
-            self._metadata["entries"] = entries
-            self._persist()
-            return True
+                for key in ("image_path", "genome_path"):
+                    path_value = entry.get(key)
+                    if not path_value:
+                        continue
+                    try:
+                        Path(path_value).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                del entries[index]
+                self._metadata["entries"] = entries
+                self._persist()
+                return True
         return False
 
 
@@ -538,11 +610,20 @@ def _clamp(value: int, lower: int, upper: int) -> int:
 
 
 @dataclass
+class ImageVariantPaths:
+    color: Path
+    gray: Path
+
+    def for_color_mode(self, color_enabled: bool) -> Path:
+        return self.color if color_enabled else self.gray
+
+
+@dataclass
 class GenerationArtifacts:
     state_path: Path
     grid_path: Path
     selection_path: Path
-    image_paths: Dict[int, Path] = field(default_factory=dict)
+    image_paths: Dict[int, ImageVariantPaths] = field(default_factory=dict)
     genome_snapshots: Dict[int, neat.DefaultGenome] = field(default_factory=dict)
 
 
@@ -572,12 +653,16 @@ class CollaborativeAgentRunner:
         resume_mode: bool = False,
         warm_start_active: bool = False,
         render_genome_diagrams: bool = False,
+        process_index: Optional[int] = None,
     ) -> None:
         self.agent_id = agent_id
         self.agent_dir = agent_dir
         self.config = config
-        # Save running latest image in parent of agent directory
-        self.latest_img_path = agent_dir.parent / "latest_image.png"
+        agents_dir = agent_dir.parent
+        # Save running latest images (global + per-process)
+        self.latest_img_paths: List[Path] = [agents_dir / "latest_image.png"]
+        if process_index is not None:
+            self.latest_img_paths.append(agents_dir / f"latest_image_proc_{process_index}.png")
         self.archive_manager = archive_manager
         self.generations = generations
         self.rows = rows
@@ -638,10 +723,10 @@ class CollaborativeAgentRunner:
         if (self.scheme == "color" or self.scheme == "toggle"):
             color_prompt = (
                 "By default, you will be presented with grayscale versions of the images. "
-                "Respond with a JSON containing a single `color` field set to true/false to instead view color/grayscale images. "
+                "Respond with a JSON containing a single `color` field set to true/false to switch between color/grayscale images. "
                 "(This response does not affect which images are selected for breeding; it only changes how the current grid is displayed. Include no other fields in the JSON in this case.) "
-                "It would be nice to have color images in the online archive, but we do not want it to be domainated by high-frequency rainbow artefacts. "
-                "It's probably a good idea to focus largely on evolving grayscale structure first, only playing with color every once in a while to enhance a compelling structural form. "
+                "It would be a bonus to have some color images in the online archive, but we DO NOT want it to be dominated by high-frequency rainbow artefacts. "
+                "90% of the images in the archive should be grayscale, and you should spend at least 90% of your time exploring grayscale images. "
             )
         else:
             color_prompt = ""
@@ -659,8 +744,8 @@ class CollaborativeAgentRunner:
                 )
             else:
                 mutation_mode_prompt = (
-                    "If `color` is on, then at each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
-                    "or to mutate the entire CPPN. Indicate your choice in a `mutation_mode` field in your JSON response, set to either `color_only`, `structure_only`, or `all`. "
+                    "If \"color\" is on, then at each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
+                    "or to mutate the entire CPPN. Indicate your choice in a \"mutation_mode\" field in your JSON response, set to either \"color_only\", \"structure_only\", or \"all\". "
                 )
         else:
             mutation_mode_prompt = ""
@@ -694,6 +779,7 @@ class CollaborativeAgentRunner:
         self.branching_decision: Dict[str, Any] = {}
         self.favorite_decision: Dict[str, Any] = {}
         self.favorite_archive_entry: Optional[ArchiveEntry] = None
+        self._pending_publication_request: Optional[Dict[str, Any]] = None
         self._generation_records: Dict[int, GenerationArtifacts] = {}
         self._selection_history_path = self.logs_dir / "selection_history.jsonl"
         self._selection_history_path.touch(exist_ok=True)
@@ -702,12 +788,56 @@ class CollaborativeAgentRunner:
         self._current_publication_entry_id: Optional[str] = None
         self._lineage_log_path = self.logs_dir / "lineage.jsonl"
         self._lineage_log_path.touch(exist_ok=True)
+        self._pending_publication_path = self.logs_dir / "pending_publication.json"
+        self._load_pending_publication()
         self._archive_seed_map: Dict[int, Dict[str, Any]] = {}
         self._genome_lineage: Dict[int, Dict[str, Any]] = {}
         self.render_genome_diagrams = render_genome_diagrams
         self._diagram_warning_emitted = False
         if self.resume_mode:
             self._load_existing_publication_state()
+
+    def _update_latest_image(self, source_path: Path) -> None:
+        for target in self.latest_img_paths:
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(source_path, target)
+            except OSError:
+                continue
+
+    def _load_pending_publication(self) -> None:
+        if not self._pending_publication_path.exists():
+            return
+        try:
+            payload = json.loads(self._pending_publication_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+        favorite = payload.get("favorite")
+        if not isinstance(favorite, dict):
+            return
+        self._pending_publication_request = payload
+        self.favorite_decision = favorite
+
+    def _validate_branch_indices(
+        self,
+        selected_indices: Sequence[int],
+        archive_entries: Sequence[Dict[str, Any]],
+    ) -> Tuple[List[int], List[int]]:
+        valid: List[int] = []
+        invalid: List[int] = []
+        for idx in selected_indices:
+            if 0 <= idx < len(archive_entries):
+                path_value = archive_entries[idx].get("image_path")
+                if path_value and Path(path_value).exists():
+                    valid.append(idx)
+                    continue
+            invalid.append(idx)
+        return valid, invalid
+
+    def _has_publication(self) -> bool:
+        return bool(self.favorite_archive_entry or self._pending_publication_request)
 
     def _normalize_mutation_mode(self, mode: Optional[str]) -> str:
         candidate = str(mode).lower() if mode is not None else ""
@@ -814,6 +944,31 @@ class CollaborativeAgentRunner:
                 return False
         return None
 
+    def _build_archive_query_parts(
+        self,
+        entries: Sequence[Dict[str, Any]],
+    ) -> Tuple[List[Tuple[bytes, str]], List[Dict[str, Any]]]:
+        parts: List[Tuple[bytes, str]] = []
+        metadata: List[Dict[str, Any]] = []
+        for index, entry in enumerate(entries):
+            image_path_value = entry.get("image_path")
+            image_path = Path(image_path_value)
+            image_bytes = image_path.read_bytes()
+            title_value = str(entry.get("title") or "").strip()
+            caption = f"Image {index}"
+            if title_value:
+                caption = f"{caption}: {title_value}"
+            parts.append((image_bytes, caption))
+            metadata.append(
+                {
+                    "index": index,
+                    "caption": caption,
+                    "image_path": str(image_path),
+                    "image_b64": base64.b64encode(image_bytes).decode("ascii"),
+                }
+            )
+        return parts, metadata
+
     def _color_output_keys(self) -> Tuple[int, ...]:
         output_keys = list(getattr(self.neat_config.genome_config, "output_keys", ()))
         if len(output_keys) >= 3:
@@ -890,42 +1045,42 @@ class CollaborativeAgentRunner:
                 elite_names=elite_names,
             )
 
-            with archive_grid.open("rb") as fp:
-                grid_bytes = fp.read()
+            image_caption_pairs, input_parts_metadata = self._build_archive_query_parts(archive_entries)
 
-                response = query_with_history(
-                    grid_bytes,
-                    prompt=archive_prompt,
-                    system_instruction=self.system_instruction,
-                    chat_history_turns=self.chat_history_turns,
-                )
+            response = query_with_history(
+                image_caption_pairs,
+                prompt=archive_prompt,
+                system_instruction=self.system_instruction,
+                chat_history_turns=self.chat_history_turns,
+            )
 
-                response_text = getattr(response, "text", "") or ""
-                try:
-                    parsed = extract_json_object(response_text)
-                except Exception:
-                    parsed = {}
+            response_text = getattr(response, "text", "") or ""
+            try:
+                parsed = extract_json_object(response_text)
+            except Exception:
+                parsed = {}
 
-                selected_images = parsed.get("selected", [])
-                selected_images = [] if selected_images is None else selected_images
-                selected_images = _ensure_int_list(selected_images)
-                selected_images = [idx for idx in selected_images if 0 <= idx < len(archive_entries)][:1]
-                if len(selected_images) > 1:
-                    breakpoint()
-                rationale = str(parsed.get("rationale", ""))
-                choice = "branch" if selected_images else "fresh"
-                decision = {
-                    "choice": choice,
-                    "selected_images": selected_images,
-                    "rationale": rationale,
-                    "raw_response": response_text,
-                    "timestamp": datetime.now().isoformat(),
-                    "archive_grid_path": str(archive_grid),
-                    "archive_elite_names": elite_name_list,
-                }
-                if choice == "branch":
-                    preview_path = self._save_archive_branch_preview(decision, archive_entries)
-                    decision["branch_preview_path"] = str(preview_path)
+            selected_images = parsed.get("selected", [])
+            selected_images = [] if selected_images is None else selected_images
+            selected_images = _ensure_int_list(selected_images)
+            selected_images = [idx for idx in selected_images if 0 <= idx < len(archive_entries)][:1]
+            if len(selected_images) > 1:
+                breakpoint()
+            rationale = str(parsed.get("rationale", ""))
+            choice = "branch" if selected_images else "fresh"
+            decision = {
+                "choice": choice,
+                "selected_images": selected_images,
+                "rationale": rationale,
+                "raw_response": response_text,
+                "timestamp": datetime.now().isoformat(),
+                "archive_grid_path": str(archive_grid),
+                "archive_elite_names": elite_name_list,
+                "input_parts": input_parts_metadata,
+            }
+            if choice == "branch":
+                preview_path = self._save_archive_branch_preview(decision, archive_entries)
+                decision["branch_preview_path"] = str(preview_path)
 
         if archive_entries:
             selected_entry_ids = [
@@ -1047,16 +1202,17 @@ class CollaborativeAgentRunner:
         )
         color_state = states["color"]
         gray_state = states["gray"]
-        cache = caches["color"]
+        color_cache = caches["color"]
+        gray_cache = caches["gray"]
 
-        state_path = save_neat_population(color_state, self.population_dir, generation, cache)
+        state_path = save_neat_population(color_state, self.population_dir, generation, color_cache)
 
         system_instruction = self.system_instruction
         prompt_template = self.prompt_template
         require_selection = True
         if generation == self.generations - 1:
             require_selection = False
-            require_publish = self.favorite_archive_entry is None
+            require_publish = not self._has_publication()
             if require_publish:
                 prompt_template += (
                     " You have not published any favorite yet and this is the final generation; "
@@ -1111,7 +1267,7 @@ class CollaborativeAgentRunner:
                 )
                 grid_path_candidate = self._resolve_query_path(selection_meta_candidate.get("grid_path"))
                 if grid_path_candidate is not None and grid_path_candidate.exists():
-                    shutil.copy(grid_path_candidate, self.latest_img_path)
+                    self._update_latest_image(grid_path_candidate)
                 requested_color = self._coerce_bool(selection_meta_candidate.get("color"))
                 if requested_color is not None and requested_color != self._color_enabled:
                     self._color_enabled = requested_color
@@ -1127,7 +1283,7 @@ class CollaborativeAgentRunner:
             grid_image = create_numbered_grid(state)
             grid_path = self.query_dir / f"gen_{generation:03d}_view_{view_index:02d}_grid.png"
             grid_image.save(grid_path, format="PNG")
-            shutil.copy(grid_path, self.latest_img_path)
+            self._update_latest_image(grid_path)
             selection_meta_raw = self._select_parents_baseline(
                 generation,
                 genomes,
@@ -1153,7 +1309,7 @@ class CollaborativeAgentRunner:
         selection_path_value = selection_meta.get("selection_path")
         selection_path = Path(selection_path_value) if selection_path_value else Path(grid_path)
         if selection_path.exists():
-            shutil.copy(selection_path, self.latest_img_path)
+            self._update_latest_image(selection_path)
         selected_indices: Sequence[int] = selection_meta["selected"]
         publish_details: Optional[Dict[str, Any]] = None
         for idx, (_, genome) in enumerate(genomes):
@@ -1161,13 +1317,16 @@ class CollaborativeAgentRunner:
 
         images_dir = self.images_dir / f"gen_{generation:03d}"
         images_dir.mkdir(parents=True, exist_ok=True)
-        image_paths: Dict[int, Path] = {}
+        image_paths: Dict[int, ImageVariantPaths] = {}
         genome_snapshots: Dict[int, neat.DefaultGenome] = {}
         for idx, (_, genome) in enumerate(genomes):
-            png_bytes = cache[idx]
-            image_path = images_dir / f"idx_{idx:02d}.png"
-            image_path.write_bytes(png_bytes)
-            image_paths[idx] = image_path
+            color_bytes = color_cache[idx]
+            gray_bytes = gray_cache[idx]
+            color_path = images_dir / f"idx_{idx:02d}.png"
+            gray_path = images_dir / f"idx_{idx:02d}_gray.png"
+            color_path.write_bytes(color_bytes)
+            gray_path.write_bytes(gray_bytes)
+            image_paths[idx] = ImageVariantPaths(color=color_path, gray=gray_path)
             genome_snapshots[idx] = copy.deepcopy(genome)
 
         record = GenerationArtifacts(
@@ -1193,7 +1352,7 @@ class CollaborativeAgentRunner:
                     "raw": None,
                 }
 
-        publication_committed = False
+        publication_scheduled = False
         publish_index_for_highlight: Optional[int] = None
         previous_entry_id = self._current_publication_entry_id
         if publish_payload is not None:
@@ -1213,19 +1372,19 @@ class CollaborativeAgentRunner:
                     "title": favorite_title,
                 }
                 publish_index_for_highlight = publish_index
-                entry = self._apply_publication(
+                scheduled = self._apply_publication(
                     favorite,
                     forced=False,
                     response_text=selection_meta.get("response_text"),
                     source="vlm",
                     replaced_entry_id=previous_entry_id,
                 )
-                publication_committed = entry is not None
+                publication_scheduled = scheduled
                 selection_meta["publish"] = {
                     "index": publish_index,
                     "reason": favorite_reason,
                 }
-                if publication_committed:
+                if scheduled:
                     publish_index_for_highlight = publish_index
             else:
                 selection_meta["publish_error"] = {
@@ -1237,9 +1396,9 @@ class CollaborativeAgentRunner:
             selection_meta["publish"] = None
 
         if (
-            not publication_committed
+            not publication_scheduled
             and generation == self.generations - 1
-            and self.favorite_archive_entry is None
+            and not self._has_publication()
             and record.image_paths
         ):
             fallback_index = self._choose_forced_publication_index(selected_indices, record)
@@ -1257,14 +1416,14 @@ class CollaborativeAgentRunner:
                 "title": favorite.get("title"),
             }
             publish_index_for_highlight = fallback_index
-            entry = self._apply_publication(
+            scheduled = self._apply_publication(
                 favorite,
                 forced=True,
                 response_text=selection_meta.get("response_text"),
                 source="forced",
                 replaced_entry_id=previous_entry_id,
             )
-            if entry is not None:
+            if scheduled:
                 selection_meta["forced_publish"] = {
                     "index": fallback_index,
                     "rationale": forced_rationale,
@@ -1312,11 +1471,18 @@ class CollaborativeAgentRunner:
         if record is None:
             return None
 
-        image_path = record.image_paths.get(index)
+        image_variants = record.image_paths.get(index)
         genome = record.genome_snapshots.get(index)
-        if image_path is None or genome is None:
+        if image_variants is None or genome is None:
             return None
 
+        prefer_color = bool(favorite.get("color_enabled", False))
+        if isinstance(image_variants, ImageVariantPaths):
+            image_path = image_variants.for_color_mode(prefer_color)
+        else:
+            image_path = image_variants
+        if image_path is None or not image_path.exists():
+            return None
         image_bytes = image_path.read_bytes()
         favourite_log_path = self.logs_dir / "favorite_selection.json"
         if favourite_log_path.exists():
@@ -1339,7 +1505,7 @@ class CollaborativeAgentRunner:
             parent_genome_keys=favorite.get("parent_genome_keys"),
             source_entry_ids=favorite.get("source_archive_entry_ids"),
             ancestor_genome_keys=favorite.get("ancestor_genome_keys"),
-            color_enabled=favorite.get("color_enabled", False),
+            color_enabled=prefer_color,
         )
         return entry
 
@@ -1562,7 +1728,7 @@ class CollaborativeAgentRunner:
         response_text: Optional[str],
         source: str,
         replaced_entry_id: Optional[str],
-    ) -> Optional[ArchiveEntry]:
+    ) -> bool:
         generation_raw = favorite.get("generation")
         index_raw = favorite.get("index")
         title = favorite.get("title", "")
@@ -1622,29 +1788,60 @@ class CollaborativeAgentRunner:
 
         self._write_favorite_log(payload)
 
-        if replaced_entry_id is not None:
-            self.archive_manager.remove_entry(replaced_entry_id)
-            self.favorite_archive_entry = None
-            self._current_publication_entry_id = None
+        pending_request = {
+            "favorite": payload,
+            "forced": forced,
+            "response_text": response_text,
+            "source": source,
+            "replaced_entry_id": replaced_entry_id,
+        }
+        self._pending_publication_request = pending_request
+        try:
+            self._pending_publication_path.write_text(
+                json.dumps(pending_request, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        self.favorite_decision = payload
+        print(
+            f"[{self.agent_id}] Queued publication for generation={generation_int}, index={index_int}, title='{title}', forced={payload.get('forced')}."
+        )
+        return True
 
-        entry = self.publish_to_archive(payload)
+    def commit_pending_publication(self) -> Optional[ArchiveEntry]:
+        if not self._pending_publication_request:
+            return self.favorite_archive_entry
+        pending = self._pending_publication_request
+        favorite = pending.get("favorite", {})
+        if not isinstance(favorite, dict):
+            return self.favorite_archive_entry
+        replaced_entry_id = pending.get("replaced_entry_id")
+        entry = self.publish_to_archive(favorite)
         if entry is None:
-            return None
-
-        payload["archive_entry_id"] = entry.entry_id
+            print(f"[{self.agent_id}] Pending publication failed; entry could not be created.")
+            return self.favorite_archive_entry
+        favorite["archive_entry_id"] = entry.entry_id
+        genome_key = favorite.get("genome_key")
         if genome_key is not None:
             self._archive_seed_map[genome_key] = {
                 "entry_id": entry.entry_id,
                 "agent_id": self.agent_id,
-                "generation": generation_int,
+                "generation": favorite.get("generation"),
             }
-        self._append_publication_history(payload)
-
+        self._append_publication_history(favorite)
+        if replaced_entry_id:
+            self.archive_manager.remove_entry(replaced_entry_id)
         self.favorite_archive_entry = entry
-        self.favorite_decision = payload
+        self.favorite_decision = favorite
         self._current_publication_entry_id = entry.entry_id
+        self._pending_publication_request = None
+        try:
+            self._pending_publication_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         print(
-            f"[{self.agent_id}] Publication committed: generation={generation_int}, index={index_int}, title='{title}', forced={payload.get('forced')}"
+            f"[{self.agent_id}] Publication committed: generation={favorite.get('generation')}, index={favorite.get('index')}, title='{favorite.get('title', '')}', forced={favorite.get('forced')}."
         )
         return entry
 
@@ -1751,7 +1948,7 @@ class CollaborativeAgentRunner:
                     width=5,
                 )
             preview.save(output_path, format="PNG")
-            shutil.copy(output_path, self.latest_img_path)
+            self._update_latest_image(output_path)
 
         return output_path
 
@@ -1907,6 +2104,7 @@ class CollaborativeMultiAgentOrchestrator:
         seed: Optional[int],
         chat_history_turns: int,
         render_genome_diagrams: bool = False,
+        process_index: Optional[int] = None,
     ) -> None:
         self.config = config
         self.experiment_dir = experiment_dir
@@ -1923,48 +2121,86 @@ class CollaborativeMultiAgentOrchestrator:
         self.selection_baseline = selection_baseline
         self.seed = seed
         self.render_genome_diagrams = render_genome_diagrams
+        self.process_index = process_index
 
         self.archive_manager = ArchiveManager(self.experiment_dir / ARCHIVE_DIR_NAME)
         self.agents_dir = self.experiment_dir / "agents"
         self.agents_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_path = self.experiment_dir / "agents_metadata.json"
+        self._metadata_lock_path = self.metadata_path.with_suffix(".lock")
         self._metadata = self._load_metadata()
         self._ensure_run_config()
 
     def _load_metadata(self) -> Dict[str, Any]:
-        if self.metadata_path.exists():
-            with self.metadata_path.open("r", encoding="utf-8") as handle:
-                metadata = json.load(handle)
-            metadata.setdefault("agents", [])
-            metadata.setdefault("next_agent_number", 0)
-            metadata.setdefault("run_config", None)
-            changed = False
-            if self.seed is not None and metadata.get("seed") != self.seed:
-                metadata["seed"] = self.seed
-                changed = True
-            elif self.seed is None and metadata.get("seed") is not None:
-                self.seed = metadata.get("seed")
-            for record in metadata["agents"]:
-                if "status" not in record:
-                    record["status"] = "complete" if record.get("completed_at") else "in_progress"
-                    changed = True
-                if "last_generation" not in record:
-                    record["last_generation"] = None
-                    changed = True
+        with interprocess_lock(self._metadata_lock_path):
+            if self.metadata_path.exists():
+                metadata = self._read_metadata_file()
+            else:
+                metadata = self._default_metadata()
+                self._write_metadata_file(metadata)
+            metadata, changed = self._ensure_metadata_defaults(metadata)
             if changed:
-                self._persist_metadata(metadata)
-            return metadata
-        metadata = {
+                self._write_metadata_file(metadata)
+        return metadata
+
+    def _default_metadata(self) -> Dict[str, Any]:
+        return {
             "created_at": datetime.now().isoformat(),
             "next_agent_number": 0,
             "agents": [],
             "seed": self.seed,
             "run_config": None,
         }
-        self._persist_metadata(metadata)
+
+    def _read_metadata_file(self) -> Dict[str, Any]:
+        with self.metadata_path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def _write_metadata_file(self, metadata: Dict[str, Any]) -> None:
+        _atomic_write_json(self.metadata_path, metadata)
+
+    def _ensure_metadata_defaults(self, metadata: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        changed = False
+        metadata.setdefault("agents", [])
+        metadata.setdefault("next_agent_number", 0)
+        metadata.setdefault("run_config", None)
+        if self.seed is not None and metadata.get("seed") != self.seed:
+            metadata["seed"] = self.seed
+            changed = True
+        elif self.seed is None and metadata.get("seed") is not None:
+            self.seed = metadata.get("seed")
+        for record in metadata["agents"]:
+            if "status" not in record:
+                record["status"] = "complete" if record.get("completed_at") else "in_progress"
+                changed = True
+            if "last_generation" not in record:
+                record["last_generation"] = None
+                changed = True
+        return metadata, changed
+
+    def _reload_metadata(self) -> Dict[str, Any]:
+        if self.metadata_path.exists():
+            metadata = self._read_metadata_file()
+        else:
+            metadata = self._default_metadata()
+        metadata, _ = self._ensure_metadata_defaults(metadata)
+        self._metadata = metadata
         return metadata
 
+    def _mutate_metadata(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
+        with interprocess_lock(self._metadata_lock_path):
+            if self.metadata_path.exists():
+                metadata = self._read_metadata_file()
+            else:
+                metadata = self._default_metadata()
+            metadata, _ = self._ensure_metadata_defaults(metadata)
+            result = mutator(metadata)
+            self._write_metadata_file(metadata)
+        self._metadata = metadata
+        return result
+
     def _ensure_run_config(self) -> None:
+        self._reload_metadata()
         run_config = {
             "rows": self.rows,
             "cols": self.cols,
@@ -1978,15 +2214,21 @@ class CollaborativeMultiAgentOrchestrator:
         }
         existing = self._metadata.get("run_config")
         if existing is None:
-            self._metadata["run_config"] = run_config
-            self._persist_metadata(self._metadata)
+            self._mutate_metadata(lambda data: data.__setitem__("run_config", run_config))
             return
+        missing = []
         if "warm_start_structure" not in existing:
-            existing["warm_start_structure"] = 0
-            self._persist_metadata(self._metadata)
+            missing.append(("warm_start_structure", 0))
         if "selection_baseline" not in existing:
-            existing["selection_baseline"] = "none"
-            self._persist_metadata(self._metadata)
+            missing.append(("selection_baseline", "none"))
+        if missing:
+            def mutator(data: Dict[str, Any]) -> None:
+                details = data.setdefault("run_config", {})
+                for key, value in missing:
+                    details.setdefault(key, value)
+
+            self._mutate_metadata(mutator)
+            existing = self._metadata.get("run_config")
         mismatches = {
             key: (existing.get(key), value) for key, value in run_config.items() if existing.get(key) != value
         }
@@ -1999,18 +2241,17 @@ class CollaborativeMultiAgentOrchestrator:
                 f"Use a fresh experiment directory or matching parameters ({details})."
             )
 
-    def _persist_metadata(self, metadata: Dict[str, Any]) -> None:
-        with self.metadata_path.open("w", encoding="utf-8") as handle:
-            json.dump(metadata, handle, indent=2)
-
     def _allocate_agent_id(self) -> str:
-        agent_number = self._metadata.get("next_agent_number", 0)
-        agent_id = f"{AGENT_DIR_PREFIX}{agent_number:03d}"
-        self._metadata["next_agent_number"] = agent_number + 1
-        self._persist_metadata(self._metadata)
-        return agent_id
+        def mutator(metadata: Dict[str, Any]) -> int:
+            agent_number = metadata.get("next_agent_number", 0)
+            metadata["next_agent_number"] = agent_number + 1
+            return agent_number
 
-    def _parse_agent_index(self, agent_id: str) -> Optional[int]:
+        agent_number = self._mutate_metadata(mutator)
+        return self._agent_id_from_index(agent_number)
+
+    @staticmethod
+    def _parse_agent_index(agent_id: str) -> Optional[int]:
         if not agent_id.startswith(AGENT_DIR_PREFIX):
             return None
         suffix = agent_id[len(AGENT_DIR_PREFIX) :]
@@ -2018,6 +2259,19 @@ class CollaborativeMultiAgentOrchestrator:
             return int(suffix)
         except ValueError:
             return None
+
+    def _agent_id_from_index(self, index: int) -> str:
+        return f"{AGENT_DIR_PREFIX}{index:03d}"
+
+    def _ensure_agent_number_progress(self, agent_id: str) -> None:
+        index = self._parse_agent_index(agent_id)
+        if index is None:
+            raise ValueError(f"Invalid agent identifier '{agent_id}'.")
+
+        def mutator(metadata: Dict[str, Any]) -> None:
+            metadata["next_agent_number"] = max(metadata.get("next_agent_number", 0), index + 1)
+
+        self._mutate_metadata(mutator)
 
     def _is_warm_start_agent(self, agent_id: str) -> bool:
         if self.warm_start_structure <= 0:
@@ -2032,61 +2286,77 @@ class CollaborativeMultiAgentOrchestrator:
         return None
 
     def _register_agent(self, agent_id: str, agent_dir: Path) -> Dict[str, Any]:
-        record = {
-            "agent_id": agent_id,
-            "agent_dir": str(agent_dir),
-            "branching_decision": None,
-            "favorite_selection": None,
-            "archive_entry": None,
-            "status": "in_progress",
-            "created_at": datetime.now().isoformat(),
-            "last_generation": 0,
-        }
-        self._metadata.setdefault("agents", []).append(record)
-        self._persist_metadata(self._metadata)
-        return record
+        def mutator(metadata: Dict[str, Any]) -> Dict[str, Any]:
+            agents = metadata.setdefault("agents", [])
+            for record in agents:
+                if record.get("agent_id") == agent_id:
+                    return record
+            record = {
+                "agent_id": agent_id,
+                "agent_dir": str(agent_dir),
+                "branching_decision": None,
+                "favorite_selection": None,
+                "archive_entry": None,
+                "status": "in_progress",
+                "created_at": datetime.now().isoformat(),
+                "last_generation": 0,
+            }
+            agents.append(record)
+            return record
+
+        return self._mutate_metadata(mutator)
 
     def _update_agent_record(self, agent_id: str, **updates: Any) -> None:
-        record = self._find_agent_record(agent_id)
-        if record is None:
-            return
-        record.update(updates)
-        self._persist_metadata(self._metadata)
+        def mutator(metadata: Dict[str, Any]) -> None:
+            for record in metadata.get("agents", []):
+                if record.get("agent_id") == agent_id:
+                    record.update(updates)
+                    break
 
-    def _count_finished_agents(self) -> int:
-        finished = {"complete", "extinct"}
-        return sum(1 for record in self._metadata.get("agents", []) if record.get("status") in finished)
+        self._mutate_metadata(mutator)
 
-    def _find_agent_to_resume(self, resume_agent_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _find_agent_to_resume(
+        self,
+        resume_agent_id: Optional[str],
+        allowed_agent_ids: Optional[Set[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        self._reload_metadata()
         agents = self._metadata.get("agents", [])
+        finished = {"complete", "extinct"}
         if resume_agent_id:
+            if allowed_agent_ids is not None and resume_agent_id not in allowed_agent_ids:
+                return None
             record = next((entry for entry in agents if entry.get("agent_id") == resume_agent_id), None)
             if record is None:
                 raise ValueError(f"Agent '{resume_agent_id}' not found in experiment metadata.")
-            if record.get("status") in {"complete", "extinct"}:
+            if record.get("status") in finished:
                 raise ValueError(f"Agent '{resume_agent_id}' has already completed.")
             return record
         for record in reversed(agents):
-            if record.get("status") not in {"complete", "extinct"}:
+            if allowed_agent_ids is not None and record.get("agent_id") not in allowed_agent_ids:
+                continue
+            if record.get("status") not in finished:
                 return record
         return None
 
     def _hydrate_agent_record_from_disk(self, record: Dict[str, Any]) -> None:
         agent_dir = Path(record["agent_dir"])
         logs_dir = agent_dir / "logs"
-        changed = False
+        updates: Dict[str, Any] = {}
         branch_path = logs_dir / "branching_selection.json"
         if record.get("branching_decision") is None and branch_path.exists():
             try:
-                record["branching_decision"] = json.loads(branch_path.read_text(encoding="utf-8"))
-                changed = True
+                branching = json.loads(branch_path.read_text(encoding="utf-8"))
+                record["branching_decision"] = branching
+                updates["branching_decision"] = branching
             except json.JSONDecodeError:
                 pass
         favourite_path = logs_dir / "favorite_selection.json"
         if record.get("favorite_selection") is None and favourite_path.exists():
             try:
-                record["favorite_selection"] = json.loads(favourite_path.read_text(encoding="utf-8"))
-                changed = True
+                favorite = json.loads(favourite_path.read_text(encoding="utf-8"))
+                record["favorite_selection"] = favorite
+                updates["favorite_selection"] = favorite
             except json.JSONDecodeError:
                 pass
         publication_path = logs_dir / "publication_history.jsonl"
@@ -2107,9 +2377,10 @@ class CollaborativeMultiAgentOrchestrator:
                     record["archive_entry"] = entry.as_dict()
                     if record.get("favorite_selection") is None:
                         record["favorite_selection"] = last_payload
-                    changed = True
-        if changed:
-            self._persist_metadata(self._metadata)
+                        updates.setdefault("favorite_selection", last_payload)
+                    updates["archive_entry"] = record["archive_entry"]
+        if updates:
+            self._update_agent_record(record["agent_id"], **updates)
 
     def _load_population_for_agent(self, agent_dir: Path) -> Tuple[Optional[neat.Population], Optional[Path]]:
         population_dir = agent_dir / "populations"
@@ -2173,6 +2444,7 @@ class CollaborativeMultiAgentOrchestrator:
             resume_mode=resume,
             warm_start_active=self._is_warm_start_agent(agent_id),
             render_genome_diagrams=self.render_genome_diagrams,
+            process_index=self.process_index,
         )
 
     def _on_generation_progress(
@@ -2182,15 +2454,12 @@ class CollaborativeMultiAgentOrchestrator:
         favorite_payload: Optional[Dict[str, Any]],
         archive_payload: Optional[Dict[str, Any]],
     ) -> None:
-        record = self._find_agent_record(agent_id)
-        if record is None:
-            return
-        record["last_generation"] = generation
+        updates: Dict[str, Any] = {"last_generation": generation}
         if favorite_payload is not None:
-            record["favorite_selection"] = favorite_payload
+            updates["favorite_selection"] = favorite_payload
         if archive_payload is not None:
-            record["archive_entry"] = archive_payload
-        self._persist_metadata(self._metadata)
+            updates["archive_entry"] = archive_payload
+        self._update_agent_record(agent_id, **updates)
 
     def _execute_runner(
         self,
@@ -2204,23 +2473,50 @@ class CollaborativeMultiAgentOrchestrator:
                 runner.population.run(runner.evaluate_generation, remaining)
             except CompleteExtinctionException:
                 extinct = True
+        archive_entry = runner.commit_pending_publication()
         favorite = runner.favorite_decision if runner.favorite_decision else None
-        archive_entry = runner.favorite_archive_entry
         final_generation = runner.population.generation
         return favorite, archive_entry, extinct, final_generation
 
-    def run_agents(self, total_agents: int, resume: bool, resume_agent_id: Optional[str]) -> None:
+    def run_agents(
+        self,
+        total_agents: int,
+        resume: bool,
+        resume_agent_id: Optional[str],
+        *,
+        agent_offset: int = 0,
+        agent_stride: int = 1,
+    ) -> None:
+        if agent_stride < 1:
+            raise ValueError("agent_stride must be at least 1")
+        if agent_offset < 0:
+            raise ValueError("agent_offset must be non-negative")
+        self._reload_metadata()
+        target_indices = list(range(agent_offset, total_agents, agent_stride))
+        if not target_indices:
+            return
+        target_ids = {self._agent_id_from_index(index) for index in target_indices}
+        resume_request = resume_agent_id if (resume_agent_id and resume_agent_id in target_ids) else None
         resumed = False
         if resume:
-            resumed = self._resume_agent(resume_agent_id)
-        if resume and not resumed and resume_agent_id:
-            # _resume_agent raises for unknown agent so this only occurs when no pending agents
-            print(f"No in-progress agent found for resume request '{resume_agent_id}'.")
-        while self._count_finished_agents() < total_agents:
-            self._run_new_agent()
+            resumed = self._resume_agent(resume_request, allowed_agent_ids=target_ids)
+            if resume_request and not resumed:
+                print(f"No in-progress agent found for resume request '{resume_request}'.")
+        for index in target_indices:
+            agent_id = self._agent_id_from_index(index)
+            record = self._find_agent_record(agent_id)
+            if record is not None and record.get("status") in {"complete", "extinct"}:
+                continue
+            if record is not None:
+                self._resume_agent(agent_id, allowed_agent_ids={agent_id})
+                continue
+            self._run_new_agent(agent_id=agent_id)
 
-    def _run_new_agent(self) -> None:
-        agent_id = self._allocate_agent_id()
+    def _run_new_agent(self, agent_id: Optional[str] = None) -> None:
+        if agent_id is None:
+            agent_id = self._allocate_agent_id()
+        else:
+            self._ensure_agent_number_progress(agent_id)
         agent_dir = self.agents_dir / agent_id
         agent_dir.mkdir(parents=True, exist_ok=True)
         self._register_agent(agent_id, agent_dir)
@@ -2241,8 +2537,12 @@ class CollaborativeMultiAgentOrchestrator:
             final_generation=final_generation,
         )
 
-    def _resume_agent(self, resume_agent_id: Optional[str]) -> bool:
-        record = self._find_agent_to_resume(resume_agent_id)
+    def _resume_agent(
+        self,
+        resume_agent_id: Optional[str],
+        allowed_agent_ids: Optional[Set[str]] = None,
+    ) -> bool:
+        record = self._find_agent_to_resume(resume_agent_id, allowed_agent_ids=allowed_agent_ids)
         if record is None:
             return False
         self._hydrate_agent_record_from_disk(record)
@@ -2307,20 +2607,19 @@ class CollaborativeMultiAgentOrchestrator:
         extinct: bool,
         final_generation: int,
     ) -> None:
-        record = self._find_agent_record(agent_id)
-        if record is None:
-            return
+        updates: Dict[str, Any] = {
+            "extinct": extinct,
+            "status": "extinct" if extinct else "complete",
+            "completed_at": datetime.now().isoformat(),
+            "last_generation": final_generation,
+        }
         if branching_decision is not None:
-            record["branching_decision"] = branching_decision
+            updates["branching_decision"] = branching_decision
         if favourite is not None:
-            record["favorite_selection"] = favourite
+            updates["favorite_selection"] = favourite
         if archive_entry is not None:
-            record["archive_entry"] = archive_entry.as_dict()
-        record["extinct"] = extinct
-        record["status"] = "extinct" if extinct else "complete"
-        record["completed_at"] = datetime.now().isoformat()
-        record["last_generation"] = final_generation
-        self._persist_metadata(self._metadata)
+            updates["archive_entry"] = archive_entry.as_dict()
+        self._update_agent_record(agent_id, **updates)
 
 
 # ----------------------------------------------------------------------
@@ -2339,10 +2638,11 @@ class CollaborativeConfig:
     config_path: Optional[Path] = None  # Optional override for the NEAT config file
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = DEFAULT_AGENT_GENERATIONS  # Generations executed for each agent
-    num_agents: int = 100  # How many agents run sequentially in this session
+    num_agents: int = 400  # How many agents run sequentially in this session
+    num_proc: int = 1  # Number of parallel agent processes
     warm_start_structure: int = 0  # Number of initial agents restricted to structure-only mutation
     experiment_dir: Optional[Path] = None  # Output directory for logs and artefacts
-    output_activations: bool = False  # Enable CPPN output activation mutations
+    output_activations: bool = True  # Enable CPPN output activation mutations
     input_activations: bool = False
     selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes
     resume: bool = False  # Resume a previously interrupted experiment
@@ -2362,6 +2662,7 @@ class CollaborativeConfig:
                     "  chat_history_turns      Conversation context length (-1 keeps full history).\n"
                     "  agent_generations       Generations executed by each agent.\n"
                     "  num_agents              Sequential agents to schedule for this run.\n"
+                    "  num_proc                Parallel worker processes to launch.\n"
                     "  experiment_dir          Destination for logs, grids, and archives.\n"
                     "  selection_baseline      Automated parent selection (none/random/max-depth/max-nodes).\n"
                     "  resume / resume_agent_id Resume an interrupted run from disk records.\n"
@@ -2400,6 +2701,8 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
         raise ValueError("agent-generations must be at least 1")
     if cfg.num_agents < 1:
         raise ValueError("num-agents must be at least 1")
+    if cfg.num_proc < 1:
+        raise ValueError("num-proc must be at least 1")
     if cfg.select_k is not None and cfg.select_k < 1:
         raise ValueError("select-k must be at least 1 when provided")
     if cfg.warm_start_structure < 0:
@@ -2450,11 +2753,37 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
     return cfg
 
 
-def run(cfg: CollaborativeConfig) -> None:
-    apply_random_seed(cfg.seed)
-    if cfg.selection_baseline == "none":
-        ensure_gemini_key()
-    orchestrator = CollaborativeMultiAgentOrchestrator(
+def _serialize_config_for_worker(cfg: CollaborativeConfig) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    for field_def in fields(CollaborativeConfig):
+        if field_def.name == "hydra":
+            continue
+        value = getattr(cfg, field_def.name)
+        if isinstance(value, Path):
+            payload[field_def.name] = str(value)
+        else:
+            payload[field_def.name] = value
+    return payload
+
+
+def _deserialize_config_for_worker(payload: Dict[str, Any]) -> CollaborativeConfig:
+    kwargs: Dict[str, Any] = {}
+    for field_def in fields(CollaborativeConfig):
+        if field_def.name == "hydra":
+            continue
+        value = payload.get(field_def.name)
+        if field_def.name in PATH_FIELDS and value is not None:
+            value = Path(value)
+        kwargs[field_def.name] = value
+    return CollaborativeConfig(**kwargs)
+
+
+def _build_orchestrator(
+    cfg: CollaborativeConfig,
+    *,
+    process_index: Optional[int] = None,
+) -> CollaborativeMultiAgentOrchestrator:
+    return CollaborativeMultiAgentOrchestrator(
         config=cfg,
         experiment_dir=cfg.experiment_dir,
         rows=cfg.rows,
@@ -2470,14 +2799,74 @@ def run(cfg: CollaborativeConfig) -> None:
         seed=cfg.seed,
         chat_history_turns=cfg.chat_history_turns,
         render_genome_diagrams=cfg.render_genome_diagrams,
+        process_index=process_index,
     )
 
+
+def run(cfg: CollaborativeConfig) -> None:
+    apply_random_seed(cfg.seed)
+    if cfg.selection_baseline == "none":
+        ensure_gemini_key()
+    if cfg.num_proc <= 1:
+        orchestrator = _build_orchestrator(cfg)
+        orchestrator.run_agents(
+            cfg.num_agents,
+            resume=cfg.resume,
+            resume_agent_id=cfg.resume_agent_id,
+        )
+        orchestrator.archive_manager.create_archive_grid(cfg.thumb_size)
+        return
+    _run_parallel(cfg)
+
+
+def _run_parallel(cfg: CollaborativeConfig) -> None:
+    payload = _serialize_config_for_worker(cfg)
+    resume_index: Optional[int] = None
+    if cfg.resume_agent_id:
+        resume_index = CollaborativeMultiAgentOrchestrator._parse_agent_index(cfg.resume_agent_id)
+        if resume_index is None:
+            raise ValueError(f"Invalid --resume-agent-id '{cfg.resume_agent_id}'.")
+    ctx = multiprocessing.get_context("spawn")
+    processes: List[multiprocessing.Process] = []
+    for proc_index in range(cfg.num_proc):
+        resume_for_worker = None
+        if resume_index is not None and resume_index % cfg.num_proc == proc_index:
+            resume_for_worker = cfg.resume_agent_id
+        process = ctx.Process(
+            target=_parallel_worker,
+            args=(proc_index, cfg.num_proc, payload, resume_for_worker),
+        )
+        process.start()
+        processes.append(process)
+    failed: List[int] = []
+    for process in processes:
+        process.join()
+        if process.exitcode != 0:
+            failed.append(process.pid or -1)
+    if failed:
+        raise RuntimeError(f"Parallel worker(s) failed: {failed}")
+    ArchiveManager(cfg.experiment_dir / ARCHIVE_DIR_NAME).create_archive_grid(cfg.thumb_size)
+
+
+def _parallel_worker(
+    proc_index: int,
+    num_proc: int,
+    cfg_payload: Dict[str, Any],
+    resume_agent_id: Optional[str],
+) -> None:
+    cfg = _deserialize_config_for_worker(cfg_payload)
+    worker_seed = None if cfg.seed is None else cfg.seed + proc_index
+    apply_random_seed(worker_seed)
+    if cfg.selection_baseline == "none":
+        ensure_gemini_key()
+    orchestrator = _build_orchestrator(cfg, process_index=proc_index)
     orchestrator.run_agents(
         cfg.num_agents,
         resume=cfg.resume,
-        resume_agent_id=cfg.resume_agent_id,
+        resume_agent_id=resume_agent_id,
+        agent_offset=proc_index,
+        agent_stride=num_proc,
     )
-    orchestrator.archive_manager.create_archive_grid(cfg.thumb_size)
 
 
 cs = ConfigStore.instance()

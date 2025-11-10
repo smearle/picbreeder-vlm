@@ -186,8 +186,6 @@ def render_genome_image(
     gray_image_data, color_image_data = eval_genome_as_grayscale_and_color(genome, config, width, height)
     gray_image = Image.fromarray((np.array(gray_image_data) * 255).astype(np.uint8), mode="L")
     color_image = Image.fromarray(np.array(color_image_data, dtype=np.uint8), mode="RGB")
-    color_image.save("debug_color.png")
-    gray_image.save("debug_gray.png")
     return gray_image, color_image
 
 def render_genome_diagram(

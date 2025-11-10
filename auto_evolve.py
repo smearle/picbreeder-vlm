@@ -1,4 +1,6 @@
 import argparse
+import base64
+import binascii
 import functools
 import json
 import os
@@ -7,7 +9,7 @@ import re
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from statistics import mean, pstdev
 
 import sys
@@ -187,16 +189,15 @@ def _ensure_chat_session(chat_history_turns: Optional[int]) -> Any:
 
 
 def query_with_history(
-    image_bytes: bytes,
+    image_caption_pairs: Sequence[im_query.ImageCaptionInput],
     prompt: str,
-    *,
     system_instruction: Optional[str],
     chat_history_turns: Optional[int],
 ) -> Any:
     session: im_query.ImageChatSession = _ensure_chat_session(chat_history_turns)
     return session.send(
-        image_bytes,
-        prompt,
+        image_caption_pairs=image_caption_pairs,
+        prompt=prompt,
         history_turns=chat_history_turns,
         mime_type="image/png",
         system_instruction=system_instruction,
@@ -226,9 +227,30 @@ def select_parents_from_grid(
     base_grid_path = query_dir / f"gen_{generation:03d}{suffix}_grid.png"
     grid_image.save(base_grid_path, format="PNG")
 
-    buffer = BytesIO()
-    grid_image.save(buffer, format="PNG")
-    image_bytes = buffer.getvalue()
+    sorted_images = sorted(
+        state["images"],
+        key=lambda entry: int(entry.get("index", 0)),
+    )
+    image_caption_pairs: List[im_query.ImageCaptionInput] = []
+    input_parts_metadata: List[Dict[str, Any]] = []
+    for entry in sorted_images:
+        image = decode_image(entry)
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        part_bytes = buffer.getvalue()
+        index_value = int(entry.get("index", len(image_caption_pairs)))
+        title_value = str(entry.get("title") or "").strip()
+        caption = f"Image {index_value}"
+        if title_value:
+            caption = f"{caption}: {title_value}"
+        image_caption_pairs.append((part_bytes, caption))
+        input_parts_metadata.append(
+            {
+                "index": index_value,
+                "caption": caption,
+                "image_b64": base64.b64encode(part_bytes).decode("ascii"),
+            }
+        )
 
     total_images = len(state["images"])
     max_index = max(total_images - 1, 0)
@@ -263,7 +285,7 @@ def select_parents_from_grid(
 
     for attempt in range(1, max_attempts + 1):
         response = query_with_history(
-            image_bytes,
+            image_caption_pairs,
             prompt=prompt,
             system_instruction=system_instruction,
             chat_history_turns=chat_history_turns,
@@ -387,6 +409,7 @@ def select_parents_from_grid(
         "generation": generation,
         "grid_path": str(base_grid_path),
         "selection_path": str(selection_path) if selection_path else None,
+        "input_parts": input_parts_metadata,
         "select_k": select_k,
         "chat_history_turns": chat_history_turns,
         "mutation_mode": parsed.get("mutation_mode", None),
@@ -484,11 +507,35 @@ def restore_chat_history_from_metadata(
     if not records:
         return 0
 
-    turns: List[Tuple[bytes, str, str]] = []
+    turns: List[im_query.HistoryTurnInput] = []
     for generation_value, payload, meta_path in records:
         response_text = payload.get("response_text")
         if not response_text:
             continue
+
+        prompt_text = payload.get("prompt")
+        if not prompt_text and prompt_template:
+            try:
+                prompt_text = prompt_template.format(generation=generation_value)
+            except (KeyError, ValueError):
+                prompt_text = prompt_template
+
+        input_parts_payload = payload.get("input_parts")
+        if isinstance(input_parts_payload, list) and input_parts_payload:
+            image_pairs: List[im_query.ImageCaptionInput] = []
+            for part in input_parts_payload:
+                image_b64 = part.get("image_b64")
+                if not image_b64:
+                    continue
+                try:
+                    image_bytes = base64.b64decode(image_b64)
+                except (ValueError, binascii.Error):
+                    continue
+                caption_text = str(part.get("caption") or "")
+                image_pairs.append((image_bytes, caption_text))
+            if image_pairs:
+                turns.append((image_pairs, prompt_text or "", str(response_text)))
+                continue
 
         grid_path_value = payload.get("grid_path")
         if not grid_path_value:
@@ -515,14 +562,8 @@ def restore_chat_history_from_metadata(
         if image_bytes is None:
             continue
 
-        prompt_text = payload.get("prompt")
-        if not prompt_text and prompt_template:
-            try:
-                prompt_text = prompt_template.format(generation=generation_value)
-            except (KeyError, ValueError):
-                prompt_text = prompt_template
-
-        turns.append((image_bytes, prompt_text or "", str(response_text)))
+        image_pairs: List[im_query.ImageCaptionInput] = [(image_bytes, prompt_text or "")]
+        turns.append((image_pairs, "", str(response_text)))
 
     if not turns:
         return 0
