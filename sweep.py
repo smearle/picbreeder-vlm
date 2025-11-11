@@ -76,11 +76,12 @@ def _execute_job(job: CollaborativeRun) -> int:
 
 @dataclass
 class SweepConfig(CollaborativeConfig):
-    seeds: List[int] = field(default_factory=lambda: [0, 1, 2])  # Random seeds swept over collaborative runs
+    seeds: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
     # chat_history_turns: List[int] = field(default_factory=lambda: [-1, 15, 10, 5, 0])  # Chat history lengths to evaluate
-    chat_history_turns: List[int] = field(default_factory=lambda: [15, 5])  # Chat history lengths to evaluate
+    chat_history_turns: List[int] = field(default_factory=lambda: [-1])  # Chat history lengths to evaluate
     goals: List[str] = field(default_factory=lambda: [  # Goals to sweep over
-        "familiar_objects",
+        # "familiar_objects",
+        "fun",
         # "lizards", 
         # "fish", 
         # "skulls", 

@@ -46,7 +46,6 @@ def _resolve_image_path(
     if raw_path.is_absolute():
         candidates.append(raw_path)
         rebased = _rebase_submitit_path(raw_path, experiment_prefix)
-        print(rebased)
         if rebased:
             candidates.append(rebased)
     else:

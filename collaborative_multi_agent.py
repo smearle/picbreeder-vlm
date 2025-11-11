@@ -30,6 +30,7 @@ import multiprocessing
 import os
 import pickle
 import random
+import tempfile
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +46,7 @@ from hydra.utils import get_original_cwd
 
 import neat
 from neat.population import CompleteExtinctionException
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from auto_evolve import (
     DEFAULT_BASELINE_SELECTION_LIMIT,
@@ -89,9 +90,11 @@ DEFAULT_AGENT_GENERATIONS = 20
 DEFAULT_CHAT_HISTORY_TURNS = -1  # Unlimited conversational history.
 AGENT_DIR_PREFIX = "agent_"
 ARCHIVE_GRID_MARGIN = 12
+DEFAULT_BRANCHING_ARCHIVE_SAMPLE = 100
 
 GOAL_PROMPTS = {
     "familiar_objects": "Your goal is to evolve images that resemble familiar real-world objects.",
+    "fun": "Your goal is to have fun.",
     "unfamiliar_objects": "Your goal is to evolve images that resemble unfamiliar objects that may or may not exist.",
     "lizards": "Your goal is to evolve images that resemble lizards.",
     "fish": "Your goal is to evolve images that resemble fish.",
@@ -100,6 +103,11 @@ GOAL_PROMPTS = {
     "butterflies": "Your goal is to evolve images that resemble butterflies.",
     "flowers": "Your goal is to evolve images that resemble flowers.",
 }
+
+DEBUG_PROMPT = (
+    "(Also, for debugging, please tell me how many previous grids/populations you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
+    "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
+)
 
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You are playing with a collaborative online platform which allows users to interactively evolve small neural networks called Compositional Pattern Producing Networks (CPPNs) for generating images. "
@@ -113,15 +121,14 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "If so inclined, you may also select an image to publish to the online archive. "
     "You must publish at least once during your session. Publishing multiple times is allowed, though the most recent publication overwrites any previous ones. "
     "Your session will run for {n_generations} generations. "
-    "Try to contribute something novel, interesting or useful to the online archive. "
-    "Do not add something to the archive that is identical to an existing image. "
+    # "Try to contribute something novel, interesting or useful to the online archive. "
+    # "Do not add something to the archive that is identical to an existing image. "
     "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
     "(During branching, you may select only one image from which to branch; "
     " set \"selected\" to null to start from a fresh population.) "
     "You may also include a \"publish\" field in the JSON response if you wish to publish an image from this grid. It should have the form: "
     '{{"index": image_index, "title": "image title", "reason": "brief publication note"}}. '
-    # "(Also, for debugging, please tell me how many previous grids you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
-    # "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
+    # f"{DEBUG_PROMPT}"
     "{color_prompt}"
     "{mutation_mode_prompt}"
     "{mutation_strength_prompt}"
@@ -151,7 +158,6 @@ PARENT_SELECTION_PROMPT = "Above is the grid at generation {generation}."
 
 ARCHIVE_BRANCHING_PROMPT = (
     "Above is the archive of images published by prior users. You may choose to branch from one of them, or start from a fresh population. "
-    "Their names are, in raster order: {elite_names}."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -348,6 +354,13 @@ class ArchiveManager:
         self.refresh()
         return list(self._metadata.get("entries", []))
 
+    def sample_entries(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        self.refresh()
+        entries = list(self._metadata.get("entries", []))
+        if limit is None or limit <= 0 or len(entries) <= limit:
+            return entries
+        return random.sample(entries, limit)
+
     def get_elite_names(self, max_length: int = 80) -> List[str]:
         self.refresh()
         names: List[str] = []
@@ -446,14 +459,25 @@ class ArchiveManager:
                 return pickle.load(handle)
         return None
 
-    def create_archive_grid(self, thumb_size: int = 200) -> Optional[Path]:
-        self.refresh()
-        entries = self.entries
+    def create_archive_grid(
+        self,
+        thumb_size: int = 200,
+        *,
+        entries: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> Optional[Path]:
+        if entries is None:
+            self.refresh()
+            entries = self.entries
+            output_path = self.archive_dir / "archive_grid.png"
+        else:
+            entries = list(entries)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            output_path = self.logs_dir / f"archive_grid_sample_{timestamp}.png"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
         if not entries:
             return None
 
         images: List[Image.Image] = []
-        captions: List[str] = []
         for index, entry in enumerate(entries):
             path = Path(entry["image_path"])
             if not path.exists():
@@ -463,7 +487,6 @@ class ArchiveManager:
                     img = img.convert("RGB")
                     img = img.resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
                     images.append(img)
-                    captions.append(f"{index}")
             except Exception:
                 continue
 
@@ -473,7 +496,6 @@ class ArchiveManager:
         columns = max(1, math.ceil(math.sqrt(len(images))))
         rows = math.ceil(len(images) / columns)
         margin = ARCHIVE_GRID_MARGIN
-        font = _try_load_font(18)
 
         tile_width, tile_height = images[0].size
         canvas = Image.new(
@@ -484,18 +506,13 @@ class ArchiveManager:
             ),
             (18, 18, 22),
         )
-        draw = ImageDraw.Draw(canvas)
-
         for idx, img in enumerate(images):
             col = idx % columns
             row = idx // columns
             x = margin + col * (tile_width + margin)
             y = margin + row * (tile_height + margin)
             canvas.paste(img, (x, y))
-            caption = captions[idx]
-            draw.text((x + 8, y + 8), caption, font=font, fill=(255, 255, 0))
 
-        output_path = self.archive_dir / "archive_grid.png"
         canvas.save(output_path, format="PNG")
         print(f"Archive grid saved to: {output_path}")
         return output_path
@@ -571,20 +588,6 @@ def _rehydrate_reproduction_state(population: neat.Population) -> None:
     reproduction.ancestors = dict(getattr(reproduction, "ancestors", {}))
     for key in population_keys:
         reproduction.ancestors.setdefault(key, tuple())
-
-
-def _try_load_font(size: int) -> ImageFont.ImageFont:
-    candidates = [
-        "DejaVuSans.ttf",
-        "DejaVuSans-Bold.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-    ]
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size=size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
 
 
 def _ensure_int_list(values: Iterable[Any]) -> List[int]:
@@ -725,8 +728,8 @@ class CollaborativeAgentRunner:
                 "By default, you will be presented with grayscale versions of the images. "
                 "Respond with a JSON containing a single `color` field set to true/false to switch between color/grayscale images. "
                 "(This response does not affect which images are selected for breeding; it only changes how the current grid is displayed. Include no other fields in the JSON in this case.) "
-                "It would be a bonus to have some color images in the online archive, but we DO NOT want it to be dominated by high-frequency rainbow artefacts. "
-                "90% of the images in the archive should be grayscale, and you should spend at least 90% of your time exploring grayscale images. "
+                # "It would be a bonus to have some color images in the online archive, but we DO NOT want it to be dominated by high-frequency rainbow artefacts. "
+                # "90% of the images in the archive should be grayscale, and you should spend at least 90% of your time exploring grayscale images. "
             )
         else:
             color_prompt = ""
@@ -956,8 +959,6 @@ class CollaborativeAgentRunner:
             image_bytes = image_path.read_bytes()
             title_value = str(entry.get("title") or "").strip()
             caption = f"Image {index}"
-            if title_value:
-                caption = f"{caption}: {title_value}"
             parts.append((image_bytes, caption))
             metadata.append(
                 {
@@ -965,6 +966,7 @@ class CollaborativeAgentRunner:
                     "caption": caption,
                     "image_path": str(image_path),
                     "image_b64": base64.b64encode(image_bytes).decode("ascii"),
+                    "title": title_value,
                 }
             )
         return parts, metadata
@@ -993,12 +995,41 @@ class CollaborativeAgentRunner:
             return
         self._zero_color_weights(self.population.population.values())
 
+    def _write_generation_checkpoint(self, next_generation: int) -> Path:
+        self.population_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = self.population_dir / f"gen_{next_generation:03d}{CHECKPOINT_SUFFIX}"
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=checkpoint_path.name,
+            suffix=".tmp",
+            dir=str(self.population_dir),
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        try:
+            with gzip.open(tmp_path, "wb", compresslevel=5) as handle:
+                payload = (
+                    next_generation,
+                    self.population.config,
+                    self.population.population,
+                    self.population.species,
+                    random.getstate(),
+                )
+                pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp_path.replace(checkpoint_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        return checkpoint_path
+
     # ------------------------------------------------------------------
     # Population initialisation and branching
     # ------------------------------------------------------------------
     def select_starting_point(self) -> Dict[str, Any]:
-        archive_grid = self.archive_manager.create_archive_grid(self.thumb_size)
-        archive_entries = self.archive_manager.entries
+        self.archive_manager.create_archive_grid(self.thumb_size)
+        archive_entries = self.archive_manager.sample_entries(DEFAULT_BRANCHING_ARCHIVE_SAMPLE)
+        archive_grid = self.archive_manager.create_archive_grid(
+            self.thumb_size,
+            entries=archive_entries,
+        )
         elite_name_list = self.archive_manager.get_elite_names()
         if not archive_entries:
             rationale = "Archive empty; defaulting to fresh population."
@@ -1039,13 +1070,15 @@ class CollaborativeAgentRunner:
             }
 
         else:
-            elite_labels = [f"{idx}: {name}" for idx, name in enumerate(elite_name_list)]
-            elite_names = "; ".join(elite_labels) if elite_labels else "none available"
-            archive_prompt = ARCHIVE_BRANCHING_PROMPT.format(
-                elite_names=elite_names,
-            )
+            display_order = list(range(len(archive_entries)))
+            random.shuffle(display_order)  # Shuffle presentation order to reduce positional bias.
+            shuffled_entries = [archive_entries[idx] for idx in display_order]
+            archive_prompt = ARCHIVE_BRANCHING_PROMPT
 
-            image_caption_pairs, input_parts_metadata = self._build_archive_query_parts(archive_entries)
+            image_caption_pairs, input_parts_metadata = self._build_archive_query_parts(shuffled_entries)
+            for display_index, archive_index in enumerate(display_order):
+                input_parts_metadata[display_index]["archive_index"] = archive_index
+            display_to_archive_index = {idx: archive_idx for idx, archive_idx in enumerate(display_order)}
 
             response = query_with_history(
                 image_caption_pairs,
@@ -1060,12 +1093,14 @@ class CollaborativeAgentRunner:
             except Exception:
                 parsed = {}
 
-            selected_images = parsed.get("selected", [])
-            selected_images = [] if selected_images is None else selected_images
-            selected_images = _ensure_int_list(selected_images)
-            selected_images = [idx for idx in selected_images if 0 <= idx < len(archive_entries)][:1]
-            if len(selected_images) > 1:
-                breakpoint()
+            selected_display_indices = parsed.get("selected", [])
+            selected_display_indices = [] if selected_display_indices is None else selected_display_indices
+            selected_display_indices = _ensure_int_list(selected_display_indices)
+            selected_images = [
+                display_to_archive_index[idx]
+                for idx in selected_display_indices
+                if idx in display_to_archive_index
+            ][:1]
             rationale = str(parsed.get("rationale", ""))
             choice = "branch" if selected_images else "fresh"
             decision = {
@@ -1074,9 +1109,11 @@ class CollaborativeAgentRunner:
                 "rationale": rationale,
                 "raw_response": response_text,
                 "timestamp": datetime.now().isoformat(),
-                "archive_grid_path": str(archive_grid),
+                "archive_grid_path": str(archive_grid) if archive_grid else None,
                 "archive_elite_names": elite_name_list,
+                "archive_display_order": list(display_order),
                 "input_parts": input_parts_metadata,
+                "selected_display_indices": selected_display_indices,
             }
             if choice == "branch":
                 preview_path = self._save_archive_branch_preview(decision, archive_entries)
@@ -1108,6 +1145,7 @@ class CollaborativeAgentRunner:
             seed_initial_population(self.population, self.neat_config.genome_config)
             sync_population_node_indexer(self.population)
             self._enforce_structure_only_population()
+            self._write_generation_checkpoint(int(self.population.generation))
             return
 
         archive_entries = self.archive_manager.entries
@@ -1126,6 +1164,7 @@ class CollaborativeAgentRunner:
             seed_initial_population(self.population, self.neat_config.genome_config)
             sync_population_node_indexer(self.population)
             self._enforce_structure_only_population()
+            self._write_generation_checkpoint(int(self.population.generation))
             return
 
         population_keys = list(self.population.population.keys())
@@ -1165,6 +1204,7 @@ class CollaborativeAgentRunner:
             self._color_enabled = bool(branch_color_pref)
             self._update_mutation_mode(self._mutation_mode)
         self._write_branching_summary(decision, len(selected_records))
+        self._write_generation_checkpoint(int(self.population.generation))
 
     # ------------------------------------------------------------------
     # Evolution loop
@@ -1308,8 +1348,6 @@ class CollaborativeAgentRunner:
             selection_meta["mutation_mode_forced"] = True
         selection_path_value = selection_meta.get("selection_path")
         selection_path = Path(selection_path_value) if selection_path_value else Path(grid_path)
-        if selection_path.exists():
-            self._update_latest_image(selection_path)
         selected_indices: Sequence[int] = selection_meta["selected"]
         publish_details: Optional[Dict[str, Any]] = None
         for idx, (_, genome) in enumerate(genomes):
@@ -1441,6 +1479,7 @@ class CollaborativeAgentRunner:
             publish_index_for_highlight,
             selection_path,
         )
+        self._update_latest_image(selection_path)
         record.selection_path = selection_path
 
         self._print_selection_response(
@@ -2677,7 +2716,7 @@ def resolve_config_path(cfg: CollaborativeConfig) -> Path:
     if cfg.config_path is not None:
         return Path(cfg.config_path)
     base = REPO_ROOT / "picture2d"
-    config_name = "interactive_config_color" if (cfg.scheme == "color" or cfg.scheme == "toggle") else "interactive_config_gray"
+    config_name = "interactive_config_color"
     return base / config_name
 
 
@@ -2728,8 +2767,7 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
             experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_na{cfg.num_agents}"
             if cfg.goal != "familiar_objects":
                 experiment_name += f"_goal-{cfg.goal}"
-            if cfg.scheme != "gray":
-                experiment_name += f"_scheme-{cfg.scheme}"
+            experiment_name += f"_scheme-{cfg.scheme}"
             if cfg.warm_start_structure > 0:
                 experiment_name += f"_warmstart{cfg.warm_start_structure}"
             if cfg.selection_baseline != "none":

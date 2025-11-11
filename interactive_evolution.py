@@ -21,7 +21,7 @@ from neat_components import (
     sync_population_output_activations,
 )
 from picbreeder_reproduction import PicbreederReproduction
-from picture2d.common import eval_color_image, eval_genome_as_grayscale_and_color
+from picture2d.common import eval_genome_as_grayscale_and_color
 from rendering import create_numbered_grid, render_genome_image
 
 
@@ -108,7 +108,7 @@ def resolve_config_path(config_path: Optional[Path], scheme: str) -> Path:
     if config_path is not None:
         return config_path.resolve()
     base = REPO_ROOT / "picture2d"
-    fallback = "interactive_config_color" if (scheme == "color" or scheme == "toggle") else "interactive_config_gray"
+    fallback = "interactive_config_color"
     return (base / fallback).resolve()
 
 

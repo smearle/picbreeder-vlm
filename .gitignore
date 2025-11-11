@@ -12,3 +12,6 @@ log/*
 picture2d/rendered
 outputs/*
 submitit_logs/*
+human_archive/*
+legacy_diagrams/*
+legacy_renders/*

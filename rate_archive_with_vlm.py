@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runs",
         type=int,
-        default=3,
+        default=5,
         help="How many full passes to query the VLM (default: 3)",
     )
     parser.add_argument(
@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=-1,
+        default=100,
         help="Number of images to show to the VLM at once (-1 means use the full archive)",
     )
     parser.add_argument(
@@ -124,8 +124,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--use-multipart-input",
+        dest="use_multipart_input",
         action="store_true",
-        help="Send images and captions as multi-part input instead of a stitched grid",
+        default=True,
+        help="(default) Send images and captions as multi-part input instead of a stitched grid",
+    )
+    parser.add_argument(
+        "--use-grid-input",
+        dest="use_multipart_input",
+        action="store_false",
+        help="Send a single numbered grid image instead of multi-part input",
     )
     parser.add_argument(
         "--verify-titles",
@@ -598,8 +606,8 @@ def main() -> None:
             raise FileNotFoundError(f"Resume directory not found: {output_dir}")
     else:
         output_dir = ensure_output_dir(archive_dir, args.output_dir)
-    if args.use_multipart_input:
-        (output_dir / "input_mode.txt").write_text("multi_part_captions\n", encoding="utf-8")
+    input_mode_tag = "multi_part_captions\n" if args.use_multipart_input else "grid_numbered\n"
+    (output_dir / "input_mode.txt").write_text(input_mode_tag, encoding="utf-8")
     log_path = output_dir / "vlm_query_log.jsonl"
     stats_path = output_dir / "ratings_summary.json"
     figure_path = output_dir / "ratings_figure.png"
