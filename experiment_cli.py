@@ -3,9 +3,6 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 
-SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes")
-
-
 def add_experiment_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--engine",

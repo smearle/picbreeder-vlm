@@ -1,6 +1,6 @@
 from pathlib import Path
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import numpy
 
@@ -86,3 +86,21 @@ def _resolve_source_experiment_dir(
             return candidate
 
     return None
+
+
+def _ensure_absolute(path: Path, base: Path) -> Path:
+    expanded = Path(path).expanduser()
+    if expanded.is_absolute():
+        return expanded.resolve()
+    return (base / expanded).resolve()
+
+
+def _ensure_int_list(values: Iterable[Any]) -> List[int]:
+    result: List[int] = []
+    for value in values:
+        try:
+            idx = int(value)
+        except (TypeError, ValueError):
+            continue
+        result.append(idx)
+    return result

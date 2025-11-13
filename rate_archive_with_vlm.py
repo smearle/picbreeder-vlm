@@ -28,13 +28,11 @@ from PIL import Image  # noqa: E402
 from im_query import DEFAULT_MODEL, query_im, query_images_with_captions
 from rendering import create_numbered_grid
 
-PROMPT_TEMPLATE = """You are evaluating generated artwork from a collaborative evolution archive.
-There are {count} candidate images displayed together in a numbered grid (numbers appear in yellow on the images).
-For each image, provide an integer score from 1 (poor) to 5 (exceptional) that reflects originality, coherence, and visual appeal.
+SYSTEM_PROMPT_TEMPLATE = """You are evaluating generated artwork from a collaborative evolution archive.
+The users were given the following objective: "{goal_prompt}"
+You will be presented with {count} images.
+For each image, provide a numeric score from 0 (poor) to 5 (exceptional) that reflects their success in achieving this objective.
 {title_instruction}
-
-Reference list (index: title [image_id]):
-{image_descriptions}
 
 Respond with JSON ONLY in this exact shape:
 {ratings_schema}
@@ -86,12 +84,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Random seed used for image sampling and order shuffling",
-    )
-    parser.add_argument(
-        "--prompt-template",
-        type=str,
-        default=PROMPT_TEMPLATE,
-        help="Custom template for prompts. Placeholders: {count}, {image_descriptions}, {title_instruction}, {ratings_schema}",
     )
     parser.add_argument(
         "--system-instruction",
@@ -149,6 +141,7 @@ def load_archive_entries(archive_dir: Path) -> List[ArchiveEntry]:
         raise FileNotFoundError(f"Could not find {metadata_path}")
     metadata = json.loads(metadata_path.read_text())
     entries: List[ArchiveEntry] = []
+    goal_prompt = metadata.get("goal_prompt")
     for entry in metadata.get("entries", []):
         raw_path = Path(entry["image_path"]).expanduser()
         resolved = raw_path
@@ -173,23 +166,20 @@ def load_archive_entries(archive_dir: Path) -> List[ArchiveEntry]:
         )
     if not entries:
         raise ValueError(f"No entries with images found in {metadata_path}")
-    return entries
+    return entries, goal_prompt
 
 
-def format_entry_label(idx: int, entry: ArchiveEntry, include_titles: bool) -> str:
+def format_rating_entry_label(idx: int, entry: ArchiveEntry, include_titles: bool) -> str:
     if include_titles:
         return f"Image {idx}: {entry.title}"
     return f"Image {idx}"
 
 
-def build_prompt(
-    template: str,
+def build_rating_system_prompt(
     batch: Sequence[ArchiveEntry],
-    *,
-    include_titles: bool,
     require_titles: bool,
+    goal_prompt: str,
 ) -> str:
-    descriptions = "\n".join(format_entry_label(idx, item, include_titles) for idx, item in enumerate(batch))
     title_instruction = ""
     ratings_schema = """{
   "ratings": [
@@ -205,12 +195,13 @@ def build_prompt(
     ...
   ]
 }"""
-    return template.format(
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         count=len(batch),
-        image_descriptions=descriptions,
+        goal_prompt=goal_prompt,
         title_instruction=title_instruction,
         ratings_schema=ratings_schema,
     )
+    return system_prompt
 
 
 _SCORE_RE = re.compile(r"(?i)(?:score|rating)\s*[:=-]?\s*([1-5](?:\.\d+)?)\s*(?:/5)?")
@@ -550,7 +541,7 @@ def _resolve_justification(obj: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def parse_batch_response(response_text: str, batch: Sequence[ArchiveEntry]) -> Dict[int, RatingResult]:
+def parse_rating_batch_response(response_text: str, batch: Sequence[ArchiveEntry]) -> Dict[int, RatingResult]:
     parsed: Dict[int, RatingResult] = {}
     payload = extract_json_payload(response_text)
     candidates: List[Any] = []
@@ -593,7 +584,7 @@ def main() -> None:
     if args.resume_dir is not None:
         args.archive = args.resume_dir.parent.parent
     archive_dir = args.archive.expanduser().resolve()
-    entries = load_archive_entries(archive_dir)
+    entries, goal_prompt = load_archive_entries(archive_dir)
 
     rng = random.Random(args.seed)
     if args.image_limit:
@@ -667,13 +658,12 @@ def main() -> None:
             ordered_entries[i : i + effective_batch_size]
             for i in range(0, len(ordered_entries), effective_batch_size)
         ]
+        system_prompt = build_rating_system_prompt(
+            batch,
+            require_titles=args.verify_titles,
+            goal_prompt=goal_prompt,
+        )
         for batch_idx, batch in enumerate(batches):
-            prompt = build_prompt(
-                args.prompt_template,
-                batch,
-                include_titles=include_titles,
-                require_titles=args.verify_titles,
-            )
             response_text = ""
             error_message = None
             ratings: Dict[int, RatingResult] = {}
@@ -688,12 +678,12 @@ def main() -> None:
                         if entry.image_id not in image_bytes_cache:
                             image_bytes_cache[entry.image_id] = entry.image_path.read_bytes()
                         image_bytes_list.append(image_bytes_cache[entry.image_id])
-                        captions_list.append(format_entry_label(position, entry, include_titles))
+                        captions_list.append(format_rating_entry_label(position, entry, include_titles))
                     response = query_images_with_captions(
                         image_bytes_list,
                         captions_list,
-                        prompt,
-                        system_instruction=args.system_instruction,
+                        prompt=None,
+                        system_instruction=system_prompt,
                     )
                     response_text = getattr(response, "text", "") or ""
                 else:
@@ -703,7 +693,7 @@ def main() -> None:
                     buffer = BytesIO()
                     grid_image.save(buffer, format="PNG")
                     response_text = query_vlm(buffer.getvalue(), prompt, args.system_instruction)
-                ratings = parse_batch_response(response_text, batch)
+                ratings = parse_rating_batch_response(response_text, batch)
             except Exception as exc:  # pylint: disable=broad-except
                 error_message = str(exc)
             query_time_sec = time.time() - query_start

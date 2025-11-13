@@ -137,7 +137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--steps",
         type=int,
-        default=90,
+        default=45,
         help="Number of interpolation steps (frames) between the parent and published genome.",
     )
     parser.add_argument(
