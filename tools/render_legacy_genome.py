@@ -301,18 +301,17 @@ def _infer_scheme(legacy: LegacyGenome) -> str:
     return "gray"
 
 
-def _resolve_config_path(scheme: str) -> Path:
-    scheme_normalized = "color" if scheme.lower() in {"color", "colour", "toggle"} else "gray"
+def _resolve_neat_config_path() -> Path:
     root = Path(__file__).resolve().parents[1]
-    filename = "interactive_config_color" if scheme_normalized == "color" else "interactive_config_gray"
+    filename = "interactive_config_color"
     config_path = root / "picture2d" / filename
     if not config_path.exists():
         raise FileNotFoundError(f"NEAT config not found at {config_path}")
     return config_path
 
 
-def _build_neat_config(scheme: str) -> neat.Config:
-    config_path = _resolve_config_path(scheme)
+def _build_neat_config() -> neat.Config:
+    config_path = _resolve_neat_config_path()
     config = neat.Config(
         PicbreederGenome,
         PicbreederReproduction,

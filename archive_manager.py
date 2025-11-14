@@ -17,15 +17,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import neat
 from PIL import Image, ImageDraw, ImageFont
 
-from constants import RATE_EVERY
-from im_query import query_images_with_captions
-from rate_archive_with_vlm import (
-    ArchiveEntry as RatingArchiveEntry,
-    RatingResult,
-    build_rating_system_prompt,
-    format_rating_entry_label,
-    parse_rating_batch_response,
-)
+from constants import RATING_BATCH_SIZE, RATE_EVERY
+from rate_archive_with_vlm import RatingResult
 from utils import atomic_write_json, _ensure_int_list
 
 try:
@@ -309,7 +302,7 @@ class ArchiveManager:
             return []
         # with interprocess_lock(self._lock_path):
         self.refresh()
-        targets = self._select_lowest_rated_entries_locked(limit)
+        targets = self._select_least_rated_entries(limit)
         if targets:
             manual_meta = self._metadata.setdefault("manual_rating", {})
             manual_meta["in_progress_ids"] = [item.get("id") for item in targets]
@@ -317,9 +310,9 @@ class ArchiveManager:
             self._persist()
         return targets
 
-    def apply_rating_results(self, ratings: Dict[str, RatingResult]) -> None:
+    def apply_rating_results(self, ratings: Dict[str, RatingResult]) -> int:
         if not ratings:
-            return
+            return 0
         # with interprocess_lock(self._lock_path):
         self.refresh()
         entries_by_id: Dict[str, Dict[str, Any]] = {}
@@ -379,7 +372,69 @@ class ArchiveManager:
                     manual_meta.pop("in_progress_ids", None)
                     manual_meta.pop("in_progress_started_at", None)
             self._persist()
-        print(f"Applied ratings for {applied_count} archive entries.")
+        print(f"Applied rating results for {applied_count} archive entries.")
+        return applied_count
+
+    def prepare_auto_rating_batch(self, limit: Optional[int] = None) -> Tuple[List[Dict[str, str]], int]:
+        batch_size = RATING_BATCH_SIZE if limit is None else max(1, min(limit, RATING_BATCH_SIZE))
+        if batch_size <= 0 or RATE_EVERY <= 0:
+            return [], 0
+
+        self.refresh()
+        entries = self._metadata.get("entries", [])
+        total_entries = len(entries)
+        if total_entries < RATING_BATCH_SIZE:
+            return [], 0
+        if total_entries % RATE_EVERY != 0:
+            return [], 0
+
+        auto_meta = self._metadata.setdefault("auto_rating", {})
+        trigger_entry_count = int(auto_meta.get("trigger_entry_count") or 0)
+        if trigger_entry_count:
+            if trigger_entry_count == total_entries:
+                return [], 0
+            return [], 0
+
+        last_completed = int(auto_meta.get("last_completed_count", 0) or 0)
+        if total_entries <= last_completed:
+            return [], 0
+
+        targets = self._select_least_rated_entries(batch_size)
+        if not targets:
+            return [], 0
+
+        auto_meta["trigger_entry_count"] = total_entries
+        auto_meta["in_progress_batch_size"] = len(targets)
+        auto_meta["in_progress_started_at"] = datetime.now().isoformat()
+        self._persist()
+        return targets, total_entries
+
+    def mark_auto_rating_complete(self, trigger_entry_count: int, completed_count: int) -> None:
+        if trigger_entry_count <= 0:
+            return
+        self.refresh()
+        auto_meta = self._metadata.setdefault("auto_rating", {})
+        if int(auto_meta.get("trigger_entry_count") or 0) != trigger_entry_count:
+            return
+        auto_meta["last_completed_count"] = trigger_entry_count
+        auto_meta["last_completed_at"] = datetime.now().isoformat()
+        auto_meta["last_completed_batch_size"] = int(completed_count)
+        auto_meta.pop("trigger_entry_count", None)
+        auto_meta.pop("in_progress_started_at", None)
+        auto_meta.pop("in_progress_batch_size", None)
+        self._persist()
+
+    def mark_auto_rating_failed(self, trigger_entry_count: int) -> None:
+        if trigger_entry_count <= 0:
+            return
+        self.refresh()
+        auto_meta = self._metadata.setdefault("auto_rating", {})
+        if int(auto_meta.get("trigger_entry_count") or 0) != trigger_entry_count:
+            return
+        auto_meta.pop("trigger_entry_count", None)
+        auto_meta.pop("in_progress_started_at", None)
+        auto_meta.pop("in_progress_batch_size", None)
+        self._persist()
 
     def get_elite_names(self, max_length: int = 80) -> List[str]:
         self.refresh()
@@ -428,9 +483,6 @@ class ArchiveManager:
         color_enabled: bool = False,
     ) -> ArchiveEntry:
         """Persist a favorite image and genome into the shared archive."""
-        should_auto_rate = False
-        auto_rate_targets: List[Dict[str, str]] = []
-        auto_rate_trigger_size = 0
 
         # with interprocess_lock(self._lock_path):
         self.refresh()
@@ -467,24 +519,8 @@ class ArchiveManager:
         entries_list = self._metadata.setdefault("entries", [])
         entries_list.append(archive_entry.as_dict())
 
-        total_entries = len(entries_list)
-        auto_rating_meta = self._metadata.setdefault("auto_rating", {})
-        if total_entries > 0 and total_entries % RATE_EVERY == 0:
-            last_completed = int(auto_rating_meta.get("last_completed_count", 0) or 0)
-            in_progress = auto_rating_meta.get("in_progress_count")
-            if total_entries > last_completed and in_progress != total_entries:
-                auto_rate_targets = self._select_lowest_rated_entries_locked(100)
-                if auto_rate_targets:
-                    should_auto_rate = True
-                    auto_rate_trigger_size = total_entries
-                    auto_rating_meta["in_progress_count"] = len(auto_rate_targets)
-                    auto_rating_meta["in_progress_started_at"] = datetime.now().isoformat()
-
         self._persist()
         self._write_checkpoint(archive_entry)
-
-        if should_auto_rate:
-            self._execute_auto_rating(auto_rate_targets, auto_rate_trigger_size)
 
         return archive_entry
 
@@ -597,7 +633,6 @@ class ArchiveManager:
             panes: List[Dict[str, Any]] = []
             font = ImageFont.load_default()
             header_gap = max(4, margin // 3)
-            global_index_map: Dict[int, Dict[str, Any]] = {}
             for label, subset_entries in groups:
                 subset_images: List[Image.Image] = []
                 subset_indices: List[int] = []
@@ -713,11 +748,11 @@ class ArchiveManager:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _select_lowest_rated_entries_locked(self, limit: int) -> List[Dict[str, str]]:
+    def _select_least_rated_entries(self, limit: int) -> List[Dict[str, str]]:
         if limit <= 0:
             return []
         entries = list(self._metadata.get("entries", []))
-        if not entries:
+        if not entries or len(entries) < RATING_BATCH_SIZE:
             return []
 
         decorated: List[Tuple[int, datetime, str, Dict[str, Any]]] = []
@@ -751,137 +786,6 @@ class ArchiveManager:
             )
         return snapshot
 
-    def _execute_auto_rating(self, targets: Sequence[Dict[str, str]], trigger_size: int) -> None:
-        if not targets:
-            # with interprocess_lock(self._lock_path):
-            self.refresh()
-            auto_meta = self._metadata.setdefault("auto_rating", {})
-            if auto_meta.get("in_progress_count") == trigger_size:
-                auto_meta["in_progress_count"] = None
-                auto_meta["last_completed_count"] = max(
-                    int(auto_meta.get("last_completed_count", 0) or 0),
-                    trigger_size,
-                )
-                auto_meta.pop("in_progress_started_at", None)
-                auto_meta["last_completed_at"] = datetime.now().isoformat()
-            self._persist()
-            return
-
-        vlm_entries: List[RatingArchiveEntry] = []
-        for target in targets:
-            image_path = Path(target.get("image_path", ""))
-            if not image_path.exists():
-                continue
-            vlm_entries.append(
-                RatingArchiveEntry(
-                    image_id=str(target.get("id")),
-                    title=str(target.get("title") or target.get("id") or ""),
-                    image_path=image_path,
-                )
-            )
-
-        if not vlm_entries:
-            # with interprocess_lock(self._lock_path):
-            self.refresh()
-            auto_meta = self._metadata.setdefault("auto_rating", {})
-            if auto_meta.get("in_progress_count") == trigger_size:
-                auto_meta["in_progress_count"] = None
-                auto_meta.pop("in_progress_started_at", None)
-            self._persist()
-            return
-
-        rating_batch_size = 100
-        include_titles = True
-        require_titles = False
-        results: Dict[str, RatingResult] = {}
-
-        # Save rating system prompt to disk
-        prompt_path = self.archive_dir / "vlm_ratings" / "system_prompt.txt"
-        prompt_path.parent.mkdir(parents=True, exist_ok=True)
-
-        for start in range(0, len(vlm_entries), rating_batch_size):
-            batch = vlm_entries[start : start + rating_batch_size]
-            if not batch:
-                continue
-            system_prompt = build_rating_system_prompt(
-                batch,
-                require_titles=require_titles,
-                goal_prompt=self.goal_prompt,
-            )
-            if start == 0:
-                prompt_path.write_text(system_prompt)
-            try:
-                image_bytes_list = [entry.image_path.read_bytes() for entry in batch]
-            except Exception as exc:  # pylint: disable=broad-except
-                print(f"Auto-rating image read failed: {exc}")
-                continue
-
-            captions = [format_rating_entry_label(idx, entry, include_titles) for idx, entry in enumerate(batch)]
-            try:
-                response = query_images_with_captions(
-                    image_bytes_list,
-                    captions,
-                    prompt=None,
-                    system_instruction=system_prompt,
-                )
-                response_text = getattr(response, "text", "") or ""
-            except Exception as exc:  # pylint: disable=broad-except
-                print(f"Auto-rating query failed: {exc}")
-                continue
-
-            parsed = parse_rating_batch_response(response_text, batch)
-            for idx, rating in parsed.items():
-                if 0 <= idx < len(batch):
-                    results[batch[idx].image_id] = rating
-
-        # with interprocess_lock(self._lock_path):
-        self.refresh()
-        entries_by_id: Dict[str, Dict[str, Any]] = {}
-        for entry in self._metadata.get("entries", []):
-            entry_id = str(entry.get("id") or "")
-            if entry_id:
-                entries_by_id[entry_id] = entry
-
-        timestamp = datetime.now().isoformat()
-        for entry_id, rating in results.items():
-            entry = entries_by_id.get(entry_id)
-            if entry is None:
-                continue
-            ratings_list = entry.get("vlm_ratings")
-            if isinstance(ratings_list, list):
-                pass
-            elif ratings_list is None:
-                ratings_list = []
-            else:
-                ratings_list = [ratings_list]
-            ratings_list.append(float(rating.score))
-            entry["vlm_ratings"] = ratings_list
-
-            comments_list = entry.get("vlm_comments")
-            if isinstance(comments_list, list):
-                pass
-            elif comments_list is None:
-                comments_list = []
-            else:
-                comments_list = [comments_list]
-            comments_list.append(str(rating.justification or ""))
-            entry["vlm_comments"] = comments_list
-
-            auto_meta = self._metadata.setdefault("auto_rating", {})
-            if auto_meta.get("in_progress_count") == trigger_size:
-                auto_meta["last_completed_count"] = max(
-                    int(auto_meta.get("last_completed_count", 0) or 0),
-                    trigger_size,
-                )
-                auto_meta["last_completed_at"] = timestamp
-                auto_meta["in_progress_count"] = None
-                auto_meta.pop("in_progress_started_at", None)
-
-            self._persist()
-
-        print(
-            f"Auto-rated {len(results)} of {len(vlm_entries)} archive entries (trigger size={trigger_size})."
-        )
 
     def _write_checkpoint(self, entry: ArchiveEntry) -> None:
         snapshot = {

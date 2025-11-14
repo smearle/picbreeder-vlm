@@ -12,10 +12,7 @@ from pyparsing import Iterable
 
 from picture2d.common import (
     _canvas_coords,
-    eval_color_image,
     eval_genome_as_grayscale_and_color,
-    eval_gray_image,
-    eval_mono_image,
 )
 
 
@@ -101,80 +98,6 @@ def create_numbered_grid(
             )
 
     return canvas.convert("RGB")
-
-
-def _resolve_inputs(genome: neat.DefaultGenome, coords: Sequence[float]) -> List[float]:
-    inputs = list(coords)
-    transformer = getattr(genome, "transform_inputs", None)
-    if transformer is not None:
-        inputs = transformer(inputs)
-    return inputs
-
-def _resolve_outputs(genome: neat.DefaultGenome, outputs: Sequence[float]) -> List[float]:
-    transformer = getattr(genome, "transform_outputs", None)
-    if transformer is not None:
-        return transformer(outputs)
-    return list(outputs)
-
-
-def _legacy_apply_render(value: float) -> float:
-    if not math.isfinite(value):
-        return 1.0 if value > 0.0 else 0.0
-    if value >= 0.0:
-        exp_term = math.exp(-value)
-        return 1.0 / (1.0 + exp_term)
-    exp_term = math.exp(value)
-    return exp_term / (1.0 + exp_term)
-
-
-def _legacy_to_byte(value: float) -> int:
-    value = max(0.0, min(1.0, value))
-    return int(value * 255.0 + 0.5)
-
-
-def legacy_eval_mono_image(genome, config, width, height):
-    net = neat.nn.FeedForwardNetwork.create(genome, config)
-    image = []
-    for coord_row in _canvas_coords(width, height):
-        row = []
-        for coords in coord_row:
-            inputs = _resolve_inputs(genome, coords)
-            raw_output = net.activate(inputs)
-            output = _resolve_outputs(genome, raw_output)
-            rendered = _legacy_apply_render(output[0])
-            row.append(255 if rendered > 0.5 else 0)
-        image.append(row)
-    return image
-
-
-def legacy_eval_gray_image(genome, config, width, height):
-    net = neat.nn.FeedForwardNetwork.create(genome, config)
-    image = []
-    for coord_row in _canvas_coords(width, height):
-        row = []
-        for coords in coord_row:
-            inputs = _resolve_inputs(genome, coords)
-            raw_output = net.activate(inputs)
-            output = _resolve_outputs(genome, raw_output)
-            rendered = _legacy_apply_render(output[0])
-            row.append(_legacy_to_byte(rendered))
-        image.append(row)
-    return image
-
-
-def legacy_eval_color_image(genome, config, width, height):
-    net = neat.nn.FeedForwardNetwork.create(genome, config)
-    image = []
-    for coord_row in _canvas_coords(width, height):
-        row = []
-        for coords in coord_row:
-            inputs = _resolve_inputs(genome, coords)
-            raw_output = net.activate(inputs)
-            output = _resolve_outputs(genome, raw_output)
-            channels = [_legacy_apply_render(val) for val in output[:3]]
-            row.append(tuple(_legacy_to_byte(ch) for ch in channels))
-        image.append(row)
-    return image
 
 
 def render_genome_image(
@@ -333,9 +256,6 @@ __all__ = [
     "try_load_font",
     "draw_label",
     "create_numbered_grid",
-    "legacy_eval_mono_image",
-    "legacy_eval_gray_image",
-    "legacy_eval_color_image",
     "render_genome_image",
     "render_genome_diagram",
 ]

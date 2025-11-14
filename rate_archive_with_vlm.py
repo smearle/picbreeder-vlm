@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
+from constants import RATING_BATCH_SIZE
 from im_query import DEFAULT_MODEL, query_im, query_images_with_captions
 from rendering import create_numbered_grid
 
@@ -612,6 +613,7 @@ def main() -> None:
         return
 
     include_titles = args.include_titles_in_prompt or args.verify_titles
+    prompt: Optional[str] = None
 
     existing_runs = 0
     if log_path.exists():
@@ -680,7 +682,7 @@ def main() -> None:
                     response = query_images_with_captions(
                         image_bytes_list,
                         captions_list,
-                        prompt=None,
+                        prompt=prompt,
                         system_instruction=system_prompt,
                     )
                     response_text = getattr(response, "text", "") or ""

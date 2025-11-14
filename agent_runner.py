@@ -465,7 +465,7 @@ class AgentRunner:
             entry_copy["branching_subset_label"] = "Random"
             archive_entries.append(entry_copy)
 
-        archive_grid: Optional[Path]
+        archive_grid: Optional[Path] = None
         if archive_entries:
             archive_grid = self.archive_manager.create_archive_grid(
                 self.thumb_size,
@@ -502,16 +502,6 @@ class AgentRunner:
             if decision["choice"] == "branch":
                 decision["selected_images"] = [random.randrange(len(archive_entries))]
         
-        elif archive_grid is None:
-            decision = {
-                "choice": "fresh",
-                "selected_images": [],
-                "rationale": "Archive grid unavailable; falling back to fresh population.",
-                "raw_response": None,
-                "timestamp": datetime.now().isoformat(),
-                "archive_elite_names": elite_name_list,
-            }
-
         else:
             display_order = list(range(len(archive_entries)))
             shuffled_entries = [archive_entries[idx] for idx in display_order]

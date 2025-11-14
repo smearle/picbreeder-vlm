@@ -2,7 +2,7 @@ graphviz
 google-genai
 hydra-core
 matplotlib
-neat-python
+neat-python==0.92
 Pillow
 pygame
 python-dotenv

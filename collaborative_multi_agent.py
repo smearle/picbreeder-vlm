@@ -63,7 +63,13 @@ from neat_components import (
     apply_picbreeder_config_defaults,
     sync_population_output_activations,
 )
-from constants import ARCHIVE_DIR_NAME, AGENT_DIR_PREFIX, PERSONALITY_BATCH_SIZE, PERSONALITY_TOTAL, RATE_EVERY
+from constants import (
+    ARCHIVE_DIR_NAME,
+    AGENT_DIR_PREFIX,
+    PERSONALITY_BATCH_SIZE,
+    PERSONALITY_TOTAL,
+    RATING_BATCH_SIZE,
+)
 from picbreeder_reproduction import PicbreederReproduction
 from prompts import GOAL_PROMPTS
 from utils import apply_random_seed
@@ -216,7 +222,7 @@ class CollaborativeMultiAgentOrchestrator:
         self.cols = cols
         self.thumb_size = thumb_size
         self.scheme = scheme
-        self.config_path = neat_config_path
+        self.neat_config_path = neat_config_path
         self.select_k = select_k
         self.agent_generations = agent_generations
         self.warm_start_structure = warm_start_structure
@@ -603,7 +609,7 @@ class CollaborativeMultiAgentOrchestrator:
 
     def _build_config(self) -> neat.Config:
         return build_neat_config(
-            self.config_path,
+            self.neat_config_path,
             self.rows,
             self.cols,
             self.enable_output_activations,
@@ -793,6 +799,13 @@ class CollaborativeMultiAgentOrchestrator:
                             )
                     elif msg_type == "rating_result":
                         self._apply_rating_results_from_worker(message)
+                    elif msg_type == "rating_failed":
+                        trigger_entry_count = _safe_int(message.get("trigger_entry_count"), default=0)
+                        error_text = message.get("error")
+                        if error_text:
+                            print(f"Auto-rating failed: {error_text}")
+                        if trigger_entry_count:
+                            self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
                     elif msg_type == "job_complete":
                         self._handle_job_complete(state, message)
                         state.current_task = None
@@ -830,16 +843,31 @@ class CollaborativeMultiAgentOrchestrator:
     def _handle_worker_ready(self, state: WorkerState, pending_tasks: Deque[AgentTask]) -> None:
         if state.current_task is not None:
             return
+        try:
+            rating_targets, trigger_entry_count = self.archive_manager.prepare_auto_rating_batch(
+                RATING_BATCH_SIZE
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"Auto-rating scheduling failed: {exc}")
+            rating_targets = []
+            trigger_entry_count = 0
+        if rating_targets:
+            payload = {
+                "type": "run_rating",
+                "targets": rating_targets,
+                "trigger_entry_count": trigger_entry_count,
+                "goal_prompt": self.archive_manager.goal_prompt,
+                "archive_dir": str(self.archive_manager.archive_dir),
+            }
+            state.task_conn.send(payload)
+            state.stopping = False
+            return
         if pending_tasks:
             task = pending_tasks.popleft()
             state.current_task = task
-            rating_targets = self._rating_targets_for_task(task)
             payload = {
                 "type": "run_agent",
                 "task": task.to_message(),
-                "rating_targets": rating_targets,
-                "goal_prompt": self.archive_manager.goal_prompt,
-                "archive_dir": str(self.archive_manager.archive_dir),
             }
             state.task_conn.send(payload)
             state.stopping = False
@@ -892,21 +920,12 @@ class CollaborativeMultiAgentOrchestrator:
             raise AttributeError(f"Archive method '{method_name}' is not available for workers.")
         return method(*args, **kwargs)
 
-    def _rating_targets_for_task(self, task: AgentTask) -> List[Dict[str, str]]:
-        if RATE_EVERY <= 0:
-            return []
-        if task.agent_index < 0 or task.agent_index % RATE_EVERY != 0:
-            return []
-        try:
-            targets = self.archive_manager.prepare_rating_batch(100)
-        except Exception as exc:  # pylint: disable=broad-except
-            print(f"Auto-rating preparation failed for {task.agent_id}: {exc}")
-            return []
-        return targets
-
     def _apply_rating_results_from_worker(self, payload: Dict[str, Any]) -> None:
+        trigger_entry_count = _safe_int(payload.get("trigger_entry_count"), default=0)
         raw_results = payload.get("results")
         if not isinstance(raw_results, dict) or not raw_results:
+            if trigger_entry_count:
+                self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
             return
         parsed: Dict[str, RatingResult] = {}
         for entry_id, value in raw_results.items():
@@ -925,7 +944,39 @@ class CollaborativeMultiAgentOrchestrator:
                 reported_title=value.get("reported_title"),
             )
         if parsed:
-            self.archive_manager.apply_rating_results(parsed)
+            applied = self.archive_manager.apply_rating_results(parsed)
+            if trigger_entry_count and applied > 0:
+                self.archive_manager.mark_auto_rating_complete(trigger_entry_count, applied)
+            elif trigger_entry_count:
+                self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
+        elif trigger_entry_count:
+            self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
+
+    def _maybe_run_auto_rating_serial(self) -> None:
+        try:
+            targets, trigger_entry_count = self.archive_manager.prepare_auto_rating_batch(RATING_BATCH_SIZE)
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"Auto-rating scheduling failed: {exc}")
+            targets = []
+            trigger_entry_count = 0
+        if not targets:
+            return
+        goal_prompt = self.archive_manager.goal_prompt
+        archive_dir = self.archive_manager.archive_dir
+        try:
+            results = _perform_rating(targets, goal_prompt, archive_dir)
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"Auto-rating failed: {exc}")
+            self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
+            return
+        if not results:
+            self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
+            return
+        applied = self.archive_manager.apply_rating_results(results)
+        if applied > 0:
+            self.archive_manager.mark_auto_rating_complete(trigger_entry_count, applied)
+        else:
+            self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
 
     def _handle_job_complete(self, state: WorkerState, payload: Dict[str, Any]) -> None:
         agent_id = payload.get("agent_id")
@@ -1066,6 +1117,7 @@ class CollaborativeMultiAgentOrchestrator:
             extinct=extinct,
             final_generation=final_generation,
         )
+        self._maybe_run_auto_rating_serial()
 
     def _resume_agent(
         self,
@@ -1124,6 +1176,7 @@ class CollaborativeMultiAgentOrchestrator:
             extinct=extinct,
             final_generation=final_generation,
         )
+        self._maybe_run_auto_rating_serial()
         return True
 
     def _finalize_agent(
@@ -1546,32 +1599,6 @@ def _continual_agent_worker(
             if msg_type == "run_agent":
                 task_payload = message.get("task") or {}
                 task = _deserialize_agent_task(task_payload)
-                rating_targets = message.get("rating_targets") or []
-                goal_prompt = message.get("goal_prompt") or GOAL_PROMPTS[cfg.goal]
-                archive_dir_value = message.get("archive_dir")
-                archive_dir = Path(archive_dir_value) if archive_dir_value else cfg.experiment_dir / ARCHIVE_DIR_NAME
-                if rating_targets:
-                    try:
-                        rating_results = _perform_rating(rating_targets, goal_prompt, archive_dir)
-                    except Exception as exc:  # pylint: disable=broad-except
-                        task_conn.send({"type": "worker_error", "error": f"Rating failed: {exc}"})
-                    else:
-                        serializable_results = {
-                            entry_id: {
-                                "score": rating.score,
-                                "justification": rating.justification,
-                                "reported_title": rating.reported_title,
-                            }
-                            for entry_id, rating in rating_results.items()
-                        }
-                        if serializable_results:
-                            task_conn.send(
-                                {
-                                    "type": "rating_result",
-                                    "agent_id": task.agent_id,
-                                    "results": serializable_results,
-                                }
-                            )
                 try:
                     result_payload = _execute_agent_task(
                         task,
@@ -1590,6 +1617,47 @@ def _continual_agent_worker(
                     )
                 else:
                     task_conn.send(result_payload)
+            elif msg_type == "run_rating":
+                rating_targets = message.get("targets") or []
+                trigger_entry_count = _safe_int(message.get("trigger_entry_count"), default=0)
+                goal_prompt = message.get("goal_prompt") or GOAL_PROMPTS[cfg.goal]
+                archive_dir_value = message.get("archive_dir")
+                archive_dir = Path(archive_dir_value) if archive_dir_value else cfg.experiment_dir / ARCHIVE_DIR_NAME
+                if not rating_targets:
+                    task_conn.send(
+                        {
+                            "type": "rating_failed",
+                            "trigger_entry_count": trigger_entry_count,
+                            "error": "No rating targets provided.",
+                        }
+                    )
+                    continue
+                try:
+                    rating_results = _perform_rating(rating_targets, goal_prompt, archive_dir)
+                except Exception as exc:  # pylint: disable=broad-except
+                    task_conn.send(
+                        {
+                            "type": "rating_failed",
+                            "trigger_entry_count": trigger_entry_count,
+                            "error": f"Rating failed: {exc}",
+                        }
+                    )
+                else:
+                    serializable_results = {
+                        entry_id: {
+                            "score": rating.score,
+                            "justification": rating.justification,
+                            "reported_title": rating.reported_title,
+                        }
+                        for entry_id, rating in rating_results.items()
+                    }
+                    task_conn.send(
+                        {
+                            "type": "rating_result",
+                            "results": serializable_results,
+                            "trigger_entry_count": trigger_entry_count,
+                        }
+                    )
             elif msg_type == "stop":
                 task_conn.send({"type": "stopped"})
                 break

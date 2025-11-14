@@ -14,7 +14,7 @@ from rate_archive_with_vlm import load_archive_entries, render_ranked_figure, su
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "metadata_path",
+        "experiment_dir",
         type=Path,
         help="Path to archive_metadata.json",
     )
@@ -46,7 +46,7 @@ def extract_scores(metadata: Dict) -> Dict[str, List[float]]:
 
 def main() -> None:
     args = parse_args()
-    metadata_path = args.metadata_path.expanduser().resolve()
+    metadata_path = args.experiment_dir.expanduser().resolve() / "archive" / "archive_metadata.json"
     if not metadata_path.exists():
         raise FileNotFoundError(f"Could not find {metadata_path}")
     if metadata_path.name != "archive_metadata.json":

@@ -15,3 +15,9 @@ submitit_logs/*
 human_archive/*
 legacy_diagrams/*
 legacy_renders/*
+genomeAll
+**/figures/lineages
+**/figures/lineages_neat
+*.egg-info
+archive
+archive_neat
