@@ -48,7 +48,7 @@ class GenerationArtifacts:
 
 
 
-class CollaborativeAgentRunner:
+class AgentRunner:
     """Encapsulates the per-agent evolution workflow."""
 
     def __init__(

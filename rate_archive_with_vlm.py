@@ -251,7 +251,6 @@ def load_scores_from_log(log_path: Path) -> Tuple[Dict[str, List[float]], int, D
     with log_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
-            breakpoint()
             if not line:
                 continue
             try:
@@ -271,7 +270,6 @@ def load_scores_from_log(log_path: Path) -> Tuple[Dict[str, List[float]], int, D
                         scores[image_id].append(float(score))
                         mode_scores[mode_key][image_id].append(float(score))
                     else:
-                        breakpoint()
                         print(f"Skipping invalid log entry score: {entry}")
             else:
                 image_id = payload.get("image_id")

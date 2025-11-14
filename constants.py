@@ -9,6 +9,6 @@ AGENT_DIR_PREFIX = "agent_"
 DEFAULT_BRANCHING_ARCHIVE_SAMPLE = 100
 PERSONALITY_TOTAL = 100
 PERSONALITY_BATCH_SIZE = 10
-RATE_EVERY = 50
+RATE_EVERY = 5
 REPO_ROOT = Path(__file__).resolve().parent
 SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes")

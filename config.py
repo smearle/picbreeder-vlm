@@ -19,10 +19,10 @@ class CollaborativeConfig:
     thumb_size: int = 200  # Pixel size for rendered genome thumbnails
     chat_history_turns: int = DEFAULT_CHAT_HISTORY_TURNS  # How many prior turns each agent sees (-1 keeps all)
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
-    config_path: Optional[Path] = None  # Optional override for the NEAT config file
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = DEFAULT_AGENT_GENERATIONS  # Generations executed for each agent
-    num_agents: int = 400  # How many agents run sequentially in this session
+    num_agents: int = 1_000  # How many agents run sequentially in this session
+    neat_config_path: Optional[Path] = None  # Path to NEAT config file (uses default if None)
     num_proc: int = 1  # Number of parallel agent processes
     warm_start_structure: int = 0  # Number of initial agents restricted to structure-only mutation
     experiment_dir: Optional[Path] = None  # Output directory for logs and artefacts
@@ -59,9 +59,9 @@ class CollaborativeConfig:
     )
 
 
-def resolve_config_path(cfg: CollaborativeConfig) -> Path:
-    if cfg.config_path is not None:
-        return Path(cfg.config_path)
+def resolve_neat_config_path(cfg: CollaborativeConfig) -> Path:
+    if cfg.neat_config_path is not None:
+        return Path(cfg.neat_config_path)
     base = REPO_ROOT / "picture2d"
     config_name = "interactive_config_color"
     return base / config_name
@@ -89,11 +89,11 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
     if cfg.selection_baseline not in SELECTION_BASELINES:
         raise ValueError(f"selection-baseline must be one of {sorted(SELECTION_BASELINES)}")
 
-    config_path = resolve_config_path(cfg)
+    config_path = resolve_neat_config_path(cfg)
+    cfg.neat_config_path = config_path
     config_path = _ensure_absolute(Path(config_path), original_cwd)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at {config_path}")
-    cfg.config_path = config_path
 
     if cfg.resume:
         if cfg.experiment_dir is None:

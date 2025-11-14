@@ -26,7 +26,7 @@ from rate_archive_with_vlm import (
     format_rating_entry_label,
     parse_rating_batch_response,
 )
-from utils import _ensure_int_list
+from utils import atomic_write_json, _ensure_int_list
 
 try:
     import fcntl  # type: ignore[attr-defined]
@@ -70,20 +70,6 @@ def interprocess_lock(lock_path: Path):
         finally:
             if locked:
                 _unlock_file_handle(handle)
-
-
-def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
-    import tempfile
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=str(path.parent))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-        tmp_path.replace(path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 @dataclass
@@ -184,7 +170,7 @@ class ArchiveManager:
         self.archive_dir = archive_dir
         self.goal_prompt = goal_prompt
         self.metadata_file = archive_dir / "archive_metadata.json"
-        self._lock_path = self.metadata_file.with_suffix(".lock")
+        # self._lock_path = self.metadata_file.with_suffix(".lock")
         self.images_dir = archive_dir / "images"
         self.genomes_dir = archive_dir / "genomes"
         self.checkpoints_dir = archive_dir / "checkpoints"
@@ -219,7 +205,7 @@ class ArchiveManager:
             self._persist()
 
     def _persist(self) -> None:
-        _atomic_write_json(self.metadata_file, self._metadata)
+        atomic_write_json(self.metadata_file, self._metadata)
 
     def refresh(self) -> None:
         """Reload metadata from disk to incorporate external updates."""
@@ -318,6 +304,83 @@ class ArchiveManager:
 
         return top_subset, random_subset
 
+    def prepare_rating_batch(self, limit: int) -> List[Dict[str, str]]:
+        if limit <= 0:
+            return []
+        # with interprocess_lock(self._lock_path):
+        self.refresh()
+        targets = self._select_lowest_rated_entries_locked(limit)
+        if targets:
+            manual_meta = self._metadata.setdefault("manual_rating", {})
+            manual_meta["in_progress_ids"] = [item.get("id") for item in targets]
+            manual_meta["in_progress_started_at"] = datetime.now().isoformat()
+            self._persist()
+        return targets
+
+    def apply_rating_results(self, ratings: Dict[str, RatingResult]) -> None:
+        if not ratings:
+            return
+        # with interprocess_lock(self._lock_path):
+        self.refresh()
+        entries_by_id: Dict[str, Dict[str, Any]] = {}
+        for entry in self._metadata.get("entries", []):
+            entry_id = str(entry.get("id") or "")
+            if entry_id:
+                entries_by_id[entry_id] = entry
+
+        timestamp = datetime.now().isoformat()
+        applied_count = 0
+        for entry_id, rating in ratings.items():
+            entry = entries_by_id.get(entry_id)
+            if entry is None:
+                continue
+            ratings_list = entry.get("vlm_ratings")
+            if isinstance(ratings_list, list):
+                pass
+            elif ratings_list is None:
+                ratings_list = []
+            else:
+                ratings_list = [ratings_list]
+            ratings_list.append(float(rating.score))
+            entry["vlm_ratings"] = ratings_list
+
+            comments_list = entry.get("vlm_comments")
+            if isinstance(comments_list, list):
+                pass
+            elif comments_list is None:
+                comments_list = []
+            else:
+                comments_list = [comments_list]
+            comments_list.append(str(rating.justification or ""))
+            entry["vlm_comments"] = comments_list
+
+            titles_list = entry.get("vlm_reported_titles")
+            if isinstance(titles_list, list):
+                pass
+            elif titles_list is None:
+                titles_list = []
+            else:
+                titles_list = [titles_list]
+            titles_list.append(str(rating.reported_title or ""))
+            entry["vlm_reported_titles"] = titles_list
+
+            applied_count += 1
+
+            manual_meta = self._metadata.setdefault("manual_rating", {})
+            if applied_count:
+                manual_meta["last_completed_at"] = timestamp
+                manual_meta["last_completed_count"] = applied_count
+            in_progress_ids = manual_meta.get("in_progress_ids")
+            if isinstance(in_progress_ids, list) and in_progress_ids:
+                remaining = [entry_id for entry_id in in_progress_ids if entry_id not in ratings]
+                if remaining:
+                    manual_meta["in_progress_ids"] = remaining
+                else:
+                    manual_meta.pop("in_progress_ids", None)
+                    manual_meta.pop("in_progress_started_at", None)
+            self._persist()
+        print(f"Applied ratings for {applied_count} archive entries.")
+
     def get_elite_names(self, max_length: int = 80) -> List[str]:
         self.refresh()
         names: List[str] = []
@@ -348,7 +411,6 @@ class ArchiveManager:
 
     def add_entry(
         self,
-        *,
         image_bytes: bytes,
         genome: neat.DefaultGenome,
         agent_id: str,
@@ -365,61 +427,61 @@ class ArchiveManager:
         ancestor_genome_keys: Optional[Sequence[int]] = None,
         color_enabled: bool = False,
     ) -> ArchiveEntry:
-        """Persist a favourite image and genome into the shared archive."""
+        """Persist a favorite image and genome into the shared archive."""
         should_auto_rate = False
         auto_rate_targets: List[Dict[str, str]] = []
         auto_rate_trigger_size = 0
 
-        with interprocess_lock(self._lock_path):
-            self.refresh()
-            entry_id = f"img_{self._metadata['next_id']:06d}"
-            self._metadata["next_id"] += 1
+        # with interprocess_lock(self._lock_path):
+        self.refresh()
+        entry_id = f"img_{self._metadata['next_id']:06d}"
+        self._metadata["next_id"] += 1
 
-            image_path = self.images_dir / f"{entry_id}.png"
-            image_path.write_bytes(image_bytes)
+        image_path = self.images_dir / f"{entry_id}.png"
+        image_path.write_bytes(image_bytes)
 
-            genome_path = self.genomes_dir / f"{entry_id}.pkl"
-            with genome_path.open("wb") as handle:
-                pickle.dump(genome, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        genome_path = self.genomes_dir / f"{entry_id}.pkl"
+        with genome_path.open("wb") as handle:
+            pickle.dump(genome, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-            archive_entry = ArchiveEntry(
-                entry_id=entry_id,
-                title=title,
-                image_path=image_path,
-                genome_path=genome_path,
-                agent_id=agent_id,
-                generation=generation,
-                image_index=image_index,
-                rationale=rationale,
-                source_experiment=source_experiment,
-                added_at=datetime.now(),
-                metadata_path=favorite_log_path,
-                selection_grid_path=selection_grid_path,
-                genome_key=genome_key,
-                parent_genome_keys=list(parent_genome_keys or []),
-                source_entry_ids=[str(value) for value in (source_entry_ids or [])],
-                ancestor_genome_keys=list(ancestor_genome_keys or []),
-                color_enabled=bool(color_enabled),
-            )
+        archive_entry = ArchiveEntry(
+            entry_id=entry_id,
+            title=title,
+            image_path=image_path,
+            genome_path=genome_path,
+            agent_id=agent_id,
+            generation=generation,
+            image_index=image_index,
+            rationale=rationale,
+            source_experiment=source_experiment,
+            added_at=datetime.now(),
+            metadata_path=favorite_log_path,
+            selection_grid_path=selection_grid_path,
+            genome_key=genome_key,
+            parent_genome_keys=list(parent_genome_keys or []),
+            source_entry_ids=[str(value) for value in (source_entry_ids or [])],
+            ancestor_genome_keys=list(ancestor_genome_keys or []),
+            color_enabled=bool(color_enabled),
+        )
 
-            entries_list = self._metadata.setdefault("entries", [])
-            entries_list.append(archive_entry.as_dict())
+        entries_list = self._metadata.setdefault("entries", [])
+        entries_list.append(archive_entry.as_dict())
 
-            total_entries = len(entries_list)
-            auto_rating_meta = self._metadata.setdefault("auto_rating", {})
-            if total_entries > 0 and total_entries % RATE_EVERY == 0:
-                last_completed = int(auto_rating_meta.get("last_completed_count", 0) or 0)
-                in_progress = auto_rating_meta.get("in_progress_count")
-                if total_entries > last_completed and in_progress != total_entries:
-                    auto_rate_targets = self._select_lowest_rated_entries_locked(100)
-                    if auto_rate_targets:
-                        should_auto_rate = True
-                        auto_rate_trigger_size = total_entries
-                        auto_rating_meta["in_progress_count"] = len(auto_rate_targets)
-                        auto_rating_meta["in_progress_started_at"] = datetime.now().isoformat()
+        total_entries = len(entries_list)
+        auto_rating_meta = self._metadata.setdefault("auto_rating", {})
+        if total_entries > 0 and total_entries % RATE_EVERY == 0:
+            last_completed = int(auto_rating_meta.get("last_completed_count", 0) or 0)
+            in_progress = auto_rating_meta.get("in_progress_count")
+            if total_entries > last_completed and in_progress != total_entries:
+                auto_rate_targets = self._select_lowest_rated_entries_locked(100)
+                if auto_rate_targets:
+                    should_auto_rate = True
+                    auto_rate_trigger_size = total_entries
+                    auto_rating_meta["in_progress_count"] = len(auto_rate_targets)
+                    auto_rating_meta["in_progress_started_at"] = datetime.now().isoformat()
 
-            self._persist()
-            self._write_checkpoint(archive_entry)
+        self._persist()
+        self._write_checkpoint(archive_entry)
 
         if should_auto_rate:
             self._execute_auto_rating(auto_rate_targets, auto_rate_trigger_size)
@@ -691,18 +753,18 @@ class ArchiveManager:
 
     def _execute_auto_rating(self, targets: Sequence[Dict[str, str]], trigger_size: int) -> None:
         if not targets:
-            with interprocess_lock(self._lock_path):
-                self.refresh()
-                auto_meta = self._metadata.setdefault("auto_rating", {})
-                if auto_meta.get("in_progress_count") == trigger_size:
-                    auto_meta["in_progress_count"] = None
-                    auto_meta["last_completed_count"] = max(
-                        int(auto_meta.get("last_completed_count", 0) or 0),
-                        trigger_size,
-                    )
-                    auto_meta.pop("in_progress_started_at", None)
-                    auto_meta["last_completed_at"] = datetime.now().isoformat()
-                self._persist()
+            # with interprocess_lock(self._lock_path):
+            self.refresh()
+            auto_meta = self._metadata.setdefault("auto_rating", {})
+            if auto_meta.get("in_progress_count") == trigger_size:
+                auto_meta["in_progress_count"] = None
+                auto_meta["last_completed_count"] = max(
+                    int(auto_meta.get("last_completed_count", 0) or 0),
+                    trigger_size,
+                )
+                auto_meta.pop("in_progress_started_at", None)
+                auto_meta["last_completed_at"] = datetime.now().isoformat()
+            self._persist()
             return
 
         vlm_entries: List[RatingArchiveEntry] = []
@@ -719,13 +781,13 @@ class ArchiveManager:
             )
 
         if not vlm_entries:
-            with interprocess_lock(self._lock_path):
-                self.refresh()
-                auto_meta = self._metadata.setdefault("auto_rating", {})
-                if auto_meta.get("in_progress_count") == trigger_size:
-                    auto_meta["in_progress_count"] = None
-                    auto_meta.pop("in_progress_started_at", None)
-                self._persist()
+            # with interprocess_lock(self._lock_path):
+            self.refresh()
+            auto_meta = self._metadata.setdefault("auto_rating", {})
+            if auto_meta.get("in_progress_count") == trigger_size:
+                auto_meta["in_progress_count"] = None
+                auto_meta.pop("in_progress_started_at", None)
+            self._persist()
             return
 
         rating_batch_size = 100
@@ -772,38 +834,38 @@ class ArchiveManager:
                 if 0 <= idx < len(batch):
                     results[batch[idx].image_id] = rating
 
-        with interprocess_lock(self._lock_path):
-            self.refresh()
-            entries_by_id: Dict[str, Dict[str, Any]] = {}
-            for entry in self._metadata.get("entries", []):
-                entry_id = str(entry.get("id") or "")
-                if entry_id:
-                    entries_by_id[entry_id] = entry
+        # with interprocess_lock(self._lock_path):
+        self.refresh()
+        entries_by_id: Dict[str, Dict[str, Any]] = {}
+        for entry in self._metadata.get("entries", []):
+            entry_id = str(entry.get("id") or "")
+            if entry_id:
+                entries_by_id[entry_id] = entry
 
-            timestamp = datetime.now().isoformat()
-            for entry_id, rating in results.items():
-                entry = entries_by_id.get(entry_id)
-                if entry is None:
-                    continue
-                ratings_list = entry.get("vlm_ratings")
-                if isinstance(ratings_list, list):
-                    pass
-                elif ratings_list is None:
-                    ratings_list = []
-                else:
-                    ratings_list = [ratings_list]
-                ratings_list.append(float(rating.score))
-                entry["vlm_ratings"] = ratings_list
+        timestamp = datetime.now().isoformat()
+        for entry_id, rating in results.items():
+            entry = entries_by_id.get(entry_id)
+            if entry is None:
+                continue
+            ratings_list = entry.get("vlm_ratings")
+            if isinstance(ratings_list, list):
+                pass
+            elif ratings_list is None:
+                ratings_list = []
+            else:
+                ratings_list = [ratings_list]
+            ratings_list.append(float(rating.score))
+            entry["vlm_ratings"] = ratings_list
 
-                comments_list = entry.get("vlm_comments")
-                if isinstance(comments_list, list):
-                    pass
-                elif comments_list is None:
-                    comments_list = []
-                else:
-                    comments_list = [comments_list]
-                comments_list.append(str(rating.justification or ""))
-                entry["vlm_comments"] = comments_list
+            comments_list = entry.get("vlm_comments")
+            if isinstance(comments_list, list):
+                pass
+            elif comments_list is None:
+                comments_list = []
+            else:
+                comments_list = [comments_list]
+            comments_list.append(str(rating.justification or ""))
+            entry["vlm_comments"] = comments_list
 
             auto_meta = self._metadata.setdefault("auto_rating", {})
             if auto_meta.get("in_progress_count") == trigger_size:
@@ -833,24 +895,24 @@ class ArchiveManager:
             json.dump(snapshot, fp, indent=2)
 
     def remove_entry(self, entry_id: str) -> bool:
-        with interprocess_lock(self._lock_path):
-            self.refresh()
-            entries = self._metadata.get("entries", [])
-            for index, entry in enumerate(entries):
-                if entry.get("id") != entry_id:
+        # with interprocess_lock(self._lock_path):
+        self.refresh()
+        entries = self._metadata.get("entries", [])
+        for index, entry in enumerate(entries):
+            if entry.get("id") != entry_id:
+                continue
+            for key in ("image_path", "genome_path"):
+                path_value = entry.get(key)
+                if not path_value:
                     continue
-                for key in ("image_path", "genome_path"):
-                    path_value = entry.get(key)
-                    if not path_value:
-                        continue
-                    try:
-                        Path(path_value).unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                del entries[index]
-                self._metadata["entries"] = entries
-                self._persist()
-                return True
+                try:
+                    Path(path_value).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            del entries[index]
+            self._metadata["entries"] = entries
+            self._persist()
+            return True
         return False
 
 
@@ -859,6 +921,6 @@ __all__ = [
     "ArchiveEntry",
     "ArchiveManager",
     "interprocess_lock",
-    "_atomic_write_json",
+    "atomic_write_json",
     "_ensure_int_list",
 ]

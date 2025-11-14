@@ -6,6 +6,7 @@ import json
 import os
 import random
 import re
+import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -170,13 +171,17 @@ def select_parents_from_grid(
     color_value: Optional[bool] = None
     color_toggle_only = False
 
+    attempt_latencies: List[float] = []
+
     for attempt in range(1, max_attempts + 1):
+        start_time = time.perf_counter()
         response = query_with_history(
             image_caption_pairs,
             prompt=prompt,
             system_instruction=system_instruction,
             chat_history_turns=chat_history_turns,
         )
+        attempt_latencies.append(time.perf_counter() - start_time)
         response_text = getattr(response, "text", "") or ""
         parse_result = extract_json_object(response_text)
 
@@ -238,6 +243,8 @@ def select_parents_from_grid(
             "response_text": response_text,
             "error": error_reason,
         }
+        if attempt_latencies:
+            error_payload["latency_sec"] = attempt_latencies[-1]
         if isinstance(parsed, dict) and parsed:
             error_payload["parsed_json"] = parsed
 
@@ -305,6 +312,7 @@ def select_parents_from_grid(
         "view_index": view_index,
         "color_toggle_only": color_toggle_only,
         "response_attempts": attempt,
+        "response_latencies_sec": attempt_latencies,
     }
     metadata_dir = query_dir / "metadata"
     if metadata_subdir:

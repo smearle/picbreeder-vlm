@@ -8,7 +8,8 @@ Example:
 
 Outputs saved to the experiment directory:
   - embeddings_openclip.npz    (filenames + embeddings)
-  - embed_viz_umap.png         (scatter visualization)
+    - embed_viz_<method>.png     (scatter visualization)
+    - embed_grid_<method>.png    (grid layout approximation)
 
 """
 from pathlib import Path
@@ -16,6 +17,8 @@ import argparse
 import json
 import sys
 import math
+from collections import deque
+
 from PIL import Image
 import numpy as np
 import torch
@@ -123,6 +126,149 @@ def plot_coords(coords, image_paths, outpath: Path, thumbs_limit=200):
             ax.add_artist(ab)
         except Exception:
             # skip any images that fail to load
+            continue
+
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+
+
+def _direction_priority(vec):
+    """Return the cardinal direction order that best aligns with the embedding offset."""
+    direction_vectors = {
+        (0, 1): np.array([1.0, 0.0]),
+        (0, -1): np.array([-1.0, 0.0]),
+        (-1, 0): np.array([0.0, 1.0]),
+        (1, 0): np.array([0.0, -1.0]),
+    }
+    base_order = [(0, 1), (0, -1), (-1, 0), (1, 0)]
+    norm = np.linalg.norm(vec)
+    if norm < 1e-9:
+        return base_order
+    vec_unit = vec / norm
+    return sorted(base_order, key=lambda d: -float(np.dot(vec_unit, direction_vectors[d])))
+
+
+def _find_grid_position(neighbor_pos, direction_order, occupied):
+    """Breadth-first search for the nearest free grid cell, honoring a direction priority."""
+    visited = set()
+    queue = deque()
+    visited.add(neighbor_pos)
+    for direction in direction_order:
+        target = (neighbor_pos[0] + direction[0], neighbor_pos[1] + direction[1])
+        queue.append(target)
+
+    default_dirs = direction_order
+    safety_cap = 100000  # guard against unexpected infinite loops
+    iterations = 0
+
+    while queue:
+        iterations += 1
+        if iterations > safety_cap:
+            raise RuntimeError("Grid placement search exceeded safety cap; layout may be stuck.")
+
+        pos = queue.popleft()
+        if pos in visited:
+            continue
+        visited.add(pos)
+
+        if pos not in occupied:
+            return pos
+
+        for direction in default_dirs:
+            next_pos = (pos[0] + direction[0], pos[1] + direction[1])
+            if next_pos not in visited:
+                queue.append(next_pos)
+
+    raise RuntimeError("Failed to find an empty grid position for image placement.")
+
+
+def layout_embeddings_to_grid(coords: np.ndarray):
+    """Assign each embedding to an integer grid coordinate while preserving locality."""
+    coords = np.asarray(coords, dtype=float)
+    n = coords.shape[0]
+    if n == 0:
+        return {}, (0, 0, 0, 0)
+
+    centroid = coords.mean(axis=0)
+    center_idx = int(np.argmin(np.linalg.norm(coords - centroid, axis=1)))
+
+    assignments = {center_idx: (0, 0)}
+    occupied = {(0, 0)}
+
+    unassigned = [idx for idx in range(n) if idx != center_idx]
+    if not unassigned:
+        return assignments, (0, 0, 0, 0)
+
+    unassigned_arr = np.array(unassigned, dtype=int)
+    best_dist = np.abs(coords[unassigned_arr] - coords[center_idx]).sum(axis=1)
+    best_neighbor = [center_idx for _ in unassigned]
+
+    while unassigned:
+        min_pos = int(np.argmin(best_dist))
+        idx = unassigned.pop(min_pos)
+        neighbor_idx = best_neighbor.pop(min_pos)
+        best_dist = np.delete(best_dist, min_pos)
+
+        neighbor_pos = assignments[neighbor_idx]
+        vec = coords[idx] - coords[neighbor_idx]
+        direction_order = _direction_priority(vec)
+        new_pos = _find_grid_position(neighbor_pos, direction_order, occupied)
+
+        assignments[idx] = new_pos
+        occupied.add(new_pos)
+
+        if unassigned:
+            unassigned_arr = np.array(unassigned, dtype=int)
+            new_dists = np.abs(coords[unassigned_arr] - coords[idx]).sum(axis=1)
+            mask = new_dists < best_dist
+            best_dist[mask] = new_dists[mask]
+            for i, use_new in enumerate(mask.tolist()):
+                if use_new:
+                    best_neighbor[i] = idx
+
+    rows = [pos[0] for pos in assignments.values()]
+    cols = [pos[1] for pos in assignments.values()]
+    bounds = (min(rows), max(rows), min(cols), max(cols))
+    return assignments, bounds
+
+
+def render_grid(assignments, bounds, image_paths, outpath: Path):
+    """Render the grid-aligned images to disk."""
+    if not assignments:
+        return
+
+    min_row, max_row, min_col, max_col = bounds
+    rows = max_row - min_row + 1
+    cols = max_col - min_col + 1
+
+    fig_w = min(30.0, max(4.0, cols * 1.6))
+    fig_h = min(30.0, max(4.0, rows * 1.6))
+    fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h))
+
+    if rows == 1 and cols == 1:
+        axes = np.array([[axes]])
+    elif rows == 1:
+        axes = axes.reshape(1, cols)
+    elif cols == 1:
+        axes = axes.reshape(rows, 1)
+
+    for r in range(rows):
+        for c in range(cols):
+            ax = axes[r, c]
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.axis("off")
+
+    for idx, (row, col) in assignments.items():
+        rr = row - min_row
+        cc = col - min_col
+        ax = axes[rr, cc]
+        try:
+            with Image.open(image_paths[idx]) as img:
+                img_rgb = img.convert("RGB")
+            ax.imshow(img_rgb)
+        except Exception:
             continue
 
     fig.tight_layout()
@@ -291,6 +437,11 @@ def main():
     viz_out = exp_dir / f"embed_viz_{args.method}.png"
     print(f"Creating visualization (thumbnails limit={args.thumbs_limit}) -> {viz_out}")
     plot_coords(coords, [p for p in image_paths], viz_out, thumbs_limit=args.thumbs_limit)
+
+    grid_assignments, grid_bounds = layout_embeddings_to_grid(coords)
+    grid_out = exp_dir / f"embed_grid_{args.method}.png"
+    print(f"Rendering grid approximation -> {grid_out}")
+    render_grid(grid_assignments, grid_bounds, image_paths, grid_out)
 
     print("Done.")
 

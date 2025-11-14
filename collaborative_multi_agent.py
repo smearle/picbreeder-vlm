@@ -26,15 +26,19 @@ import multiprocessing
 import os
 import pickle
 import random
+import traceback
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from multiprocessing.connection import Connection
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Set, Tuple
 from itertools import count
 
 import hydra
 from hydra.utils import get_original_cwd
 
-from agent_runner import CollaborativeAgentRunner
+from agent_runner import AgentRunner
 from config import CollaborativeConfig, _deserialize_config_for_worker, _serialize_config_for_worker, ensure_valid_config
 import personalities
 
@@ -48,7 +52,7 @@ from chat import (
 from archive_manager import (
     ArchiveEntry,
     ArchiveManager,
-    _atomic_write_json,
+    atomic_write_json,
     interprocess_lock,
 )
 from artifacts import build_generation_state, save_neat_genome_diagrams, save_neat_population
@@ -59,10 +63,19 @@ from neat_components import (
     apply_picbreeder_config_defaults,
     sync_population_output_activations,
 )
-from constants import ARCHIVE_DIR_NAME, AGENT_DIR_PREFIX, PERSONALITY_BATCH_SIZE, PERSONALITY_TOTAL
+from constants import ARCHIVE_DIR_NAME, AGENT_DIR_PREFIX, PERSONALITY_BATCH_SIZE, PERSONALITY_TOTAL, RATE_EVERY
 from picbreeder_reproduction import PicbreederReproduction
 from prompts import GOAL_PROMPTS
 from utils import apply_random_seed
+
+from rate_archive_with_vlm import (
+    ArchiveEntry as RatingArchiveEntry,
+    RatingResult,
+    build_rating_system_prompt,
+    format_rating_entry_label,
+    parse_rating_batch_response,
+)
+from im_query import query_images_with_captions
 
 
 def find_latest_checkpoint(population_dir: Path) -> Optional[Path]:
@@ -114,6 +127,66 @@ def _clamp(value: int, lower: int, upper: int) -> int:
 
 
 
+@dataclass
+class AgentTask:
+    agent_id: str
+    agent_index: int
+    agent_dir: Path
+    resume: bool
+    warm_start_active: bool
+    personality_prompt: Optional[str]
+    branching_decision: Optional[Dict[str, Any]] = None
+    favorite_selection: Optional[Dict[str, Any]] = None
+    archive_entry: Optional[Dict[str, Any]] = None
+
+    def to_message(self) -> Dict[str, Any]:
+        return {
+            "agent_id": self.agent_id,
+            "agent_index": self.agent_index,
+            "agent_dir": str(self.agent_dir),
+            "resume": self.resume,
+            "warm_start_active": self.warm_start_active,
+            "personality_prompt": self.personality_prompt,
+            "branching_decision": self.branching_decision,
+            "favorite_selection": self.favorite_selection,
+            "archive_entry": self.archive_entry,
+        }
+
+
+@dataclass
+class WorkerState:
+    index: int
+    task_conn: Connection
+    archive_conn: Connection
+    process: multiprocessing.Process
+    current_task: Optional[AgentTask] = None
+    stopping: bool = False
+    errored: bool = False
+
+
+def build_neat_config(
+    neat_config_path: Path,
+    rows: int,
+    cols: int,
+    enable_output_activations: bool,
+    enable_input_activations: bool,
+) -> neat.Config:
+    config = neat.Config(
+        PicbreederGenome,
+        PicbreederReproduction,
+        neat.DefaultSpeciesSet,
+        InteractiveStagnation,
+        str(neat_config_path),
+    )
+    apply_picbreeder_config_defaults(
+        config,
+        enable_output_activations=enable_output_activations,
+        enable_input_activations=enable_input_activations,
+    )
+    config.pop_size = rows * cols
+    return config
+
+
 class CollaborativeMultiAgentOrchestrator:
     """Coordinates sequential agent runs and archive management."""
 
@@ -125,7 +198,7 @@ class CollaborativeMultiAgentOrchestrator:
         cols: int,
         thumb_size: int,
         scheme: str,
-        config_path: Path,
+        neat_config_path: Path,
         select_k: Optional[int],
         agent_generations: int,
         warm_start_structure: int,
@@ -143,7 +216,7 @@ class CollaborativeMultiAgentOrchestrator:
         self.cols = cols
         self.thumb_size = thumb_size
         self.scheme = scheme
-        self.config_path = config_path
+        self.config_path = neat_config_path
         self.select_k = select_k
         self.agent_generations = agent_generations
         self.warm_start_structure = warm_start_structure
@@ -158,7 +231,7 @@ class CollaborativeMultiAgentOrchestrator:
         self.agents_dir = self.experiment_dir / "agents"
         self.agents_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_path = self.experiment_dir / "agents_metadata.json"
-        self._metadata_lock_path = self.metadata_path.with_suffix(".lock")
+        # self._metadata_lock_path = self.metadata_path.with_suffix(".lock")
         self._metadata = self._load_metadata()
         self._ensure_run_config()
 
@@ -178,15 +251,15 @@ class CollaborativeMultiAgentOrchestrator:
             )
 
     def _load_metadata(self) -> Dict[str, Any]:
-        with interprocess_lock(self._metadata_lock_path):
-            if self.metadata_path.exists():
-                metadata = self._read_metadata_file()
-            else:
-                metadata = self._default_metadata()
-                self._write_metadata_file(metadata)
-            metadata, changed = self._ensure_metadata_defaults(metadata)
-            if changed:
-                self._write_metadata_file(metadata)
+    #     with interprocess_lock(self._metadata_lock_path):
+        if self.metadata_path.exists():
+            metadata = self._read_metadata_file()
+        else:
+            metadata = self._default_metadata()
+            self._write_metadata_file(metadata)
+        metadata, changed = self._ensure_metadata_defaults(metadata)
+        if changed:
+            self._write_metadata_file(metadata)
         return metadata
 
     def _default_metadata(self) -> Dict[str, Any]:
@@ -203,7 +276,7 @@ class CollaborativeMultiAgentOrchestrator:
             return json.load(handle)
 
     def _write_metadata_file(self, metadata: Dict[str, Any]) -> None:
-        _atomic_write_json(self.metadata_path, metadata)
+        atomic_write_json(self.metadata_path, metadata)
 
     def _ensure_metadata_defaults(self, metadata: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
         changed = False
@@ -234,14 +307,13 @@ class CollaborativeMultiAgentOrchestrator:
         return metadata
 
     def _mutate_metadata(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
-        with interprocess_lock(self._metadata_lock_path):
-            if self.metadata_path.exists():
-                metadata = self._read_metadata_file()
-            else:
-                metadata = self._default_metadata()
-            metadata, _ = self._ensure_metadata_defaults(metadata)
-            result = mutator(metadata)
-            self._write_metadata_file(metadata)
+        if self.metadata_path.exists():
+            metadata = self._read_metadata_file()
+        else:
+            metadata = self._default_metadata()
+        metadata, _ = self._ensure_metadata_defaults(metadata)
+        result = mutator(metadata)
+        self._write_metadata_file(metadata)
         self._metadata = metadata
         return result
 
@@ -530,20 +602,13 @@ class CollaborativeMultiAgentOrchestrator:
         return population, checkpoint_path
 
     def _build_config(self) -> neat.Config:
-        config = neat.Config(
-            PicbreederGenome,
-            PicbreederReproduction,
-            neat.DefaultSpeciesSet,
-            InteractiveStagnation,
-            str(self.config_path),
+        return build_neat_config(
+            self.config_path,
+            self.rows,
+            self.cols,
+            self.enable_output_activations,
+            self.config.input_activations,
         )
-        apply_picbreeder_config_defaults(
-            config,
-            enable_output_activations=self.enable_output_activations,
-            enable_input_activations=self.config.input_activations,
-        )
-        config.pop_size = self.rows * self.cols
-        return config
 
     def _build_runner(
         self,
@@ -552,12 +617,12 @@ class CollaborativeMultiAgentOrchestrator:
         neat_config: neat.Config,
         population: Optional[neat.Population],
         resume: bool,
-    ) -> CollaborativeAgentRunner:
+    ) -> AgentRunner:
         callback = lambda generation, favorite, archive: self._on_generation_progress(
             agent_id, generation, favorite, archive
         )
         personality_prompt = self._personality_prompt_for_agent(agent_id)
-        return CollaborativeAgentRunner(
+        return AgentRunner(
             agent_id,
             agent_dir,
             config=self.config,
@@ -597,7 +662,7 @@ class CollaborativeMultiAgentOrchestrator:
     def _execute_runner(
         self,
         agent_id: str,
-        runner: CollaborativeAgentRunner,
+        runner: AgentRunner,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[ArchiveEntry], bool, int]:
         remaining = max(0, runner.generations - runner.population.generation)
         extinct = False
@@ -616,16 +681,21 @@ class CollaborativeMultiAgentOrchestrator:
         total_agents: int,
         resume: bool,
         resume_agent_id: Optional[str],
-        *,
-        agent_offset: int = 0,
-        agent_stride: int = 1,
+        num_workers: int = 1,
     ) -> None:
-        if agent_stride < 1:
-            raise ValueError("agent_stride must be at least 1")
-        if agent_offset < 0:
-            raise ValueError("agent_offset must be non-negative")
+        if num_workers <= 1:
+            self._run_agents_serial(total_agents, resume, resume_agent_id)
+            return
+        self._run_agents_parallel(total_agents, resume, resume_agent_id, num_workers)
+
+    def _run_agents_serial(
+        self,
+        total_agents: int,
+        resume: bool,
+        resume_agent_id: Optional[str],
+    ) -> None:
         self._reload_metadata()
-        target_indices = list(range(agent_offset, total_agents, agent_stride))
+        target_indices = list(range(total_agents))
         if not target_indices:
             return
         target_ids = {self._agent_id_from_index(index) for index in target_indices}
@@ -644,6 +714,333 @@ class CollaborativeMultiAgentOrchestrator:
                 self._resume_agent(agent_id, allowed_agent_ids={agent_id})
                 continue
             self._run_new_agent(agent_id=agent_id)
+
+    def _run_agents_parallel(
+        self,
+        total_agents: int,
+        resume: bool,
+        resume_agent_id: Optional[str],
+        num_workers: int,
+    ) -> None:
+        self._reload_metadata()
+        pending_tasks = self._prepare_parallel_tasks(total_agents, resume, resume_agent_id)
+        if not pending_tasks:
+            return
+
+        ctx = multiprocessing.get_context("spawn")
+        config_payload = _serialize_config_for_worker(self.config)
+        worker_states: List[WorkerState] = []
+        conn_to_worker: Dict[Connection, WorkerState] = {}
+        errors: List[str] = []
+
+        try:
+            for worker_index in range(num_workers):
+                parent_task_conn, child_task_conn = ctx.Pipe()
+                parent_archive_conn, child_archive_conn = ctx.Pipe()
+                process = ctx.Process(
+                    target=_continual_agent_worker,
+                    args=(child_task_conn, child_archive_conn, config_payload, worker_index),
+                )
+                process.start()
+                state = WorkerState(
+                    index=worker_index,
+                    task_conn=parent_task_conn,
+                    archive_conn=parent_archive_conn,
+                    process=process,
+                )
+                worker_states.append(state)
+                conn_to_worker[parent_task_conn] = state
+                conn_to_worker[parent_archive_conn] = state
+
+            active_workers = len(worker_states)
+            while active_workers > 0 and conn_to_worker:
+                ready_conns = multiprocessing.connection.wait(list(conn_to_worker.keys()))
+                for conn in ready_conns:
+                    state = conn_to_worker.get(conn)
+                    if state is None:
+                        continue
+                    try:
+                        message = conn.recv()
+                    except EOFError:
+                        errors.append(f"Worker {state.index} exited unexpectedly.")
+                        active_workers -= 1
+                        self._cleanup_worker(state, conn_to_worker)
+                        continue
+
+                    if conn is state.archive_conn:
+                        self._handle_archive_rpc(state, message)
+                        continue
+
+                    msg_type = message.get("type")
+                    if msg_type == "ready":
+                        self._handle_worker_ready(state, pending_tasks)
+                    elif msg_type == "branching_decision":
+                        decision = message.get("decision")
+                        agent_id = message.get("agent_id")
+                        if agent_id and decision is not None:
+                            if state.current_task and state.current_task.agent_id == agent_id:
+                                state.current_task.branching_decision = decision
+                            self._update_agent_record(agent_id, branching_decision=decision)
+                    elif msg_type == "progress":
+                        agent_id = message.get("agent_id")
+                        if agent_id:
+                            generation = _safe_int(message.get("generation"), default=0)
+                            self._on_generation_progress(
+                                agent_id,
+                                generation,
+                                message.get("favorite"),
+                                message.get("archive"),
+                            )
+                    elif msg_type == "rating_result":
+                        self._apply_rating_results_from_worker(message)
+                    elif msg_type == "job_complete":
+                        self._handle_job_complete(state, message)
+                        state.current_task = None
+                    elif msg_type == "task_failed":
+                        agent_id = message.get("agent_id")
+                        error_text = message.get("error") or "Unknown failure"
+                        errors.append(
+                            f"Worker {state.index} failed on {agent_id or 'unknown agent'}: {error_text}"
+                        )
+                        state.current_task = None
+                    elif msg_type == "worker_error":
+                        error_text = message.get("error") or "Unknown worker error"
+                        errors.append(f"Worker {state.index} error: {error_text}")
+                        state.errored = True
+                    elif msg_type == "stopped":
+                        active_workers -= 1
+                        self._cleanup_worker(state, conn_to_worker)
+                    else:
+                        continue
+        finally:
+            for state in worker_states:
+                try:
+                    state.task_conn.close()
+                except Exception:
+                    pass
+                try:
+                    state.archive_conn.close()
+                except Exception:
+                    pass
+                state.process.join()
+
+        if errors:
+            raise RuntimeError("\n".join(errors))
+
+    def _handle_worker_ready(self, state: WorkerState, pending_tasks: Deque[AgentTask]) -> None:
+        if state.current_task is not None:
+            return
+        if pending_tasks:
+            task = pending_tasks.popleft()
+            state.current_task = task
+            rating_targets = self._rating_targets_for_task(task)
+            payload = {
+                "type": "run_agent",
+                "task": task.to_message(),
+                "rating_targets": rating_targets,
+                "goal_prompt": self.archive_manager.goal_prompt,
+                "archive_dir": str(self.archive_manager.archive_dir),
+            }
+            state.task_conn.send(payload)
+            state.stopping = False
+            return
+        if not state.stopping:
+            state.task_conn.send({"type": "stop"})
+            state.stopping = True
+
+    def _cleanup_worker(self, state: WorkerState, conn_map: Dict[Connection, WorkerState]) -> None:
+        conn_map.pop(state.task_conn, None)
+        conn_map.pop(state.archive_conn, None)
+        try:
+            state.task_conn.close()
+        except Exception:
+            pass
+        try:
+            state.archive_conn.close()
+        except Exception:
+            pass
+
+    def _handle_archive_rpc(self, state: WorkerState, message: Dict[str, Any]) -> None:
+        if not isinstance(message, dict) or message.get("type") != "archive_call":
+            return
+        call_id = message.get("call_id")
+        method_name = str(message.get("method") or "")
+        args = message.get("args") or []
+        kwargs = message.get("kwargs") or {}
+        try:
+            result = self._invoke_archive_method(method_name, args, kwargs)
+            response = {"type": "archive_response", "call_id": call_id, "result": result}
+        except Exception as exc:  # pylint: disable=broad-except
+            traceback.print_exc()
+            response = {"type": "archive_response", "call_id": call_id, "error": str(exc)}
+        state.archive_conn.send(response)
+
+    def _invoke_archive_method(self, method_name: str, args: Sequence[Any], kwargs: Dict[str, Any]) -> Any:
+        if method_name == "get_entries":
+            return self.archive_manager.entries
+        archive_methods = {
+            "create_archive_grid": self.archive_manager.create_archive_grid,
+            "sample_branching_entries": self.archive_manager.sample_branching_entries,
+            "get_elite_names": self.archive_manager.get_elite_names,
+            "get_entry": self.archive_manager.get_entry,
+            "load_genome": self.archive_manager.load_genome,
+            "add_entry": self.archive_manager.add_entry,
+            "remove_entry": self.archive_manager.remove_entry,
+        }
+        method = archive_methods.get(method_name)
+        if method is None:
+            raise AttributeError(f"Archive method '{method_name}' is not available for workers.")
+        return method(*args, **kwargs)
+
+    def _rating_targets_for_task(self, task: AgentTask) -> List[Dict[str, str]]:
+        if RATE_EVERY <= 0:
+            return []
+        if task.agent_index < 0 or task.agent_index % RATE_EVERY != 0:
+            return []
+        try:
+            targets = self.archive_manager.prepare_rating_batch(100)
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"Auto-rating preparation failed for {task.agent_id}: {exc}")
+            return []
+        return targets
+
+    def _apply_rating_results_from_worker(self, payload: Dict[str, Any]) -> None:
+        raw_results = payload.get("results")
+        if not isinstance(raw_results, dict) or not raw_results:
+            return
+        parsed: Dict[str, RatingResult] = {}
+        for entry_id, value in raw_results.items():
+            if isinstance(value, RatingResult):
+                parsed[entry_id] = value
+                continue
+            if not isinstance(value, dict):
+                continue
+            try:
+                score = float(value.get("score", 0.0))
+            except (TypeError, ValueError):
+                continue
+            parsed[entry_id] = RatingResult(
+                score=score,
+                justification=value.get("justification"),
+                reported_title=value.get("reported_title"),
+            )
+        if parsed:
+            self.archive_manager.apply_rating_results(parsed)
+
+    def _handle_job_complete(self, state: WorkerState, payload: Dict[str, Any]) -> None:
+        agent_id = payload.get("agent_id")
+        if not agent_id:
+            return
+        task = state.current_task
+        agent_dir = task.agent_dir if task else (self.agents_dir / agent_id)
+        favorite_payload = payload.get("favorite")
+        archive_entry_data = payload.get("archive_entry")
+        archive_entry: Optional[ArchiveEntry]
+        if isinstance(archive_entry_data, ArchiveEntry):
+            archive_entry = archive_entry_data
+        elif isinstance(archive_entry_data, dict):
+            try:
+                archive_entry = ArchiveEntry.from_dict(archive_entry_data)
+            except Exception:  # pylint: disable=broad-except
+                archive_entry = None
+        else:
+            archive_entry = None
+        extinct = bool(payload.get("extinct"))
+        final_generation = _safe_int(payload.get("final_generation"), default=0)
+        branching_decision = None
+        if payload.get("branching_decision") is not None:
+            branching_decision = payload.get("branching_decision")
+        elif task is not None:
+            branching_decision = task.branching_decision
+        else:
+            record = self._find_agent_record(agent_id)
+            if record is not None:
+                branching_decision = record.get("branching_decision")
+        self._finalize_agent(
+            agent_id,
+            agent_dir,
+            branching_decision,
+            favorite_payload,
+            archive_entry,
+            extinct=extinct,
+            final_generation=final_generation,
+        )
+
+    def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
+        self._ensure_agent_number_progress(agent_id)
+        agent_dir = self.agents_dir / agent_id
+        # agent_dir.mkdir(parents=True, exist_ok=True)
+        record = self._register_agent(agent_id, agent_dir)
+        if record.get("status") != "in_progress":
+            self._update_agent_record(agent_id, status="in_progress", last_generation=0)
+        warm_start_active = self._is_warm_start_agent(agent_id)
+        personality_prompt = self._personality_prompt_for_agent(agent_id)
+        return AgentTask(
+            agent_id=agent_id,
+            agent_index=agent_index,
+            agent_dir=agent_dir,
+            resume=False,
+            warm_start_active=warm_start_active,
+            personality_prompt=personality_prompt,
+        )
+
+    def _build_resume_agent_task(self, record: Dict[str, Any]) -> AgentTask:
+        self._hydrate_agent_record_from_disk(record)
+        agent_id = record["agent_id"]
+        agent_dir = Path(record["agent_dir"])
+        agent_index = self._parse_agent_index(agent_id) or 0
+        warm_start_active = self._is_warm_start_agent(agent_id)
+        personality_prompt = self._personality_prompt_for_agent(agent_id)
+        last_generation = _safe_int(record.get("last_generation"), default=0)
+        self._update_agent_record(
+            agent_id,
+            status="in_progress",
+            resumed_at=datetime.now().isoformat(),
+            last_generation=last_generation,
+        )
+        return AgentTask(
+            agent_id=agent_id,
+            agent_index=agent_index,
+            agent_dir=agent_dir,
+            resume=True,
+            warm_start_active=warm_start_active,
+            personality_prompt=personality_prompt,
+            branching_decision=record.get("branching_decision"),
+            favorite_selection=record.get("favorite_selection"),
+            archive_entry=record.get("archive_entry"),
+        )
+
+    def _prepare_parallel_tasks(
+        self,
+        total_agents: int,
+        resume: bool,
+        resume_agent_id: Optional[str],
+    ) -> Deque[AgentTask]:
+        pending: Deque[AgentTask] = deque()
+        target_indices = list(range(total_agents))
+        if not target_indices:
+            return pending
+        target_ids = {self._agent_id_from_index(index) for index in target_indices}
+        scheduled: Set[str] = set()
+        if resume and resume_agent_id and resume_agent_id in target_ids:
+            record = self._find_agent_record(resume_agent_id)
+            if record and record.get("status") not in {"complete", "extinct"}:
+                pending.append(self._build_resume_agent_task(record))
+                scheduled.add(resume_agent_id)
+        for index in target_indices:
+            agent_id = self._agent_id_from_index(index)
+            if agent_id in scheduled:
+                continue
+            record = self._find_agent_record(agent_id)
+            if record is not None and record.get("status") in {"complete", "extinct"}:
+                continue
+            if record is not None:
+                task = self._build_resume_agent_task(record)
+            else:
+                task = self._build_new_agent_task(agent_id, index)
+            pending.append(task)
+            scheduled.add(agent_id)
+        return pending
 
     def _run_new_agent(self, agent_id: Optional[str] = None) -> None:
         if agent_id is None:
@@ -758,7 +1155,6 @@ class CollaborativeMultiAgentOrchestrator:
 
 def _build_orchestrator(
     cfg: CollaborativeConfig,
-    *,
     process_index: Optional[int] = None,
 ) -> CollaborativeMultiAgentOrchestrator:
     return CollaborativeMultiAgentOrchestrator(
@@ -768,7 +1164,7 @@ def _build_orchestrator(
         cols=cfg.cols,
         thumb_size=cfg.thumb_size,
         scheme=cfg.scheme,
-        config_path=cfg.config_path,
+        neat_config_path=cfg.neat_config_path,
         select_k=cfg.select_k,
         agent_generations=cfg.agent_generations,
         warm_start_structure=cfg.warm_start_structure,
@@ -813,68 +1209,399 @@ def run(cfg: CollaborativeConfig) -> None:
     apply_random_seed(cfg.seed)
     if cfg.selection_baseline == "none":
         ensure_gemini_key()
-    if cfg.num_proc <= 1:
-        orchestrator = _build_orchestrator(cfg)
-        orchestrator.run_agents(
-            cfg.num_agents,
-            resume=cfg.resume,
-            resume_agent_id=cfg.resume_agent_id,
-        )
-        orchestrator.archive_manager.create_archive_grid(cfg.thumb_size)
-        return
-    _run_parallel(cfg)
-
-
-def _run_parallel(cfg: CollaborativeConfig) -> None:
-    payload = _serialize_config_for_worker(cfg)
-    resume_index: Optional[int] = None
-    if cfg.resume_agent_id:
-        resume_index = CollaborativeMultiAgentOrchestrator._parse_agent_index(cfg.resume_agent_id)
-        if resume_index is None:
-            raise ValueError(f"Invalid --resume-agent-id '{cfg.resume_agent_id}'.")
-    ctx = multiprocessing.get_context("spawn")
-    processes: List[multiprocessing.Process] = []
-    for proc_index in range(cfg.num_proc):
-        resume_for_worker = None
-        if resume_index is not None and resume_index % cfg.num_proc == proc_index:
-            resume_for_worker = cfg.resume_agent_id
-        process = ctx.Process(
-            target=_parallel_worker,
-            args=(proc_index, cfg.num_proc, payload, resume_for_worker),
-        )
-        process.start()
-        processes.append(process)
-    failed: List[int] = []
-    for process in processes:
-        process.join()
-        if process.exitcode != 0:
-            failed.append(process.pid or -1)
-    if failed:
-        raise RuntimeError(f"Parallel worker(s) failed: {failed}")
-    ArchiveManager(cfg.experiment_dir / ARCHIVE_DIR_NAME,
-                   goal_prompt=GOAL_PROMPTS[cfg.goal]).create_archive_grid(cfg.thumb_size)
-
-
-def _parallel_worker(
-    proc_index: int,
-    num_proc: int,
-    cfg_payload: Dict[str, Any],
-    resume_agent_id: Optional[str],
-) -> None:
-    cfg = _deserialize_config_for_worker(cfg_payload)
-    worker_seed = None if cfg.seed is None else cfg.seed + proc_index
-    apply_random_seed(worker_seed)
-    if cfg.selection_baseline == "none":
-        ensure_gemini_key()
-    orchestrator = _build_orchestrator(cfg, process_index=proc_index)
+    orchestrator = _build_orchestrator(cfg)
     orchestrator.run_agents(
         cfg.num_agents,
         resume=cfg.resume,
-        resume_agent_id=resume_agent_id,
-        agent_offset=proc_index,
-        agent_stride=num_proc,
+        resume_agent_id=cfg.resume_agent_id,
+        num_workers=max(1, cfg.num_proc),
+    )
+    orchestrator.archive_manager.create_archive_grid(cfg.thumb_size)
+
+
+class RemoteArchiveClient:
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+        self._ids = count(1)
+
+    def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        call_id = next(self._ids)
+        self._conn.send(
+            {
+                "type": "archive_call",
+                "call_id": call_id,
+                "method": method,
+                "args": args,
+                "kwargs": kwargs,
+            }
+        )
+        while True:
+            response = self._conn.recv()
+            if not isinstance(response, dict):
+                continue
+            if response.get("type") != "archive_response":
+                continue
+            if response.get("call_id") != call_id:
+                continue
+            if "error" in response:
+                raise RuntimeError(response["error"])
+            return response.get("result")
+
+    def create_archive_grid(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("create_archive_grid", *args, **kwargs)
+
+    def sample_branching_entries(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("sample_branching_entries", *args, **kwargs)
+
+    def get_elite_names(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("get_elite_names", *args, **kwargs)
+
+    def get_entry(self, entry_id: str) -> Any:
+        return self._call("get_entry", entry_id)
+
+    def load_genome(self, entry_id: str) -> Any:
+        return self._call("load_genome", entry_id)
+
+    def add_entry(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("add_entry", *args, **kwargs)
+
+    def remove_entry(self, entry_id: str) -> Any:
+        return self._call("remove_entry", entry_id)
+
+    @property
+    def entries(self) -> Any:
+        return self._call("get_entries")
+
+
+def _deserialize_agent_task(payload: Dict[str, Any]) -> AgentTask:
+    return AgentTask(
+        agent_id=str(payload["agent_id"]),
+        agent_index=int(payload.get("agent_index", 0)),
+        agent_dir=Path(payload["agent_dir"]),
+        resume=bool(payload.get("resume")),
+        warm_start_active=bool(payload.get("warm_start_active")),
+        personality_prompt=payload.get("personality_prompt"),
+        branching_decision=payload.get("branching_decision"),
+        favorite_selection=payload.get("favorite_selection"),
+        archive_entry=payload.get("archive_entry"),
     )
 
+
+def _load_population_for_worker(
+    agent_dir: Path,
+    enable_output_activations: bool,
+    enable_input_activations: bool,
+) -> Tuple[Optional[neat.Population], Optional[Path]]:
+    population_dir = agent_dir / "populations"
+    if not population_dir.exists():
+        return None, None
+    checkpoint_path = find_latest_checkpoint(population_dir)
+    if checkpoint_path is None:
+        return None, None
+    population = restore_population_from_checkpoint(checkpoint_path)
+    apply_picbreeder_config_defaults(
+        population.config,
+        enable_output_activations=enable_output_activations,
+        enable_input_activations=enable_input_activations,
+    )
+    sync_population_output_activations(population, population.config.genome_config)
+    _rehydrate_reproduction_state(population)
+    return population, checkpoint_path
+
+
+def _execute_runner_in_worker(
+    agent_id: str,
+    runner: AgentRunner,
+) -> Tuple[Optional[Dict[str, Any]], Optional[ArchiveEntry], bool, int]:
+    remaining = max(0, runner.generations - runner.population.generation)
+    extinct = False
+    if remaining > 0:
+        try:
+            runner.population.run(runner.evaluate_generation, remaining)
+        except CompleteExtinctionException:
+            extinct = True
+    archive_entry = runner.commit_pending_publication()
+    favorite = runner.favorite_decision if runner.favorite_decision else None
+    final_generation = runner.population.generation
+    return favorite, archive_entry, extinct, final_generation
+
+
+def _perform_rating(
+    targets: Sequence[Dict[str, str]],
+    goal_prompt: str,
+    archive_dir: Path,
+) -> Dict[str, RatingResult]:
+    if not targets:
+        return {}
+    entries: List[RatingArchiveEntry] = []
+    for target in targets:
+        image_path = Path(target.get("image_path", ""))
+        if not image_path.exists():
+            continue
+        entries.append(
+            RatingArchiveEntry(
+                image_id=str(target.get("id")),
+                title=str(target.get("title") or target.get("id") or ""),
+                image_path=image_path,
+            )
+        )
+    if not entries:
+        return {}
+
+    results: Dict[str, RatingResult] = {}
+    prompt_dir = archive_dir / "vlm_ratings"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = prompt_dir / "system_prompt.txt"
+
+    rating_batch_size = 100
+    include_titles = True
+    require_titles = False
+
+    for start in range(0, len(entries), rating_batch_size):
+        batch = entries[start : start + rating_batch_size]
+        if not batch:
+            continue
+        system_prompt = build_rating_system_prompt(
+            batch,
+            require_titles=require_titles,
+            goal_prompt=goal_prompt,
+        )
+        if start == 0:
+            prompt_path.write_text(system_prompt)
+        try:
+            image_bytes_list = [entry.image_path.read_bytes() for entry in batch]
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"Auto-rating image read failed: {exc}")
+            continue
+        captions = [format_rating_entry_label(idx, entry, include_titles) for idx, entry in enumerate(batch)]
+        try:
+            response = query_images_with_captions(
+                image_bytes_list,
+                captions,
+                prompt=None,
+                system_instruction=system_prompt,
+            )
+            response_text = getattr(response, "text", "") or ""
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"Auto-rating query failed: {exc}")
+            continue
+        parsed = parse_rating_batch_response(response_text, batch)
+        for idx, rating in parsed.items():
+            if 0 <= idx < len(batch):
+                results[batch[idx].image_id] = rating
+    return results
+
+
+def _execute_agent_task(
+    task: AgentTask,
+    cfg: CollaborativeConfig,
+    archive_client: RemoteArchiveClient,
+    worker_index: int,
+    task_conn: Connection,
+) -> Dict[str, Any]:
+    agent_dir = task.agent_dir
+    agent_dir.mkdir(parents=True, exist_ok=True)
+
+    population: Optional[neat.Population]
+    population = None
+    if task.resume:
+        population, _ = _load_population_for_worker(
+            agent_dir,
+            enable_output_activations=cfg.output_activations,
+            enable_input_activations=cfg.input_activations,
+        )
+        if population is not None:
+            config = population.config
+        else:
+            config = build_neat_config(
+                cfg.neat_config_path,
+                cfg.rows,
+                cfg.cols,
+                cfg.output_activations,
+                cfg.input_activations,
+            )
+    else:
+        config = build_neat_config(
+            cfg.neat_config_path,
+            cfg.rows,
+            cfg.cols,
+            cfg.output_activations,
+            cfg.input_activations,
+        )
+
+    def progress_callback(
+        generation: int,
+        favorite_payload: Optional[Dict[str, Any]],
+        archive_payload: Optional[Dict[str, Any]],
+    ) -> None:
+        task_conn.send(
+            {
+                "type": "progress",
+                "agent_id": task.agent_id,
+                "generation": generation,
+                "favorite": favorite_payload,
+                "archive": archive_payload,
+            }
+        )
+
+    runner = AgentRunner(
+        task.agent_id,
+        agent_dir,
+        config=cfg,
+        neat_config=config,
+        archive_manager=archive_client,
+        generations=cfg.agent_generations,
+        rows=cfg.rows,
+        cols=cfg.cols,
+        thumb_size=cfg.thumb_size,
+        scheme=cfg.scheme,
+        select_k=cfg.select_k,
+        chat_history_turns=cfg.chat_history_turns,
+        selection_baseline=cfg.selection_baseline,
+        population=population,
+        progress_callback=progress_callback,
+        resume_mode=task.resume,
+        warm_start_active=task.warm_start_active,
+        render_genome_diagrams=cfg.render_genome_diagrams,
+        process_index=worker_index,
+        personality_prompt=task.personality_prompt,
+    )
+
+    if task.resume:
+        decision = task.branching_decision
+        if decision is None:
+            decision = runner.select_starting_point()
+            runner.initialise_population(decision)
+            runner.branching_decision = decision
+            task_conn.send(
+                {
+                    "type": "branching_decision",
+                    "agent_id": task.agent_id,
+                    "decision": decision,
+                }
+            )
+        else:
+            runner.branching_decision = decision
+            if population is None:
+                runner.initialise_population(decision)
+        if task.favorite_selection is not None:
+            runner.favorite_decision = task.favorite_selection
+        if task.archive_entry is not None:
+            try:
+                favourite_entry = ArchiveEntry.from_dict(task.archive_entry)
+            except Exception:  # pylint: disable=broad-except
+                favourite_entry = None
+            if favourite_entry is not None:
+                runner.favorite_archive_entry = favourite_entry
+                runner._current_publication_entry_id = favourite_entry.entry_id
+    else:
+        decision = runner.select_starting_point()
+        runner.initialise_population(decision)
+        runner.branching_decision = decision
+        task_conn.send(
+            {
+                "type": "branching_decision",
+                "agent_id": task.agent_id,
+                "decision": decision,
+            }
+        )
+
+    favorite, archive_entry, extinct, final_generation = _execute_runner_in_worker(
+        task.agent_id,
+        runner,
+    )
+
+    archive_payload = archive_entry.as_dict() if isinstance(archive_entry, ArchiveEntry) else None
+
+    return {
+        "type": "job_complete",
+        "agent_id": task.agent_id,
+        "favorite": favorite,
+        "archive_entry": archive_payload,
+        "extinct": extinct,
+        "final_generation": final_generation,
+        "branching_decision": runner.branching_decision,
+    }
+
+
+def _continual_agent_worker(
+    task_conn: Connection,
+    archive_conn: Connection,
+    cfg_payload: Dict[str, Any],
+    worker_index: int,
+) -> None:
+    cfg = _deserialize_config_for_worker(cfg_payload)
+    worker_seed = None if cfg.seed is None else cfg.seed + worker_index
+    apply_random_seed(worker_seed)
+    if cfg.selection_baseline == "none":
+        ensure_gemini_key()
+    archive_client = RemoteArchiveClient(archive_conn)
+    try:
+        while True:
+            task_conn.send({"type": "ready"})
+            message = task_conn.recv()
+            if not isinstance(message, dict):
+                continue
+            msg_type = message.get("type")
+            if msg_type == "run_agent":
+                task_payload = message.get("task") or {}
+                task = _deserialize_agent_task(task_payload)
+                rating_targets = message.get("rating_targets") or []
+                goal_prompt = message.get("goal_prompt") or GOAL_PROMPTS[cfg.goal]
+                archive_dir_value = message.get("archive_dir")
+                archive_dir = Path(archive_dir_value) if archive_dir_value else cfg.experiment_dir / ARCHIVE_DIR_NAME
+                if rating_targets:
+                    try:
+                        rating_results = _perform_rating(rating_targets, goal_prompt, archive_dir)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        task_conn.send({"type": "worker_error", "error": f"Rating failed: {exc}"})
+                    else:
+                        serializable_results = {
+                            entry_id: {
+                                "score": rating.score,
+                                "justification": rating.justification,
+                                "reported_title": rating.reported_title,
+                            }
+                            for entry_id, rating in rating_results.items()
+                        }
+                        if serializable_results:
+                            task_conn.send(
+                                {
+                                    "type": "rating_result",
+                                    "agent_id": task.agent_id,
+                                    "results": serializable_results,
+                                }
+                            )
+                try:
+                    result_payload = _execute_agent_task(
+                        task,
+                        cfg,
+                        archive_client,
+                        worker_index,
+                        task_conn,
+                    )
+                except Exception:  # pylint: disable=broad-except
+                    task_conn.send(
+                        {
+                            "type": "task_failed",
+                            "agent_id": task.agent_id,
+                            "error": traceback.format_exc(),
+                        }
+                    )
+                else:
+                    task_conn.send(result_payload)
+            elif msg_type == "stop":
+                task_conn.send({"type": "stopped"})
+                break
+    finally:
+        try:
+            archive_conn.close()
+        except Exception:
+            pass
+        try:
+            task_conn.close()
+        except Exception:
+            pass
 
 @hydra.main(version_base="1.3", config_path=None, config_name="collaborative_base")
 def main(cfg: CollaborativeConfig) -> None:

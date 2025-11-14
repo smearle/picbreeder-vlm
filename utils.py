@@ -1,3 +1,5 @@
+import json
+import os
 from pathlib import Path
 import random
 from typing import Any, Dict, Iterable, List, Optional
@@ -104,3 +106,18 @@ def _ensure_int_list(values: Iterable[Any]) -> List[int]:
             continue
         result.append(idx)
     return result
+
+
+def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        tmp_path.replace(path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+

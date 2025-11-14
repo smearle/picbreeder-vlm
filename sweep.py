@@ -76,26 +76,27 @@ def _execute_job(job: CollaborativeRun) -> int:
 
 @dataclass
 class SweepConfig(CollaborativeConfig):
-    seeds: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
+    seeds: List[int] = field(default_factory=lambda: [1])  # Random seeds swept over collaborative runs
     # chat_history_turns: List[int] = field(default_factory=lambda: [-1, 15, 10, 5, 0])  # Chat history lengths to evaluate
-    chat_history_turns: List[int] = field(default_factory=lambda: [-1])  # Chat history lengths to evaluate
+    chat_history_turns: List[int] = field(default_factory=lambda: [-1, 10, 0])  # Chat history lengths to evaluate
     goals: List[str] = field(default_factory=lambda: [  # Goals to sweep over
-        # "familiar_objects",
-        "fun",
+        "familiar_objects",
+        # "fun",
         # "lizards", 
         # "fish", 
         # "skulls", 
         # "butterflies"
     ])
+    scheme: str = "gray"
     extra_args: str = ""  # Additional Hydra overrides forwarded to collaborative_multi_agent
-    experiment_prefix: Path = Path("logs_collaborative/submitit_sweeps")  # Base directory for experiment outputs
-    log_dir: Path = Path("log/submitit")  # Submitit log directory
-    slurm: bool = False  # Enable SLURM submission via Submitit
+    experiment_prefix: Path = Path("logs_collaborative")  # Base directory for experiment outputs
+    log_dir: Path = Path("submitit_logs")  # Submitit log directory
+    slurm: bool = True  # Enable SLURM submission via Submitit
     partition: str = "cpu"  # SLURM partition name
     account: Optional[str] = None  # Optional SLURM account override
-    cpus_per_task: int = 1  # CPUs requested per task
     timeout_hours: int = 24  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
+    num_proc: int = 10  # Number of parallel processes per task
     evaluate: bool = False  # If true, run evaluation instead of training
     visualize: bool = False  # If true, run phylogeny visualization instead of training
     cross_eval: bool = False  # If true, summarize embedding metrics from the configured runs
@@ -176,6 +177,7 @@ def build_command(cfg: SweepConfig, seed: int, chat_turns: int, goal: str, exper
             f"chat_history_turns={chat_turns}",
             f"resume={resume}",
             f"goal={goal}",
+            f"num_proc={cfg.num_proc}",
             experiment_override,
         ]
         if getattr(cfg, "selection_baseline", "none") != "none":
@@ -216,7 +218,7 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, commands: Sequence[SweepComman
     executor.update_parameters(
         timeout_min=cfg.timeout_hours * 60,
         mem_gb=cfg.mem_gb,
-        cpus_per_task=cfg.cpus_per_task,
+        cpus_per_task=cfg.num_proc,
         slurm_partition=cfg.partition,
         slurm_account=cfg.account,
         name="picbreeder-vlm",
