@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Dict, Generator, List, Optional
 
-from picbreeder_util import load_zip_xml_as_dict
+from fer.src.picbreeder_util import load_zip_xml_as_dict
 
 PID_ZIP_PATTERN = re.compile(r"\d+\.zip$")
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import heapq
 import json
 import math
 import os
@@ -12,7 +13,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import neat
 from PIL import Image, ImageDraw, ImageFont
@@ -755,8 +756,13 @@ class ArchiveManager:
         if not entries or len(entries) < RATING_BATCH_SIZE:
             return []
 
-        decorated: List[Tuple[int, datetime, str, Dict[str, Any]]] = []
-        for entry in entries:
+        entries_with_images: List[Dict[str, Any]] = []
+        keys: List[Tuple[int, datetime, str, int]] = []
+        for idx, entry in enumerate(entries):
+            image_path = entry.get("image_path")
+            entry_id = str(entry.get("id") or "")
+            if not entry_id or not image_path:
+                continue
             rating_values = entry.get("vlm_ratings") or []
             rating_count = len(rating_values) if isinstance(rating_values, list) else 0
             added_at_raw = entry.get("added_at")
@@ -767,14 +773,43 @@ class ArchiveManager:
                     added_at = datetime.min
             else:
                 added_at = datetime.min
-            entry_id = str(entry.get("id") or "")
-            decorated.append((rating_count, added_at, entry_id, entry))
+            entries_with_images.append(entry)
+            keys.append((rating_count, added_at, entry_id, len(entries_with_images) - 1))
 
-        decorated.sort(key=lambda item: (item[0], item[1], item[2]))
+        total_candidates = len(entries_with_images)
+        if total_candidates < RATING_BATCH_SIZE:
+            return []
+
+        least_quota = min(limit // 2, total_candidates)
+        random_quota = min(limit - least_quota, max(0, total_candidates - least_quota))
+
+        selected_entries: List[Dict[str, Any]] = []
+        selected_indices: Set[int] = set()
+
+        if least_quota > 0:
+            least_subset = heapq.nsmallest(least_quota, keys, key=lambda item: (item[0], item[1], item[2]))
+            for _, _, _, entry_idx in least_subset:
+                if entry_idx in selected_indices:
+                    continue
+                selected_indices.add(entry_idx)
+                selected_entries.append(entries_with_images[entry_idx])
+
+        available_count = total_candidates - len(selected_indices)
+        random_quota = min(random_quota, available_count)
+        if random_quota > 0:
+            random_indices: Set[int] = set()
+            while len(random_indices) < random_quota:
+                candidate_idx = random.randrange(total_candidates)
+                if candidate_idx in selected_indices or candidate_idx in random_indices:
+                    continue
+                random_indices.add(candidate_idx)
+            for entry_idx in random_indices:
+                selected_entries.append(entries_with_images[entry_idx])
+
         snapshot: List[Dict[str, str]] = []
-        for _, _, _, entry in decorated[:limit]:
-            image_path = entry.get("image_path")
+        for entry in selected_entries:
             entry_id = str(entry.get("id") or "")
+            image_path = entry.get("image_path")
             if not entry_id or not image_path:
                 continue
             snapshot.append(

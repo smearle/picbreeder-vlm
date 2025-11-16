@@ -1,4 +1,3 @@
-import base64
 import copy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -384,7 +383,6 @@ class AgentRunner:
                     "index": index,
                     "caption": caption,
                     "image_path": str(image_path),
-                    "image_b64": base64.b64encode(image_bytes).decode("ascii"),
                     "title": title_value,
                     "subset_label": subset_label or None,
                     "subset": entry.get("branching_subset"),

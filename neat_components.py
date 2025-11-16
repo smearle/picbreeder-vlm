@@ -136,7 +136,7 @@ def apply_picbreeder_config_defaults(
     genome_config.picbreeder_activation_rate = 0.05
     genome_config.picbreeder_weight_mutate_rate = 0.20
     genome_config.picbreeder_mutation_strength = 0.5
-    genome_config.picbreeder_weight_power_min = 0.0
+    genome_config.picbreeder_weight_power_min = 0.01  # match legacy slider floor
     genome_config.picbreeder_weight_power_max = 2.0
     genome_config.picbreeder_hidden_color_nodes = 2
     genome_config.picbreeder_generator_weights = (
@@ -706,7 +706,12 @@ class PicbreederGenome(neat.DefaultGenome):
             existing = self.connections.get(key)
             if existing is not None:
                 if not existing.enabled and config.check_structural_mutation_surer():
+                    # This should never be the case, since Picbreeder mutation does not disable connections.
                     existing.enabled = True
+                    raise RuntimeError(
+                        "While adding a new connection, found a disabled connection. "
+                        "But Picbreeder mutation should never disable connections."
+                    )
                 continue
             if config.feed_forward and creates_cycle(list(self.connections), key):
                 continue
@@ -751,7 +756,7 @@ class PicbreederGenome(neat.DefaultGenome):
         return mutated
 
     def _random_weight(self) -> float:
-        return random.uniform(-1.0, 1.0)
+        return random.uniform(-3.0, 3.0)
 
     def _clamp_weight(self, config, value: float) -> float:
         minimum = getattr(config, "weight_min_value", -3.0)
@@ -1009,3 +1014,31 @@ def sync_population_node_indexer(population: neat.Population) -> None:
         output_keys = list(getattr(genome_config, "output_keys", ()))
         max_key = max(output_keys) if output_keys else 0
     genome_config.node_indexer = count(int(max_key) + 1)
+
+
+class InteractiveStagnation:
+    def __init__(self, config, reporters):
+        self.max_stagnation = int(config.get("max_stagnation"))
+        self.reporters = reporters
+
+    @classmethod
+    def parse_config(cls, param_dict):
+        config = {"max_stagnation": 15}
+        config.update(param_dict)
+        return config
+
+    @classmethod
+    def write_config(cls, handle, config):
+        handle.write(f"max_stagnation       = {config['max_stagnation']}\n")
+
+    def update(self, species_set, generation):
+        result = []
+        for species in species_set.species.values():
+            for member in species.members.values():
+                if member.fitness and member.fitness > 0:
+                    species.last_improved = generation
+                    break
+            stagnant_time = generation - species.last_improved
+            is_stagnant = stagnant_time >= self.max_stagnation
+            result.append((species.key, species, is_stagnant))
+        return result

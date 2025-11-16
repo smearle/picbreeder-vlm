@@ -40,6 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from neat.stagnation import DefaultStagnation
+
 from neat_components import (
     InteractiveStagnation,
     PicbreederGenome,
@@ -441,9 +443,21 @@ def _legacy_to_picbreeder_genome(legacy: LegacyGenome, config: neat.Config) -> P
     hidden_nodes.sort(key=lambda node: (_coerce_node_id(node.local_id) or 10**9))
     hidden_start = max(used_keys) + 1 if used_keys else 1000
     hidden_key_iter = itertools.count(start=max(1000, hidden_start))
-    for node in hidden_nodes:
+
+    def allocate_hidden_key(node: LegacyNode) -> int:
+        existing = node_key_map.get(node.key)
+        if existing is not None:
+            return existing
         candidate = _coerce_node_id(node.local_id)
-        key = candidate if candidate is not None and candidate not in used_keys else next(hidden_key_iter)
+        if candidate is not None and candidate not in used_keys:
+            return candidate
+        while True:
+            fallback = next(hidden_key_iter)
+            if fallback not in used_keys:
+                return fallback
+
+    for node in hidden_nodes:
+        key = allocate_hidden_key(node)
         used_keys.add(int(key))
         node_key_map[node.key] = key
         node_gene = genome.create_node(genome_config, key)
@@ -455,6 +469,7 @@ def _legacy_to_picbreeder_genome(legacy: LegacyGenome, config: neat.Config) -> P
         genome.set_node_affinity(int(key), affinity)
 
     # Recreate connections using the translated keys.
+    connection_lookup: Dict[Tuple[int, int], LegacyLink] = {}
     for link in legacy.links:
         src_key = node_key_map.get(link.source_key)
         dst_key = node_key_map.get(link.target_key)
@@ -468,6 +483,20 @@ def _legacy_to_picbreeder_genome(legacy: LegacyGenome, config: neat.Config) -> P
             genome.connections[connection_key] = conn_gene
         conn_gene.weight = link.weight
         conn_gene.enabled = True
+        connection_lookup[connection_key] = link
+
+    # Attach legacy metadata for debugging/visualization helpers.
+    legacy_node_labels: Dict[int, str] = {}
+    for legacy_key, neat_key in node_key_map.items():
+        legacy_node = legacy.nodes.get(legacy_key)
+        if legacy_node is None:
+            continue
+        label = legacy_node.label or legacy_node.local_id or legacy_key
+        legacy_node_labels[int(neat_key)] = label
+
+    setattr(genome, "_legacy_node_key_map", dict(node_key_map))
+    setattr(genome, "_legacy_connection_lookup", connection_lookup)
+    setattr(genome, "_legacy_node_label_map", legacy_node_labels)
 
     return genome
 

@@ -112,6 +112,13 @@ def select_parents_from_grid(
     query_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_view_{view_index:02d}" if view_index is not None else ""
 
+    metadata_dir = query_dir / "metadata"
+    if metadata_subdir:
+        metadata_dir = metadata_dir / metadata_subdir
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    parts_dir = metadata_dir / "parts" / f"gen_{generation:03d}{suffix}"
+    parts_dir.mkdir(parents=True, exist_ok=True)
+
     base_grid_path = query_dir / f"gen_{generation:03d}{suffix}_grid.png"
     grid_image.save(base_grid_path, format="PNG")
 
@@ -119,6 +126,7 @@ def select_parents_from_grid(
         state["images"],
         key=lambda entry: int(entry.get("index", 0)),
     )
+    state_variant = str(state.get("variant") or "") or None
     image_caption_pairs: List[im_query.ImageCaptionInput] = []
     input_parts_metadata: List[Dict[str, Any]] = []
     for entry in sorted_images:
@@ -131,12 +139,20 @@ def select_parents_from_grid(
         caption = f"Image {index_value}"
         if title_value:
             caption = f"{caption}: {title_value}"
+        part_path = parts_dir / f"idx_{index_value:02d}.png"
+        part_path.write_bytes(part_bytes)
+        try:
+            relative_part_path = part_path.relative_to(metadata_dir)
+        except ValueError:
+            relative_part_path = part_path
         image_caption_pairs.append((part_bytes, caption))
         input_parts_metadata.append(
             {
                 "index": index_value,
                 "caption": caption,
-                "image_b64": base64.b64encode(part_bytes).decode("ascii"),
+                "width": image.width,
+                "height": image.height,
+                "image_path": str(relative_part_path),
             }
         )
 
@@ -313,11 +329,8 @@ def select_parents_from_grid(
         "color_toggle_only": color_toggle_only,
         "response_attempts": attempt,
         "response_latencies_sec": attempt_latencies,
+        "state_variant": state_variant,
     }
-    metadata_dir = query_dir / "metadata"
-    if metadata_subdir:
-        metadata_dir = metadata_dir / metadata_subdir
-    metadata_dir.mkdir(parents=True, exist_ok=True)
     meta_path = metadata_dir / f"gen_{generation:03d}{suffix}_selection.json"
     meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     metadata["metadata_path"] = str(meta_path)
@@ -329,6 +342,25 @@ _METADATA_FILENAME_PATTERN = re.compile(
     r"gen_(\d+)(?:_view_(\d+))?_selection\.json$",
     re.IGNORECASE,
 )
+
+def _candidate_file_paths(path_value: str, *, meta_path: Path, query_dir: Path) -> List[Path]:
+    raw_candidate = Path(path_value)
+    candidates: List[Path] = [raw_candidate]
+    if raw_candidate.is_absolute():
+        return candidates
+
+    possible_bases = [meta_path.parent, meta_path.parent.parent, query_dir]
+    relative_variants = [raw_candidate, Path(raw_candidate.name)]
+
+    for base in possible_bases:
+        if base is None:
+            continue
+        for variant in relative_variants:
+            candidate = (base / variant).resolve()
+            if candidate not in candidates:
+                candidates.append(candidate)
+
+    return candidates
 
 
 def _iter_query_metadata(query_dir: Path) -> List[Tuple[int, Dict[str, Any], Path]]:
@@ -426,6 +458,25 @@ def restore_chat_history_from_metadata(
                     image_bytes = base64.b64decode(image_b64)
                 except (ValueError, binascii.Error):
                     continue
+                image_bytes: Optional[bytes] = None
+                image_path_value = part.get("image_path")
+                if image_path_value:
+                    for candidate in _candidate_file_paths(image_path_value, meta_path=meta_path, query_dir=query_dir):
+                        try:
+                            image_bytes = candidate.read_bytes()
+                        except OSError:
+                            continue
+                        if image_bytes is not None:
+                            break
+                if image_bytes is None:
+                    image_b64 = part.get("image_b64")
+                    if image_b64:
+                        try:
+                            image_bytes = base64.b64decode(image_b64)
+                        except (ValueError, binascii.Error):
+                            image_bytes = None
+                if image_bytes is None:
+                    continue
                 caption_text = str(part.get("caption") or "")
                 image_pairs.append((image_bytes, caption_text))
             if image_pairs:
@@ -436,17 +487,8 @@ def restore_chat_history_from_metadata(
         if not grid_path_value:
             continue
 
-        candidate_paths = []
-        raw_candidate = Path(grid_path_value)
-        candidate_paths.append(raw_candidate)
-        if not raw_candidate.is_absolute():
-            candidate_paths.append(meta_path.parent.parent / raw_candidate)
-            candidate_paths.append(meta_path.parent / raw_candidate.name)
-            candidate_paths.append((query_dir / raw_candidate).resolve())
-            candidate_paths.append((query_dir / raw_candidate.name).resolve())
-
         image_bytes: Optional[bytes] = None
-        for candidate in candidate_paths:
+        for candidate in _candidate_file_paths(grid_path_value, meta_path=meta_path, query_dir=query_dir):
             try:
                 image_bytes = candidate.read_bytes()
             except OSError:

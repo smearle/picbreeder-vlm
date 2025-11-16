@@ -21,3 +21,4 @@ genomeAll
 *.egg-info
 archive
 archive_neat
+mutation_logs

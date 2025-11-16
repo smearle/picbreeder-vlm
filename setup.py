@@ -4,6 +4,6 @@ setup(
     name="picbreeder-vlm",
     version="0.1.0",
     description="Expose rendering.py as a top-level module",
-    packages=find_packages(include=["picture2d", "tools"]),
+    packages=find_packages(include=["picture2d", "tools", "fer"]),
     py_modules=["rendering"],
 )

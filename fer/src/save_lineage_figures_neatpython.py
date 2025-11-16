@@ -15,7 +15,7 @@ import argparse
 import math
 from pathlib import Path
 import traceback
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import matplotlib
 
@@ -24,8 +24,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from tqdm.auto import tqdm  # noqa: E402
 
-from lineage_utils import get_lineage_genomes  # noqa: E402
-from save_lineage_figures import load_pbcppn  # noqa: E402
+from fer.src.lineage_utils import get_lineage_genomes  # noqa: E402
+from fer.src.save_lineage_figures import load_pbcppn  # noqa: E402
 from rendering import render_genome_image  # noqa: E402
 from tools.render_legacy_genome import (  # noqa: E402
     LegacyGenome,
@@ -52,6 +52,58 @@ def _ensure_config(scheme: str, cache: ConfigCache) -> neat.Config:
     if scheme_normalized not in cache:
         cache[scheme_normalized] = _build_neat_config()
     return cache[scheme_normalized]
+
+
+def _format_neat_node(node_key: int, labels: Dict[int, str]) -> str:
+    label = labels.get(int(node_key), "")
+    if label:
+        return f"{label} [{node_key}]"
+    return str(node_key)
+
+
+def _format_connection(edge: Tuple[int, int], labels: Dict[int, str]) -> str:
+    src, dst = edge
+    return f"{_format_neat_node(src, labels)} -> {_format_neat_node(dst, labels)}"
+
+
+def _log_recurrent_details(
+    legacy: LegacyGenome,
+    genome: neat.DefaultGenome,
+    recurrent_edges: Set[Tuple[int, int]],
+    disabled_edges: List[Tuple[int, int]],
+    context: str,
+) -> None:
+    if not recurrent_edges and not disabled_edges:
+        return
+
+    label_map: Dict[int, str] = getattr(genome, "_legacy_node_label_map", {})
+    connection_lookup: Dict[Tuple[int, int], LegacyLink] = getattr(
+        genome,
+        "_legacy_connection_lookup",
+        {},
+    )
+
+    def describe(edge: Tuple[int, int]) -> str:
+        text = _format_connection(edge, label_map)
+        link = connection_lookup.get(edge)
+        if link is not None:
+            text = f"{text} [legacy={link.key}, w={link.weight:+.4f}]"
+        return text
+
+    disabled_set = set(disabled_edges)
+    if disabled_edges:
+        formatted = ", ".join(describe(edge) for edge in disabled_edges)
+        tqdm.write(
+            f"[INFO] Trimmed {len(disabled_edges)} recurrent connections in {context} genome "
+            f"{legacy.identifier} (age {legacy.age}): {formatted}"
+        )
+    remaining = sorted(edge for edge in recurrent_edges if edge not in disabled_set)
+    if remaining:
+        formatted = ", ".join(describe(edge) for edge in remaining)
+        tqdm.write(
+            f"[INFO] Remaining recurrent connections in {context} genome {legacy.identifier} "
+            f"(age {legacy.age}): {formatted}"
+        )
 
 
 def _convert_legacy_genome(legacy: LegacyGenome, cache: ConfigCache) -> Tuple[LegacyGenome, neat.Config, neat.DefaultGenome]:
@@ -226,17 +278,56 @@ def _detect_cyclic_nodes(genome: neat.DefaultGenome) -> Tuple[Set[int], Set[Tupl
     return cyclic_nodes, cyclic_edges
 
 
+def _find_recurrent_connection_keys(
+    genome: neat.DefaultGenome,
+    config: neat.Config,
+) -> Set[Tuple[int, int]]:
+    """Replicate the legacy DFS trimming: mark edges that point to an ancestor."""
+
+    incoming: Dict[int, List[Any]] = {}
+    for conn in genome.connections.values():
+        if not conn.enabled:
+            continue
+        src, dst = conn.key
+        incoming.setdefault(dst, []).append(conn)
+
+    visited: Set[int] = set()
+    recurrent_edges: Set[Tuple[int, int]] = set()
+
+    def explore(node: int, path: Tuple[int, ...]) -> None:
+        if node in path:
+            return
+        if node in visited:
+            return
+
+        next_path = path + (node,)
+        parents = incoming.get(node, ())
+        for conn in parents:
+            src = conn.key[0]
+            if src in next_path:
+                recurrent_edges.add(conn.key)
+                continue
+            explore(src, next_path)
+
+        visited.add(node)
+
+    for output_key in config.genome_config.output_keys:
+        explore(output_key, tuple())
+
+    return recurrent_edges
+
+
 def _disable_cyclic_connections(
     genome: neat.DefaultGenome,
     cyclic_edges: Set[Tuple[int, int]],
-) -> int:
-    disabled = 0
+) -> List[Tuple[int, int]]:
+    disabled: List[Tuple[int, int]] = []
     if not cyclic_edges:
         return disabled
     for conn in genome.connections.values():
         if conn.enabled and conn.key in cyclic_edges:
             conn.enabled = False
-            disabled += 1
+            disabled.append(conn.key)
     return disabled
 
 
@@ -244,13 +335,20 @@ def _prepare_render_genome(
     legacy: LegacyGenome,
     cache: ConfigCache,
     cycle_strategy: str,
-) -> Tuple[neat.Config, neat.DefaultGenome, Set[int], int]:
+) -> Tuple[
+    neat.Config,
+    neat.DefaultGenome,
+    Set[int],
+    Set[Tuple[int, int]],
+    List[Tuple[int, int]],
+]:
     _, config, genome = _convert_legacy_genome(legacy, cache)
-    cyclic_nodes, cyclic_edges = _detect_cyclic_nodes(genome)
-    trimmed = 0
-    if cyclic_edges and cycle_strategy == "trim":
-        trimmed = _disable_cyclic_connections(genome, cyclic_edges)
-    return config, genome, cyclic_nodes, trimmed
+    cyclic_nodes, _ = _detect_cyclic_nodes(genome)
+    recurrent_edges = _find_recurrent_connection_keys(genome, config)
+    disabled_edges: List[Tuple[int, int]] = []
+    if recurrent_edges and cycle_strategy == "trim":
+        disabled_edges = _disable_cyclic_connections(genome, recurrent_edges)
+    return config, genome, cyclic_nodes, recurrent_edges, disabled_edges
 
 
 def _render_color_image(
@@ -259,14 +357,18 @@ def _render_color_image(
     size: int,
     cycle_strategy: str,
 ):
-    config, genome, cyclic_nodes, trimmed = _prepare_render_genome(legacy, cache, cycle_strategy)
+    config, genome, cyclic_nodes, recurrent_edges, disabled_edges = _prepare_render_genome(
+        legacy,
+        cache,
+        cycle_strategy,
+    )
 
     if cycle_strategy == "recurrent" and cyclic_nodes:
         color_image = _render_color_image_recurrent(genome, config, size)
-        return color_image, cyclic_nodes, trimmed
+        return color_image, genome, cyclic_nodes, recurrent_edges, disabled_edges
 
     _, color_image = render_genome_image(genome, config, size, size)
-    return color_image, cyclic_nodes, trimmed
+    return color_image, genome, cyclic_nodes, recurrent_edges, disabled_edges
 
 
 def _render_color_image_recurrent(genome: neat.DefaultGenome, config: neat.Config, size: int) -> Image.Image:
@@ -318,7 +420,7 @@ def _render_lineage_figure(
 
     for ax, legacy in zip(axes, subset):
         try:
-            color_image, cyclic_nodes, trimmed = _render_color_image(
+            color_image, genome, cyclic_nodes, recurrent_edges, disabled_edges = _render_color_image(
                 legacy,
                 cache,
                 size,
@@ -326,17 +428,18 @@ def _render_lineage_figure(
             )
             rgb = np.asarray(color_image)
             ax.imshow(rgb)
-            if cyclic_nodes:
-                if cycle_strategy == "trim":
-                    tqdm.write(
-                        f"[INFO] Trimmed {trimmed} connections for cyclical nodes "
-                        f"in genome {legacy.identifier} (age {legacy.age})"
-                    )
-                else:
-                    tqdm.write(
-                        f"[INFO] Evaluated genome {legacy.identifier} (age {legacy.age}) "
-                        "with recurrent network due to cycles"
-                    )
+            if recurrent_edges or disabled_edges:
+                _log_recurrent_details(
+                    legacy,
+                    genome,
+                    recurrent_edges,
+                    disabled_edges,
+                    context="lineage",
+                )
+            elif cyclic_nodes:
+                tqdm.write(
+                    f"[INFO] Cyclic nodes detected in lineage genome {legacy.identifier} (age {legacy.age})"
+                )
         except Exception as exc:  # pragma: no cover - defensive logging
             ax.text(0.5, 0.5, "render err", ha="center", va="center", color="red", fontsize=6)
             traceback.print_exc()
@@ -360,22 +463,24 @@ def _render_final_image(
         return None
     final_genome = genomes[-1]
     try:
-        color_image, cyclic_nodes, trimmed = _render_color_image(
+        color_image, genome, cyclic_nodes, recurrent_edges, disabled_edges = _render_color_image(
             final_genome,
             cache,
             size,
             cycle_strategy,
         )
-        if cyclic_nodes:
-            if cycle_strategy == "trim":
-                tqdm.write(
-                    f"[INFO] Trimmed {trimmed} connections for cyclical nodes in final genome "
-                    f"{final_genome.identifier}"
-                )
-            else:
-                tqdm.write(
-                    f"[INFO] Evaluated final genome {final_genome.identifier} with recurrent network due to cycles"
-                )
+        if recurrent_edges or disabled_edges:
+            _log_recurrent_details(
+                final_genome,
+                genome,
+                recurrent_edges,
+                disabled_edges,
+                context="final",
+            )
+        elif cyclic_nodes:
+            tqdm.write(
+                f"[INFO] Cyclic nodes detected in final genome {final_genome.identifier}"
+            )
         return color_image
     except Exception as exc:  # pragma: no cover - defensive logging
         tqdm.write(
@@ -465,8 +570,6 @@ def main(argv: Iterable[str] | None = None) -> None:
         for pid in pb_dir.iterdir()
         if pid.is_dir() and (pid / "main.zip").exists()
     )
-
-    pids = ['1125']
 
     if not pids:
         raise SystemExit(f"No pid directories found in {pb_dir}")

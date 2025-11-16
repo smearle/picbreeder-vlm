@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Set, Tuple
 
 import jax.numpy as jnp
 import matplotlib
@@ -21,9 +21,9 @@ from tqdm.auto import tqdm
 matplotlib.use("Agg")  # noqa: E402 - set backend before importing pyplot
 import matplotlib.pyplot as plt  # noqa: E402
 
-from color import hsv2rgb
-from constants import activation_fn_map
-from lineage_utils import _ensure_list, get_lineage_genomes
+from fer.src.color import hsv2rgb
+from fer.src.constants import activation_fn_map
+from fer.src.lineage_utils import _ensure_list, get_lineage_genomes
 
 
 def load_pbcppn(genome: Dict) -> Dict:
@@ -72,6 +72,13 @@ def load_pbcppn(genome: Dict) -> Dict:
     return {"nodes": nodes, "links": links, "special_nodes": special_nodes}
 
 
+def _format_node_label(node_id: str, labels: Dict[str, str]) -> str:
+    label = labels.get(node_id, "")
+    if label:
+        return f"{label} ({node_id})"
+    return node_id
+
+
 def do_forward_pass(nn: Dict, res: int = 64):
     x = y = jnp.linspace(-1.0, 1.0, res)
     x, y = jnp.meshgrid(x, y)
@@ -83,6 +90,10 @@ def do_forward_pass(nn: Dict, res: int = 64):
         n["id"]: [(l["source"], l["weight"]) for l in nn["links"] if l["target"] == n["id"]]
         for n in nn["nodes"]
     }
+    node_labels = {n["id"]: n.get("label", "") or "" for n in nn["nodes"]}
+    recurrent_edges: Set[Tuple[str, str]] = set()
+    recurrent_cycles: List[List[str]] = []
+
     node_x = nn["special_nodes"]["x"]
     node_y = nn["special_nodes"]["y"]
     node_d = nn["special_nodes"]["d"]
@@ -98,6 +109,13 @@ def do_forward_pass(nn: Dict, res: int = 64):
             return node2val[node]
         path = path or []
         if node in path:
+            idx = path.index(node)
+            cycle = path[idx:] + [node]
+            recurrent_cycles.append(cycle)
+            if path:
+                recurrent_edges.add((path[-1], node))
+            for src, dst in zip(cycle, cycle[1:]):
+                recurrent_edges.add((src, dst))
             return jnp.zeros_like(x)
         val = jnp.zeros_like(x)
         for node_src, weight in node2in_links[node]:
@@ -111,7 +129,12 @@ def do_forward_pass(nn: Dict, res: int = 64):
     h, s, v = node2val[node_h], node2val[node_s], node2val[node_v]
     r, g, b = hsv2rgb((h + 1) % 1, s.clip(0, 1), jnp.abs(v).clip(0, 1))
     rgb = jnp.stack([r, g, b], axis=-1)
-    return {"rgb": rgb}
+    return {
+        "rgb": rgb,
+        "recurrent_edges": recurrent_edges,
+        "recurrent_cycles": recurrent_cycles,
+        "node_labels": node_labels,
+    }
 
 
 def render_lineage_figure(genomes: List[Dict], max_genomes: int, grid_cols: int, res: int):
@@ -137,9 +160,26 @@ def render_lineage_figure(genomes: List[Dict], max_genomes: int, grid_cols: int,
 
     for ax, genome in zip(axes, subset):
         nn = load_pbcppn(genome)
-        rgb = np.asarray(do_forward_pass(nn, res=res)["rgb"])
+        forward = do_forward_pass(nn, res=res)
+        rgb = np.asarray(forward["rgb"])
         ax.imshow(np.clip(rgb, 0, 1))
         ax.set_title(str(genome.get("@age", "?")), fontsize=6)
+        if forward["recurrent_edges"]:
+            formatted = ", ".join(
+                f"{_format_node_label(src, forward['node_labels'])} -> {_format_node_label(dst, forward['node_labels'])}"
+                for src, dst in sorted(forward["recurrent_edges"])
+            )
+            tqdm.write(
+                f"[INFO] Recurrent edges detected (trimmed to zero) for genome age {genome.get('@age', '?')}: {formatted}"
+            )
+            if forward["recurrent_cycles"]:
+                for cycle in forward["recurrent_cycles"]:
+                    cycle_fmt = " -> ".join(
+                        _format_node_label(node_id, forward["node_labels"]) for node_id in cycle
+                    )
+                    tqdm.write(f"        cycle: {cycle_fmt}")
+        else:
+            print("No recurrent edges detected.")
 
     plt.tight_layout(pad=0.3)
     return fig, take
@@ -150,7 +190,24 @@ def render_final_image(genomes: List[Dict], res: int = 200):
         return None
     final_genome = genomes[-1]
     nn = load_pbcppn(final_genome)
-    rgb = np.asarray(do_forward_pass(nn, res=res)["rgb"])
+    forward = do_forward_pass(nn, res=res)
+    if forward["recurrent_edges"]:
+        formatted = ", ".join(
+            f"{_format_node_label(src, forward['node_labels'])} -> {_format_node_label(dst, forward['node_labels'])}"
+            for src, dst in sorted(forward["recurrent_edges"])
+        )
+        tqdm.write(
+            f"[INFO] Recurrent edges detected (trimmed to zero) for final genome age {final_genome.get('@age', '?')}: {formatted}"
+        )
+        if forward["recurrent_cycles"]:
+            for cycle in forward["recurrent_cycles"]:
+                cycle_fmt = " -> ".join(
+                    _format_node_label(node_id, forward["node_labels"]) for node_id in cycle
+                )
+                tqdm.write(f"        cycle: {cycle_fmt}")
+    else:
+        print("No recurrent edges detected.")
+    rgb = np.asarray(forward["rgb"])
     return np.clip(rgb, 0, 1)
 
 
