@@ -4,7 +4,7 @@ from pathlib import Path
 import hydra
 import neat
 
-from artifacts import build_generation_state, save_neat_genome_diagrams
+from artifacts import render_genome_images, save_neat_genome_diagrams
 from neat_components import InteractiveStagnation, PicbreederGenome, apply_picbreeder_config_defaults, seed_initial_population, sync_population_output_activations
 from picbreeder_reproduction import PicbreederReproduction
 from rendering import create_numbered_grid
@@ -52,7 +52,7 @@ def dump_initial_populations(
         population_dir = output_dir / f"population_{index:03d}"
         # save_neat_population(state, population_dir, 0, png_cache)
 
-        states, _ = build_generation_state(
+        states, _ = render_genome_images(
             genomes,
             config,
             0,

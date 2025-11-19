@@ -15,6 +15,7 @@ from statistics import mean, pstdev
 
 import sys
 
+import PIL
 import graphviz 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -26,6 +27,77 @@ import im_query  # type: ignore
 DEFAULT_BASELINE_SELECTION_LIMIT = 1
 _CHAT_SESSION: Optional[Any] = None
 _CHAT_SESSION_MAX_TURNS: Optional[int] = None
+
+
+class GeminiPromptBlockedError(RuntimeError):
+    """Raised when Gemini explicitly blocks a prompt and returns no content."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        block_reason: Optional[str] = None,
+        prompt_feedback: Optional[Dict[str, Any]] = None,
+        attempts: Optional[int] = None,
+        generation: Optional[int] = None,
+    ) -> None:
+        super().__init__(message)
+        self.block_reason = block_reason
+        self.prompt_feedback = prompt_feedback or {}
+        self.attempts = attempts
+        self.generation = generation
+
+
+def _summarize_prompt_feedback(feedback: Any) -> Optional[Dict[str, Any]]:
+    if feedback is None:
+        return None
+
+    summary: Dict[str, Any] = {}
+    block_reason = getattr(feedback, "block_reason", None)
+    if block_reason is not None:
+        summary["block_reason"] = getattr(block_reason, "value", str(block_reason))
+
+    block_message = getattr(feedback, "block_reason_message", None)
+    if block_message:
+        summary["block_reason_message"] = str(block_message)
+
+    safety_ratings = getattr(feedback, "safety_ratings", None)
+    if safety_ratings:
+        rating_summaries: List[Dict[str, Any]] = []
+        for rating in safety_ratings:
+            rating_summary: Dict[str, Any] = {}
+            category = getattr(rating, "category", None)
+            if category is not None:
+                rating_summary["category"] = getattr(category, "value", str(category))
+            probability = getattr(rating, "probability", None)
+            if probability is not None:
+                rating_summary["probability"] = getattr(probability, "value", str(probability))
+            blocked_flag = getattr(rating, "blocked", None)
+            if blocked_flag is not None:
+                rating_summary["blocked"] = bool(blocked_flag)
+            if rating_summary:
+                rating_summaries.append(rating_summary)
+        if rating_summaries:
+            summary["safety_ratings"] = rating_summaries
+
+    return summary or None
+
+
+def _extract_response_diagnostics(response: Any) -> Dict[str, Any]:
+    diagnostics: Dict[str, Any] = {}
+    prompt_feedback = _summarize_prompt_feedback(getattr(response, "prompt_feedback", None))
+    if prompt_feedback:
+        diagnostics["prompt_feedback"] = prompt_feedback
+
+    finish_reasons: List[str] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        reason = getattr(candidate, "finish_reason", None)
+        if reason is not None:
+            finish_reasons.append(getattr(reason, "value", str(reason)))
+    if finish_reasons:
+        diagnostics["finish_reasons"] = finish_reasons
+
+    return diagnostics
 
 
 def extract_json_object(text: str) -> Union[Dict[str, Any], ValueError]:
@@ -68,24 +140,27 @@ def reset_chat_session() -> None:
     _CHAT_SESSION_MAX_TURNS = None
 
 
-def _ensure_chat_session(chat_history_turns: Optional[int]) -> Any:
+def _ensure_chat_session(model: str, chat_history_turns: Optional[int]) -> Any:
     global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS
     max_turns = _session_max_turns(chat_history_turns)
     if _CHAT_SESSION is None or _CHAT_SESSION_MAX_TURNS != max_turns:
-        _CHAT_SESSION = im_query.create_chat_session(max_turns=max_turns)
+        _CHAT_SESSION = im_query.create_chat_session(model=model, max_turns=max_turns,)
         _CHAT_SESSION_MAX_TURNS = max_turns
     return _CHAT_SESSION
 
 
 def query_with_history(
+    model: str,
     image_caption_pairs: Sequence[im_query.ImageCaptionInput],
+    thinking_budget: int,
     prompt: str,
     system_instruction: Optional[str],
     chat_history_turns: Optional[int],
 ) -> Any:
-    session: im_query.ImageChatSession = _ensure_chat_session(chat_history_turns)
+    session: im_query.ImageChatSession = _ensure_chat_session(model, chat_history_turns)
     return session.send(
         image_caption_pairs=image_caption_pairs,
+        thinking_budget=thinking_budget,
         prompt=prompt,
         history_turns=chat_history_turns,
         mime_type="image/png",
@@ -94,20 +169,23 @@ def query_with_history(
 
 
 def select_parents_from_grid(
-    state: Dict[str, Any],
+    model: str,
+    population_images: List[PIL.Image.Image],
+    thinking_budget: int,
+    generation: int,
     prompt_template: str,
     query_dir: Path,
     select_k: Optional[int] = None,
     system_instruction: Optional[str] = None,
     chat_history_turns: Optional[int] = 0,
     require_selection: bool = True,
+    request_rationale: bool = True,
     allow_color_toggle: bool = False,
     current_color: Optional[bool] = None,
     view_index: Optional[int] = None,
     metadata_subdir: Optional[str] = None,
+    image_path_map: Optional[Dict[int, Union[str, Path]]] = None,
 ) -> Dict[str, Any]:
-    generation = int(state["generation"])
-    grid_image = create_numbered_grid(state)
 
     query_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_view_{view_index:02d}" if view_index is not None else ""
@@ -116,52 +194,36 @@ def select_parents_from_grid(
     if metadata_subdir:
         metadata_dir = metadata_dir / metadata_subdir
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    parts_dir = metadata_dir / "parts" / f"gen_{generation:03d}{suffix}"
-    parts_dir.mkdir(parents=True, exist_ok=True)
+    parts_dir: Optional[Path] = None
+    if image_path_map is None:
+        parts_dir = metadata_dir / "parts" / f"gen_{generation:03d}{suffix}"
+        parts_dir.mkdir(parents=True, exist_ok=True)
 
-    base_grid_path = query_dir / f"gen_{generation:03d}{suffix}_grid.png"
-    grid_image.save(base_grid_path, format="PNG")
-
-    sorted_images = sorted(
-        state["images"],
-        key=lambda entry: int(entry.get("index", 0)),
-    )
-    state_variant = str(state.get("variant") or "") or None
     image_caption_pairs: List[im_query.ImageCaptionInput] = []
     input_parts_metadata: List[Dict[str, Any]] = []
-    for entry in sorted_images:
-        image = decode_image(entry)
+    for i, image in enumerate(population_images):
         buffer = BytesIO()
         image.save(buffer, format="PNG")
         part_bytes = buffer.getvalue()
-        index_value = int(entry.get("index", len(image_caption_pairs)))
-        title_value = str(entry.get("title") or "").strip()
-        caption = f"Image {index_value}"
-        if title_value:
-            caption = f"{caption}: {title_value}"
-        part_path = parts_dir / f"idx_{index_value:02d}.png"
-        part_path.write_bytes(part_bytes)
-        try:
-            relative_part_path = part_path.relative_to(metadata_dir)
-        except ValueError:
-            relative_part_path = part_path
+        caption = f"Image {i}"
+        stored_image_path: Optional[str] = None
         image_caption_pairs.append((part_bytes, caption))
         input_parts_metadata.append(
             {
-                "index": index_value,
+                "index": i,
                 "caption": caption,
                 "width": image.width,
                 "height": image.height,
-                "image_path": str(relative_part_path),
+                "image_path": stored_image_path,
             }
         )
 
-    total_images = len(state["images"])
+    total_images = len(population_images)
     max_index = max(total_images - 1, 0)
     base_prompt = prompt_template.format(generation=generation)
     max_history_turns = _session_max_turns(chat_history_turns)
     prompt = base_prompt
-    max_index = int(state["rows"]) * int(state["cols"]) - 1
+    max_index = i
 
     errors_dir = query_dir / "metadata" / "errors"
     max_attempts = 5
@@ -188,16 +250,23 @@ def select_parents_from_grid(
     color_toggle_only = False
 
     attempt_latencies: List[float] = []
+    last_error_reason: Optional[str] = None
+    last_response_diagnostics: Optional[Dict[str, Any]] = None
 
     for attempt in range(1, max_attempts + 1):
         start_time = time.perf_counter()
         response = query_with_history(
+            model,
             image_caption_pairs,
+            thinking_budget=thinking_budget,
             prompt=prompt,
             system_instruction=system_instruction,
             chat_history_turns=chat_history_turns,
         )
         attempt_latencies.append(time.perf_counter() - start_time)
+        response_diagnostics = _extract_response_diagnostics(response)
+        prompt_feedback_details = response_diagnostics.get("prompt_feedback") if isinstance(response_diagnostics.get("prompt_feedback"), dict) else None
+        block_reason = prompt_feedback_details.get("block_reason") if prompt_feedback_details else None
         response_text = getattr(response, "text", "") or ""
         parse_result = extract_json_object(response_text)
 
@@ -246,6 +315,11 @@ def select_parents_from_grid(
             ):
                 error_reason = "Response did not contain any valid selection indices."
             color_toggle_only = error_reason is None and color_toggle_requested
+        if error_reason is None and not response_text.strip():
+            if block_reason:
+                error_reason = f"Gemini blocked the prompt ({block_reason})."
+            else:
+                error_reason = "empty response"
 
         if error_reason is None:
             break
@@ -263,12 +337,18 @@ def select_parents_from_grid(
             error_payload["latency_sec"] = attempt_latencies[-1]
         if isinstance(parsed, dict) and parsed:
             error_payload["parsed_json"] = parsed
+        if response_diagnostics:
+            error_payload["response_diagnostics"] = response_diagnostics
 
         error_path = errors_dir / f"gen_{generation:03d}_attempt_{attempt:02d}.json"
         error_path.write_text(json.dumps(error_payload, indent=2), encoding="utf-8")
 
+        last_error_reason = error_reason
+        if response_diagnostics:
+            last_response_diagnostics = response_diagnostics
+
         if attempt >= max_attempts:
-            raise ValueError(f"Exceeded {max_attempts} attempts while querying Gemini: {error_reason}")
+            break
 
         correction_instructions = [
             f"Your previous response could not be processed because: {error_reason}",
@@ -282,16 +362,31 @@ def select_parents_from_grid(
                 ]
             )
         correction_instructions.append("")
+        schema_text = (
+            '{"selected": [indices], "rationale": "brief explanation"}'
+            if request_rationale
+            else '{"selected": [indices]}'
+        )
         correction_instructions.extend(
             [
                 "Please reply with JSON only in the format "
-                '{"selected": [indices], "rationale": "brief explanation"}',
+                f"{schema_text}",
                 f"Use zero-based numeric indices between 0 and {max_index}.",
             ]
         )
         if select_k is not None:
             correction_instructions.append(f"Select at most {select_k} unique indices.")
         correction_instructions.append("Do not include code fences or extra commentary.")
+        if block_reason:
+            correction_instructions.extend(
+                [
+                    "Safety note: these CPPN images are computer-generated abstract patterns with no real people or sensitive content.",
+                    "It is safe to provide the requested JSON response describing which indices to explore next.",
+                ]
+            )
+
+        if block_reason:
+            time.sleep(min(2.0 * attempt, 6.0))
 
         prompt = (
             f"{base_prompt}\n\n"
@@ -299,16 +394,30 @@ def select_parents_from_grid(
         )
 
     else:
-        raise ValueError("Failed to obtain a valid Gemini response.")
+        block_reason = None
+        prompt_feedback_details = None
+        if isinstance(last_response_diagnostics, dict):
+            prompt_feedback_details = last_response_diagnostics.get("prompt_feedback")
+            if isinstance(prompt_feedback_details, dict):
+                block_reason = prompt_feedback_details.get("block_reason")
+
+        if block_reason:
+            reset_chat_session()
+            raise GeminiPromptBlockedError(
+                f"Gemini blocked generation {generation} prompt after {max_attempts} attempts.",
+                block_reason=block_reason,
+                prompt_feedback=prompt_feedback_details,
+                attempts=max_attempts,
+                generation=generation,
+            )
+
+        error_detail = f" Last error: {last_error_reason}." if last_error_reason else ""
+        raise ValueError(f"Failed to obtain a valid Gemini response.{error_detail}")
 
     if select_k is not None and not color_toggle_only:
         cleaned = cleaned[:select_k]
 
     selection_path: Optional[Path] = None
-    if not color_toggle_only:
-        selection_image = create_numbered_grid(state, selected=cleaned)
-        selection_path = query_dir / f"gen_{generation:03d}{suffix}_selection.png"
-        selection_image.save(selection_path, format="PNG")
 
     metadata = {
         "selected": cleaned,
@@ -317,7 +426,6 @@ def select_parents_from_grid(
         "response_text": response_text,
         "prompt": prompt,
         "generation": generation,
-        "grid_path": str(base_grid_path),
         "selection_path": str(selection_path) if selection_path else None,
         "input_parts": input_parts_metadata,
         "select_k": select_k,
@@ -329,11 +437,7 @@ def select_parents_from_grid(
         "color_toggle_only": color_toggle_only,
         "response_attempts": attempt,
         "response_latencies_sec": attempt_latencies,
-        "state_variant": state_variant,
     }
-    meta_path = metadata_dir / f"gen_{generation:03d}{suffix}_selection.json"
-    meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    metadata["metadata_path"] = str(meta_path)
 
     return metadata
 
@@ -349,7 +453,19 @@ def _candidate_file_paths(path_value: str, *, meta_path: Path, query_dir: Path) 
     if raw_candidate.is_absolute():
         return candidates
 
-    possible_bases = [meta_path.parent, meta_path.parent.parent, query_dir]
+    possible_bases: List[Path] = []
+    base_candidates = [
+        meta_path.parent,
+        meta_path.parent.parent,
+        query_dir,
+        query_dir.parent,
+        query_dir.parent.parent,
+    ]
+    for base in base_candidates:
+        if base is None:
+            continue
+        if base not in possible_bases:
+            possible_bases.append(base)
     relative_variants = [raw_candidate, Path(raw_candidate.name)]
 
     for base in possible_bases:
@@ -418,8 +534,8 @@ def _iter_query_metadata(query_dir: Path) -> List[Tuple[int, Dict[str, Any], Pat
 
 
 def restore_chat_history_from_metadata(
+    model: str,
     query_dir: Path,
-    *,
     chat_history_turns: Optional[int],
     prompt_template: Optional[str],
 ) -> int:
@@ -451,13 +567,6 @@ def restore_chat_history_from_metadata(
         if isinstance(input_parts_payload, list) and input_parts_payload:
             image_pairs: List[im_query.ImageCaptionInput] = []
             for part in input_parts_payload:
-                image_b64 = part.get("image_b64")
-                if not image_b64:
-                    continue
-                try:
-                    image_bytes = base64.b64decode(image_b64)
-                except (ValueError, binascii.Error):
-                    continue
                 image_bytes: Optional[bytes] = None
                 image_path_value = part.get("image_path")
                 if image_path_value:
@@ -476,7 +585,7 @@ def restore_chat_history_from_metadata(
                         except (ValueError, binascii.Error):
                             image_bytes = None
                 if image_bytes is None:
-                    continue
+                    raise ValueError(f"Could not restore image for chat history from metadata: {meta_path}")
                 caption_text = str(part.get("caption") or "")
                 image_pairs.append((image_bytes, caption_text))
             if image_pairs:
@@ -508,7 +617,7 @@ def restore_chat_history_from_metadata(
     if max_turns is not None and max_turns > 0:
         turns = turns[-max_turns:]
 
-    session = _ensure_chat_session(chat_history_turns)
+    session = _ensure_chat_session(model, chat_history_turns)
     stored_turns = session.load_history(turns)
     return stored_turns
 

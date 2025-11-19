@@ -1,62 +1,56 @@
 #!/usr/bin/env python3
 """Render a phylogenetic view of archived Picbreeder images."""
 
-import argparse
 import json
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import html
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+import hydra
 from graphviz import Digraph
+from hydra.conf import HelpConf, HydraConf
+from hydra.core.config_store import ConfigStore
+from hydra.utils import get_original_cwd
 
-from utils import _resolve_image_path, _resolve_source_experiment_dir
+from config import CollaborativeConfig, ensure_valid_config
+from utils import _ensure_absolute, _resolve_image_path, _resolve_source_experiment_dir
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Construct and render the phylogenetic tree for an experiment archive.",
+VALID_FORMATS: Tuple[str, ...] = ("png", "pdf", "svg")
+VALID_MODES: Tuple[str, ...] = ("annotated", "images")
+VALID_SCOPES: Tuple[str, ...] = ("archive", "full")
+
+
+@dataclass
+class ArchivePhylogenyConfig(CollaborativeConfig):
+    output: Optional[Path] = None
+    format: str = "png"
+    mode: str = "annotated"
+    scope: str = "archive"
+    archive_limit: Optional[int] = None
+    hydra: HydraConf = field(
+        default_factory=lambda: HydraConf(
+            help=HelpConf(
+                app_name="visualize_archive_phylogeny",
+                header=(
+                    "Hydra entry point for archive phylogeny visualization.\n"
+                    "\n"
+                    "Key options:\n"
+                    "  experiment_dir          Override to point directly at an existing run.\n"
+                    "  goal / scheme / seed    Used with ensure_valid_config to infer experiment path.\n"
+                    "  mode / format           Control rendering style and Graphviz output format.\n"
+                    "  archive_limit           Trim the number of archive entries considered.\n"
+                ),
+                footer="Override with +option=value (e.g. format=svg mode=images).",
+            )
+        )
     )
-    parser.add_argument(
-        "--experiment-dir",
-        type=Path,
-        required=True,
-        help="Path to the collaborative experiment directory (containing the archive folder).",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help="Output image path (defaults to archive/archive_phylogeny.<format>).",
-    )
-    parser.add_argument(
-        "--format",
-        choices=("png", "pdf", "svg"),
-        default="png",
-        help="Graphviz output format.",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=("annotated", "images"),
-        default="annotated",
-        help=(
-            "Rendering style: 'annotated' shows thumbnails plus text, 'images' renders thumbnails only."
-        ),
-    )
-    parser.add_argument(
-        "--scope",
-        choices=("archive", "full"),
-        default="archive",
-        help="Select 'archive' to show only archive entries; 'full' includes all recorded genomes and archive entries.",
-    )
-    parser.add_argument(
-        "--archive-limit",
-        type=int,
-        default=None,
-        help="If provided, only consider the first N archive entries (default: all).",
-    )
-    return parser.parse_args()
+
+
+ConfigStore.instance().store(name="archive_phylogeny_base", node=ArchivePhylogenyConfig)
 
 PALETTE: Tuple[str, ...] = (
     "#8dd3c7",
@@ -93,6 +87,17 @@ def _load_archive_entries(archive_dir: Path) -> List[Dict[str, Any]]:
 
     entries.sort(key=sort_key)
     return entries
+
+
+def _validate_visualization_options(cfg: ArchivePhylogenyConfig) -> None:
+    if cfg.format not in VALID_FORMATS:
+        raise ValueError(f"format must be one of {VALID_FORMATS}")
+    if cfg.mode not in VALID_MODES:
+        raise ValueError(f"mode must be one of {VALID_MODES}")
+    if cfg.scope not in VALID_SCOPES:
+        raise ValueError(f"scope must be one of {VALID_SCOPES}")
+    if cfg.archive_limit is not None and cfg.archive_limit <= 0:
+        raise ValueError("archive_limit must be a positive integer when provided")
 
 
 def _init_graph(output_format: str) -> Digraph:
@@ -357,16 +362,31 @@ def build_phylogeny_graph(
     )
 
 
-def main() -> None:
-    args = parse_args()
-    experiment_dir = args.experiment_dir.resolve()
-    experiment_prefix = args.experiment_dir.resolve() if args.experiment_dir else None
+def _resolve_output_path(
+    cfg: ArchivePhylogenyConfig,
+    archive_dir: Path,
+    original_cwd: Path,
+) -> Path:
+    if cfg.output is None:
+        output_path = archive_dir / f"archive_phylogeny.{cfg.format}"
+    else:
+        output_path = _ensure_absolute(Path(cfg.output), original_cwd)
+    if output_path.suffix.lower() != f".{cfg.format}":
+        output_path = output_path.with_suffix(f".{cfg.format}")
+    return output_path.resolve()
+
+
+@hydra.main(version_base="1.3", config_path=None, config_name="archive_phylogeny_base")
+def main(cfg: ArchivePhylogenyConfig) -> None:
+    original_cwd = Path(get_original_cwd())
+    validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
+    _validate_visualization_options(validated_cfg)
+
+    experiment_dir = Path(validated_cfg.experiment_dir).resolve()
     archive_dir = experiment_dir / "archive"
     entries = _load_archive_entries(archive_dir)
-    if args.archive_limit is not None:
-        if args.archive_limit <= 0:
-            raise SystemExit("--archive-limit must be a positive integer.")
-        entries = entries[: args.archive_limit]
+    if validated_cfg.archive_limit is not None:
+        entries = entries[: validated_cfg.archive_limit]
     if not entries:
         raise SystemExit("Archive metadata contains no entries to visualise.")
 
@@ -374,19 +394,13 @@ def main() -> None:
         entries,
         experiment_dir=experiment_dir,
         archive_dir=archive_dir,
-        output_format=args.format,
-        mode=args.mode,
-        scope=args.scope,
-        experiment_prefix=experiment_prefix,
+        output_format=validated_cfg.format,
+        mode=validated_cfg.mode,
+        scope=validated_cfg.scope,
+        experiment_prefix=experiment_dir,
     )
 
-    if args.output is None:
-        output_path = archive_dir / f"archive_phylogeny.{args.format}"
-    else:
-        output_path = args.output
-    output_path = output_path.resolve()
-    if output_path.suffix.lower() != f".{args.format}":
-        output_path = output_path.with_suffix(f".{args.format}")
+    output_path = _resolve_output_path(validated_cfg, archive_dir, original_cwd)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     rendered_path = Path(
@@ -398,7 +412,7 @@ def main() -> None:
     )
 
     # graphviz.render adds the requested suffix automatically; ensure final path matches expectation.
-    final_path = rendered_path.with_suffix(f".{args.format}")
+    final_path = rendered_path.with_suffix(f".{validated_cfg.format}")
     if final_path != output_path and final_path.exists():
         final_path.rename(output_path)
         final_path = output_path

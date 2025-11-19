@@ -18,9 +18,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import neat
 from PIL import Image, ImageDraw, ImageFont
 
-from constants import RATING_BATCH_SIZE, RATE_EVERY
+from constants import RATING_BATCH_SIZE, RATE_EVERY, REPO_NAME
 from rate_archive_with_vlm import RatingResult
-from utils import atomic_write_json, _ensure_int_list
+from utils import atomic_write_json, _ensure_int_list, relative_suffix_after_dir
 
 try:
     import fcntl  # type: ignore[attr-defined]
@@ -164,17 +164,12 @@ class ArchiveManager:
         self.archive_dir = archive_dir
         self.goal_prompt = goal_prompt
         self.metadata_file = archive_dir / "archive_metadata.json"
-        # self._lock_path = self.metadata_file.with_suffix(".lock")
         self.images_dir = archive_dir / "images"
         self.genomes_dir = archive_dir / "genomes"
-        self.checkpoints_dir = archive_dir / "checkpoints"
-        self.logs_dir = archive_dir / "logs"
         for directory in (
             archive_dir,
             self.images_dir,
             self.genomes_dir,
-            self.checkpoints_dir,
-            self.logs_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
         self._metadata: Dict[str, Any] = {}
@@ -521,7 +516,7 @@ class ArchiveManager:
         entries_list.append(archive_entry.as_dict())
 
         self._persist()
-        self._write_checkpoint(archive_entry)
+        # self._write_checkpoint(archive_entry)
 
         return archive_entry
 
@@ -576,8 +571,10 @@ class ArchiveManager:
             valid_indices: List[int] = []
             for entry in labeled_entries:
                 path = Path(entry["image_path"])
+                path = relative_suffix_after_dir(path, "archive")
+                path = self.archive_dir / path
                 if not path.exists():
-                    continue
+                    raise FileNotFoundError(f"Image path does not exist: {path}")
                 try:
                     with Image.open(path) as img:
                         processed = img.convert("RGB").resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
@@ -640,15 +637,15 @@ class ArchiveManager:
                 skip_entries: List[int] = []
                 for entry in subset_entries:
                     path = Path(entry.get("image_path", ""))
+                    path = relative_suffix_after_dir(path, "archive")
+                    path = self.archive_dir / path
                     if not path.exists():
-                        skip_entries.append(entry["_index"])
-                        continue
+                        raise FileNotFoundError(f"Image path does not exist: {path}")
                     try:
                         with Image.open(path) as img:
                             processed = img.convert("RGB").resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
                     except Exception:
-                        skip_entries.append(entry["_index"])
-                        continue
+                        raise RuntimeError(f"Failed to open/process image at path: {path}")
                     subset_images.append(processed)
                     subset_indices.append(entry["_index"])
 

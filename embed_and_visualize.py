@@ -4,45 +4,97 @@
 This script expects PNG images under: <experiment_dir>/archive/images/*.png
 
 Example:
-  python scripts/embed_and_visualize.py --experiment-dir logs_collaborative/exp123
+    python scripts/embed_and_visualize.py --experiment-dir logs_collaborative/exp123
 
 Outputs saved to the experiment directory:
-  - embeddings_openclip.npz    (filenames + embeddings)
-    - embed_viz_<method>.png     (scatter visualization)
-    - embed_grid_<method>.png    (grid layout approximation)
+    - embeddings_openclip.npz        (filenames + embeddings)
+    - embed_viz_<method>.png         (scatter visualization)
+    - embed_grid_<method>.png        (organic grid layout approximation)
+    - embed_grid_rect_<method>.png   (rasterfairy rectangular grid)
 
 """
-from pathlib import Path
-import argparse
-import json
-import sys
-import math
 from collections import deque
+from dataclasses import dataclass, field
+import importlib
+import json
+import math
+from pathlib import Path
+from typing import Optional
 
 from PIL import Image
 import numpy as np
 import torch
 from tqdm import tqdm
 
-try:
-    import open_clip
-except Exception as e:
-    print("open_clip import failed. Make sure `open_clip_torch` is installed.")
-    raise
+import hydra
+from hydra.conf import HelpConf, HydraConf
+from hydra.core.config_store import ConfigStore
+from hydra.utils import get_original_cwd
 
-try:
-    import umap
-except Exception:
-    umap = None
-
+import open_clip
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from sklearn.metrics import pairwise_distances
+import umap
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+import rasterfairy
+
+from config import CollaborativeConfig, ensure_valid_config
+
+
+
+def _validate_embed_options(cfg: "EmbedVisualizeConfig") -> None:
+    if cfg.method not in VALID_METHODS:
+        raise ValueError(f"method must be one of {VALID_METHODS}")
+    if cfg.batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if cfg.thumbs_limit <= 0:
+        raise ValueError("thumbs_limit must be positive")
+    if cfg.archive_limit is not None and cfg.archive_limit <= 0:
+        raise ValueError("archive_limit must be a positive integer when provided")
+    if cfg.pairwise_sample_limit < 2:
+        raise ValueError("pairwise_sample_limit must be at least 2")
+
+
+VALID_METHODS = ("umap", "tsne", "pca")
+_RASTERFAIRY_READY = False
+
+
+@dataclass
+class EmbedVisualizeConfig(CollaborativeConfig):
+    embedding_model: str = "ViT-B-32"
+    pretrained: str = "openai"
+    method: str = "umap"
+    batch_size: int = 64
+    thumbs_limit: int = 200
+    archive_limit: Optional[int] = None
+    device: Optional[str] = None
+    pairwise_sample_limit: int = 2000
+    k_center_values: str = "1,5,10,20"
+    hydra: HydraConf = field(
+        default_factory=lambda: HydraConf(
+            help=HelpConf(
+                app_name="embed_and_visualize",
+                header=(
+                    "Hydra entry point for OpenCLIP embedding + visualization.\n"
+                    "\n"
+                    "Common overrides:\n"
+                    "  experiment_dir      Point directly at an existing run.\n"
+                    "  goal/scheme/seed    Combine with ensure_valid_config to infer a run directory.\n"
+                    "  method              Choose between umap/tsne/pca.\n"
+                    "  k_center_values     Comma-separated radii to measure diversity.\n"
+                ),
+                footer="Override with +option=value (e.g. method=pca k_center_values=5,10).",
+            )
+        )
+    )
+
+
+ConfigStore.instance().store(name="embed_visualize_base", node=EmbedVisualizeConfig)
 
 
 def load_image_paths(experiment_dir: Path):
@@ -276,6 +328,90 @@ def render_grid(assignments, bounds, image_paths, outpath: Path):
     plt.close(fig)
 
 
+def _ensure_rasterfairy_ready():
+    """Prepare rasterfairy for use on modern NumPy versions."""
+    global _RASTERFAIRY_READY
+    if _RASTERFAIRY_READY:
+        return
+    if rasterfairy is None:
+            raise RuntimeError("rasterfairy not installed. Run `pip install rasterfairy`.")
+
+    try:
+        rf_module = importlib.import_module("rasterfairy.rasterfairy")
+        prime_module = importlib.import_module("rasterfairy.prime")
+        rf_module.prime = prime_module
+    except Exception as exc:  # pragma: no cover - import-time defensive guard
+        raise RuntimeError("Failed to initialize rasterfairy internals") from exc
+
+    for alias_name, builtin_type in (("float", float), ("int", int), ("bool", bool)):
+        if not hasattr(np, alias_name):
+            setattr(np, alias_name, builtin_type)
+
+    _RASTERFAIRY_READY = True
+
+
+def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path):
+    """Render a strictly rectangular grid using rasterfairy."""
+    coords = np.asarray(coords, dtype=float)
+    if coords.size == 0:
+        return
+
+    try:
+        _ensure_rasterfairy_ready()
+    except RuntimeError as exc:
+        print(f"Skipping rectangular grid visualization: {exc}")
+        return
+
+    grid_points, dims = rasterfairy.transformPointCloud2D(coords)
+    if not isinstance(dims, (tuple, list)) or len(dims) != 2:
+        print("Skipping rectangular grid visualization: rasterfairy returned invalid dimensions")
+        return
+
+    cols, rows = (int(dims[0]), int(dims[1]))
+    if cols <= 0 or rows <= 0:
+        print("Skipping rectangular grid visualization: rasterfairy produced non-positive grid size")
+        return
+
+    grid_positions = np.rint(np.asarray(grid_points, dtype=float)).astype(int)
+
+    fig, axes = plt.subplots(rows, cols, figsize=(rows, cols))
+
+    if rows == 1 and cols == 1:
+        axes = np.array([[axes]])
+    elif rows == 1:
+        axes = axes.reshape(1, cols)
+    elif cols == 1:
+        axes = axes.reshape(rows, 1)
+
+    for r in range(rows):
+        for c in range(cols):
+            ax = axes[r, c]
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.axis("off")
+
+    for idx, (col, row) in enumerate(grid_positions):
+        rr = int(row)
+        cc = int(col)
+        if rr < 0 or rr >= rows or cc < 0 or cc >= cols:
+            continue
+        ax = axes[rr, cc]
+        try:
+            with Image.open(image_paths[idx]) as img:
+                img_rgb = img.convert("RGB")
+            ax.imshow(img_rgb, aspect="auto")
+        except Exception:
+            continue
+
+    fig.subplots_adjust(
+        left=0.0, right=1.0, bottom=0.0, top=1.0,
+        wspace=0.02, hspace=0.02,  # shrink or set to 0.0 for no gutters
+    )
+
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+
+
 def _mean_pairwise_distance(embeddings: np.ndarray, max_points: int = 2000, random_state: int = 0):
     n = embeddings.shape[0]
     if n < 2:
@@ -351,79 +487,64 @@ def compute_embedding_metrics(
     metrics["k_center_radius"] = k_radius
 
     return metrics
+def _parse_k_center_values(raw: str) -> list[int]:
+    try:
+        values = [int(value.strip()) for value in raw.split(",") if value.strip()]
+    except ValueError as exc:  # pragma: no cover - validation guard
+        raise ValueError("k_center_values must be a comma-separated list of integers") from exc
+    if not values or any(value <= 0 for value in values):
+        raise ValueError("k_center_values must contain positive integers")
+    return values
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Embed and visualize images from an experiment archive using OpenCLIP + UMAP/TSNE")
-    parser.add_argument("--experiment-dir", required=True, help="Path to experiment directory containing archive/images/*.png")
-    parser.add_argument("--model", default="ViT-B-32", help="OpenCLIP model name (default: ViT-B-32)")
-    parser.add_argument("--pretrained", default="openai", help="Pretrained weights key for open_clip.create_model_and_transforms (default: openai)")
-    parser.add_argument("--method", choices=["umap", "tsne", "pca"], default="umap", help="Dimensionality reduction method")
-    parser.add_argument("--batch-size", type=int, default=64, help="Image embedding batch size")
-    parser.add_argument("--thumbs-limit", type=int, default=200, help="Max number of thumbnails to draw on the plot")
-    parser.add_argument(
-        "--archive-limit",
-        type=int,
-        default=None,
-        help="Only consider the first N archive images before embedding (default: all).",
-    )
-    parser.add_argument("--device", default=None, help="torch device string (auto-detect if not provided)")
-    parser.add_argument(
-        "--pairwise-sample-limit",
-        type=int,
-        default=2000,
-        help="Max number of embeddings used when computing mean pairwise distance (default: 2000)",
-    )
-    parser.add_argument(
-        "--k-center-values",
-        type=str,
-        default="1,5,10,20",
-        help="Comma-separated list of k values for k-center radius computation (default: 1,5,10,20)",
-    )
-    args = parser.parse_args()
+@hydra.main(version_base="1.3", config_path=None, config_name="embed_visualize_base")
+def main(cfg: EmbedVisualizeConfig) -> None:
+    original_cwd = Path(get_original_cwd())
+    validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
+    _validate_embed_options(validated_cfg)
 
-    exp_dir = Path(args.experiment_dir)
+    exp_dir = Path(validated_cfg.experiment_dir).resolve()
     if not exp_dir.exists():
-        print(f"Experiment directory does not exist: {exp_dir}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Experiment directory does not exist: {exp_dir}")
 
     image_paths = load_image_paths(exp_dir)
-    if args.archive_limit is not None:
-        if args.archive_limit <= 0:
-            print("--archive-limit must be a positive integer.")
-            sys.exit(1)
-        image_paths = image_paths[: args.archive_limit]
-    if len(image_paths) == 0:
-        print("No PNG images found in archive/images")
-        sys.exit(1)
+    if validated_cfg.archive_limit is not None:
+        image_paths = image_paths[: validated_cfg.archive_limit]
+    if not image_paths:
+        raise SystemExit("No PNG images found in archive/images")
 
-    device = torch.device(args.device) if args.device else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+    if validated_cfg.device:
+        device = torch.device(validated_cfg.device)
+    else:
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
 
-    print(f"Loading OpenCLIP model {args.model} ({args.pretrained})...")
-    model, _, preprocess = open_clip.create_model_and_transforms(args.model, pretrained=args.pretrained)
+    print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        validated_cfg.embedding_model,
+        pretrained=validated_cfg.pretrained,
+    )
     model.to(device)
 
-    print(f"Embedding {len(image_paths)} images (batch_size={args.batch_size})...")
-    filenames, embeddings = embed_images(model, preprocess, image_paths, device, batch_size=args.batch_size)
+    print(f"Embedding {len(image_paths)} images (batch_size={validated_cfg.batch_size})...")
+    filenames, embeddings = embed_images(
+        model,
+        preprocess,
+        image_paths,
+        device,
+        batch_size=validated_cfg.batch_size,
+    )
 
-    # save embeddings
     emb_out = exp_dir / "embeddings_openclip.npz"
     np.savez_compressed(emb_out, filenames=np.array(filenames), embeddings=embeddings)
     print(f"Saved embeddings to {emb_out}")
 
-    try:
-        k_values = [int(v) for v in args.k_center_values.split(",") if v.strip()]
-        if len(k_values) == 0:
-            raise ValueError
-    except ValueError:
-        print("Invalid --k-center-values: provide a comma-separated list of integers.")
-        sys.exit(1)
+    k_values = _parse_k_center_values(validated_cfg.k_center_values)
 
     metrics = compute_embedding_metrics(
         embeddings,
         random_state=0,
-        pairwise_sample_limit=max(2, args.pairwise_sample_limit),
+        pairwise_sample_limit=validated_cfg.pairwise_sample_limit,
         k_values=k_values,
     )
     metrics_out = exp_dir / "embedding_metrics.json"
@@ -431,17 +552,21 @@ def main():
         json.dump(metrics, f, indent=2)
     print(f"Saved embedding coverage metrics to {metrics_out}")
 
-    print(f"Reducing to 2D using {args.method}...")
-    coords = reduce_embeddings(embeddings, method=args.method)
+    print(f"Reducing to 2D using {validated_cfg.method}...")
+    coords = reduce_embeddings(embeddings, method=validated_cfg.method)
 
-    viz_out = exp_dir / f"embed_viz_{args.method}.png"
-    print(f"Creating visualization (thumbnails limit={args.thumbs_limit}) -> {viz_out}")
-    plot_coords(coords, [p for p in image_paths], viz_out, thumbs_limit=args.thumbs_limit)
+    viz_out = exp_dir / f"embed_viz_{validated_cfg.method}.png"
+    print(f"Creating visualization (thumbnails limit={validated_cfg.thumbs_limit}) -> {viz_out}")
+    plot_coords(coords, list(image_paths), viz_out, thumbs_limit=validated_cfg.thumbs_limit)
 
     grid_assignments, grid_bounds = layout_embeddings_to_grid(coords)
-    grid_out = exp_dir / f"embed_grid_{args.method}.png"
+    grid_out = exp_dir / f"embed_grid_{validated_cfg.method}.png"
     print(f"Rendering grid approximation -> {grid_out}")
     render_grid(grid_assignments, grid_bounds, image_paths, grid_out)
+
+    rect_grid_out = exp_dir / f"embed_grid_rect_{validated_cfg.method}.png"
+    print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
+    render_rectangular_grid(coords, image_paths, rect_grid_out)
 
     print("Done.")
 

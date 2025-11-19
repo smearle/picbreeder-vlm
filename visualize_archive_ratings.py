@@ -3,34 +3,50 @@
 
 from __future__ import annotations
 
-import argparse
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+import hydra
+from hydra.conf import HelpConf, HydraConf
+from hydra.core.config_store import ConfigStore
+from hydra.utils import get_original_cwd
+
+from config import CollaborativeConfig, ensure_valid_config
+from utils import _ensure_absolute
 from rate_archive_with_vlm import load_archive_entries, render_ranked_figure, summarize_scores
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "experiment_dir",
-        type=Path,
-        help="Path to archive_metadata.json",
+@dataclass
+class ArchiveRatingsConfig(CollaborativeConfig):
+    output: Optional[Path] = None
+    summary_json: Optional[Path] = None
+    hydra: HydraConf = field(
+        default_factory=lambda: HydraConf(
+            help=HelpConf(
+                app_name="visualize_archive_ratings",
+                header=(
+                    "Hydra entry point for visualizing archive VLM ratings.\n"
+                    "\n"
+                    "Common overrides:\n"
+                    "  experiment_dir      Point to the archive root explicitly.\n"
+                    "  goal/scheme/seed    Combine with ensure_valid_config to infer the archive directory.\n"
+                    "  output/summary_json Customize export paths.\n"
+                ),
+                footer="Override with +option=value (e.g. output=outputs/vlm_plot.png).",
+            )
+        )
     )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help="Optional path for the ranked figure PNG (defaults to metadata directory)",
-    )
-    parser.add_argument(
-        "--summary-json",
-        type=Path,
-        default=None,
-        help="Optional path to write the numeric summary as JSON",
-    )
-    return parser.parse_args()
+
+
+ConfigStore.instance().store(name="archive_ratings_base", node=ArchiveRatingsConfig)
+
+
+def _resolve_optional_path(value: Optional[Path], base: Path) -> Optional[Path]:
+    if value is None:
+        return None
+    return _ensure_absolute(Path(value), base)
 
 
 def extract_scores(metadata: Dict) -> Dict[str, List[float]]:
@@ -44,15 +60,17 @@ def extract_scores(metadata: Dict) -> Dict[str, List[float]]:
     return scores
 
 
-def main() -> None:
-    args = parse_args()
-    metadata_path = args.experiment_dir.expanduser().resolve() / "archive" / "archive_metadata.json"
+@hydra.main(version_base="1.3", config_path=None, config_name="archive_ratings_base")
+def main(cfg: ArchiveRatingsConfig) -> None:
+    original_cwd = Path(get_original_cwd())
+    validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
+
+    exp_dir = Path(validated_cfg.experiment_dir).resolve()
+    archive_dir = exp_dir / "archive"
+    metadata_path = archive_dir / "archive_metadata.json"
     if not metadata_path.exists():
         raise FileNotFoundError(f"Could not find {metadata_path}")
-    if metadata_path.name != "archive_metadata.json":
-        raise ValueError("metadata_path must point to archive_metadata.json")
 
-    archive_dir = metadata_path.parent
     entries, _ = load_archive_entries(archive_dir)
 
     metadata = json.loads(metadata_path.read_text())
@@ -66,12 +84,18 @@ def main() -> None:
         print("No ratings correspond to images on disk; nothing to visualize.")
         return
 
-    output_path = args.output.expanduser().resolve() if args.output else archive_dir / "vlm_ratings_metadata.png"
+    output_path = _resolve_optional_path(validated_cfg.output, original_cwd)
+    if output_path is None:
+        output_path = archive_dir / "vlm_ratings_metadata.png"
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
     render_ranked_figure(summary, output_path)
     print(f"Saved ranked figure to {output_path}")
 
-    if args.summary_json:
-        summary_path = args.summary_json.expanduser().resolve()
+    summary_path = _resolve_optional_path(validated_cfg.summary_json, original_cwd)
+    if summary_path is not None:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(json.dumps(summary, indent=2))
         print(f"Wrote summary statistics to {summary_path}")
 

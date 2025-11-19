@@ -178,6 +178,7 @@ def build_command(cfg: SweepConfig, seed: int, chat_turns: int, goal: str, exper
             f"resume={resume}",
             f"goal={goal}",
             f"num_proc={cfg.num_proc}",
+            f"personality_path={cfg.personality_path}",
             experiment_override,
         ]
         if getattr(cfg, "selection_baseline", "none") != "none":

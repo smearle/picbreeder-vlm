@@ -44,7 +44,6 @@ import personalities
 
 import neat
 from neat.population import CompleteExtinctionException
-from PIL import Image, ImageDraw
 
 from chat import (
     ensure_gemini_key,
@@ -53,9 +52,7 @@ from archive_manager import (
     ArchiveEntry,
     ArchiveManager,
     atomic_write_json,
-    interprocess_lock,
 )
-from artifacts import build_generation_state, save_neat_genome_diagrams, save_neat_population
 from neat_components import (
     CHECKPOINT_SUFFIX,
     InteractiveStagnation,
@@ -69,10 +66,11 @@ from constants import (
     PERSONALITY_BATCH_SIZE,
     PERSONALITY_TOTAL,
     RATING_BATCH_SIZE,
+    REPO_NAME,
 )
 from picbreeder_reproduction import PicbreederReproduction
 from prompts import GOAL_PROMPTS
-from utils import apply_random_seed
+from utils import relative_suffix_after_dir, apply_random_seed
 
 from rate_archive_with_vlm import (
     ArchiveEntry as RatingArchiveEntry,
@@ -137,7 +135,6 @@ def _clamp(value: int, lower: int, upper: int) -> int:
 class AgentTask:
     agent_id: str
     agent_index: int
-    agent_dir: Path
     resume: bool
     warm_start_active: bool
     personality_prompt: Optional[str]
@@ -149,7 +146,6 @@ class AgentTask:
         return {
             "agent_id": self.agent_id,
             "agent_index": self.agent_index,
-            "agent_dir": str(self.agent_dir),
             "resume": self.resume,
             "warm_start_active": self.warm_start_active,
             "personality_prompt": self.personality_prompt,
@@ -325,6 +321,8 @@ class CollaborativeMultiAgentOrchestrator:
 
     def _ensure_run_config(self) -> None:
         self._reload_metadata()
+        if self.config.personality_path:
+            self.config.personality_path = relative_suffix_after_dir(self.config.personality_path, dir_name=REPO_NAME)
         personality_path_str = str(self.config.personality_path) if self.config.personality_path else None
         run_config = {
             "rows": self.rows,
@@ -338,11 +336,14 @@ class CollaborativeMultiAgentOrchestrator:
             "selection_baseline": self.selection_baseline,
             "generate_personalities": self.config.generate_personalities,
             "personality_path": personality_path_str,
+            "request_rationale": self.config.request_rationale,
         }
         existing = self._metadata.get("run_config")
         if existing is None:
             self._mutate_metadata(lambda data: data.__setitem__("run_config", run_config))
             return
+        if existing['personality_path']:
+            existing["personality_path"] = str(relative_suffix_after_dir(Path(existing.get("personality_path")), dir_name=REPO_NAME))
         missing = []
         if "warm_start_structure" not in existing:
             missing.append(("warm_start_structure", 0))
@@ -352,6 +353,8 @@ class CollaborativeMultiAgentOrchestrator:
             missing.append(("generate_personalities", self.config.generate_personalities))
         if "personality_path" not in existing:
             missing.append(("personality_path", personality_path_str))
+        if "request_rationale" not in existing:
+            missing.append(("request_rationale", self.config.request_rationale))
         if missing:
             def mutator(data: Dict[str, Any]) -> None:
                 details = data.setdefault("run_config", {})
@@ -472,6 +475,9 @@ class CollaborativeMultiAgentOrchestrator:
     def _agent_id_from_index(self, index: int) -> str:
         return f"{AGENT_DIR_PREFIX}{index:03d}"
 
+    def _agent_dir(self, agent_id: str) -> Path:
+        return self.agents_dir / agent_id
+
     def _ensure_agent_number_progress(self, agent_id: str) -> None:
         index = self._parse_agent_index(agent_id)
         if index is None:
@@ -489,12 +495,14 @@ class CollaborativeMultiAgentOrchestrator:
         return index is not None and index < self.warm_start_structure
 
     def _find_agent_record(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        for record in self._metadata.get("agents", []):
-            if record.get("agent_id") == agent_id:
-                return record
-        return None
+        agent_idx = self._parse_agent_index(agent_id)
+        if len(self._metadata.get("agents", [])) <= agent_idx or agent_idx is None:
+            return None
+        record = self._metadata.get("agents", [])[agent_idx]
+        assert record.get("agent_id") == agent_id
+        return record
 
-    def _register_agent(self, agent_id: str, agent_dir: Path) -> Dict[str, Any]:
+    def _register_agent(self, agent_id: str) -> Dict[str, Any]:
         def mutator(metadata: Dict[str, Any]) -> Dict[str, Any]:
             agents = metadata.setdefault("agents", [])
             for record in agents:
@@ -502,7 +510,6 @@ class CollaborativeMultiAgentOrchestrator:
                     return record
             record = {
                 "agent_id": agent_id,
-                "agent_dir": str(agent_dir),
                 "branching_decision": None,
                 "favorite_selection": None,
                 "archive_entry": None,
@@ -549,7 +556,7 @@ class CollaborativeMultiAgentOrchestrator:
         return None
 
     def _hydrate_agent_record_from_disk(self, record: Dict[str, Any]) -> None:
-        agent_dir = Path(record["agent_dir"])
+        agent_dir = self._agent_dir(record["agent_id"])
         logs_dir = agent_dir / "logs"
         updates: Dict[str, Any] = {}
         branch_path = logs_dir / "branching_selection.json"
@@ -983,7 +990,7 @@ class CollaborativeMultiAgentOrchestrator:
         if not agent_id:
             return
         task = state.current_task
-        agent_dir = task.agent_dir if task else (self.agents_dir / agent_id)
+        agent_dir = self._agent_dir(agent_id)
         favorite_payload = payload.get("favorite")
         archive_entry_data = payload.get("archive_entry")
         archive_entry: Optional[ArchiveEntry]
@@ -1019,9 +1026,8 @@ class CollaborativeMultiAgentOrchestrator:
 
     def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
         self._ensure_agent_number_progress(agent_id)
-        agent_dir = self.agents_dir / agent_id
-        # agent_dir.mkdir(parents=True, exist_ok=True)
-        record = self._register_agent(agent_id, agent_dir)
+        agent_dir = self._agent_dir(agent_id)
+        record = self._register_agent(agent_id)
         if record.get("status") != "in_progress":
             self._update_agent_record(agent_id, status="in_progress", last_generation=0)
         warm_start_active = self._is_warm_start_agent(agent_id)
@@ -1029,7 +1035,6 @@ class CollaborativeMultiAgentOrchestrator:
         return AgentTask(
             agent_id=agent_id,
             agent_index=agent_index,
-            agent_dir=agent_dir,
             resume=False,
             warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
@@ -1038,7 +1043,7 @@ class CollaborativeMultiAgentOrchestrator:
     def _build_resume_agent_task(self, record: Dict[str, Any]) -> AgentTask:
         self._hydrate_agent_record_from_disk(record)
         agent_id = record["agent_id"]
-        agent_dir = Path(record["agent_dir"])
+        agent_dir = self._agent_dir(agent_id)
         agent_index = self._parse_agent_index(agent_id) or 0
         warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
@@ -1052,7 +1057,6 @@ class CollaborativeMultiAgentOrchestrator:
         return AgentTask(
             agent_id=agent_id,
             agent_index=agent_index,
-            agent_dir=agent_dir,
             resume=True,
             warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
@@ -1098,9 +1102,8 @@ class CollaborativeMultiAgentOrchestrator:
             agent_id = self._allocate_agent_id()
         else:
             self._ensure_agent_number_progress(agent_id)
-        agent_dir = self.agents_dir / agent_id
-        agent_dir.mkdir(parents=True, exist_ok=True)
-        self._register_agent(agent_id, agent_dir)
+        agent_dir = self._agent_dir(agent_id)
+        self._register_agent(agent_id)
         config = self._build_config()
         runner = self._build_runner(agent_id, agent_dir, config, None, resume=False)
         decision = runner.select_starting_point()
@@ -1129,7 +1132,7 @@ class CollaborativeMultiAgentOrchestrator:
             return False
         self._hydrate_agent_record_from_disk(record)
         agent_id = record["agent_id"]
-        agent_dir = Path(record["agent_dir"])
+        agent_dir = self._agent_dir(agent_id)
         population, checkpoint_path = self._load_population_for_agent(agent_dir)
         if population is not None and checkpoint_path is not None:
             print(f"[{agent_id}] Resuming from checkpoint {checkpoint_path.name}")
@@ -1330,7 +1333,6 @@ def _deserialize_agent_task(payload: Dict[str, Any]) -> AgentTask:
     return AgentTask(
         agent_id=str(payload["agent_id"]),
         agent_index=int(payload.get("agent_index", 0)),
-        agent_dir=Path(payload["agent_dir"]),
         resume=bool(payload.get("resume")),
         warm_start_active=bool(payload.get("warm_start_active")),
         personality_prompt=payload.get("personality_prompt"),
@@ -1452,8 +1454,7 @@ def _execute_agent_task(
     worker_index: int,
     task_conn: Connection,
 ) -> Dict[str, Any]:
-    agent_dir = task.agent_dir
-    agent_dir.mkdir(parents=True, exist_ok=True)
+    agent_dir = Path(cfg.experiment_dir) / "agents" / task.agent_id
 
     population: Optional[neat.Population]
     population = None

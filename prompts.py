@@ -3,6 +3,7 @@ from typing import Optional
 
 GOAL_PROMPTS = {
     "familiar_objects": "Your goal is to evolve images that resemble familiar real-world objects.",
+    "familiar_objects_realistic": "Your goal is to evolve images that resemble familiar real-world objects, as vividly and photorealistically as possible.",
     "fun": "Your goal is to have fun.",
     "unfamiliar_objects": "Your goal is to evolve images that resemble unfamiliar objects that may or may not exist.",
     "lizards": "Your goal is to evolve images that resemble lizards.",
@@ -32,11 +33,11 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "Your session will run for {n_generations} generations. "
     "Try to contribute something novel, interesting or useful to the online archive. "
     "Do not add something to the archive that is identical to an existing image. "
-    "Respond with JSON only: {{\"selected\": [indices], \"rationale\": \"brief explanation\"}}. "
+    "Respond with JSON only: {{\"selected\": [indices]{selection_json_suffix}}}. "
     "(During branching, you may select only one image from which to branch; "
     " set \"selected\" to null to start from a fresh population.) "
     "You may also include a \"publish\" field in the JSON response if you wish to publish an image from the current population. It should have the form: "
-    '{{"index": image_index, "title": "Image Title", "reason": "Brief publication note."}}. '
+    '{{\"index\": image_index, \"title\": \"Image Title\"{publish_reason_suffix}}}. '
     # f"{DEBUG_PROMPT}"
     "{color_prompt}"
     "{mutation_mode_prompt}"
@@ -71,7 +72,7 @@ ARCHIVE_BRANCHING_PROMPT = (
 
 COLOR_PROMPT = (
     "By default, you will be presented with grayscale versions of the images. "
-    "Respond with a JSON containing a single `color` field set to true/false to switch between color/grayscale images. "
+    "Respond with a JSON containing a single \"color\" field set to true/false to switch between color/grayscale images. "
     "(This response does not affect which images are selected for breeding; it only changes how the current grid is displayed. Include no other fields in the JSON in this case.) "
     # "It would be a bonus to have some color images in the online archive, but we DO NOT want it to be dominated by high-frequency rainbow artefacts. "
     # "90% of the images in the archive should be grayscale, and you should spend at least 90% of your time exploring grayscale images. "

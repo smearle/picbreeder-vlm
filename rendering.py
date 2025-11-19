@@ -61,38 +61,35 @@ def draw_label(draw: ImageDraw.ImageDraw, position: Sequence[int], text: str, fo
 
 
 def create_numbered_grid(
-    state: Dict[str, Any],
+    population_images: List[Image.Image],
+    rows: int,
+    cols: int,
+    thumb_size: int,
     margin: int = 12,
     font_size: int = 22,
     selected: Optional[Sequence[int]] = None,
 ) -> Image.Image:
-    rows = int(state["rows"])
-    cols = int(state["cols"])
-    thumb = int(state["thumbSize"])
     font = try_load_font(font_size)
     selected_set = set(int(s) for s in selected) if selected else set()
 
-    width = (cols * thumb) + ((cols + 1) * margin)
-    height = (rows * thumb) + ((rows + 1) * margin)
+    width = (cols * thumb_size) + ((cols + 1) * margin)
+    height = (rows * thumb_size) + ((rows + 1) * margin)
     canvas = Image.new("RGBA", (width, height), (16, 16, 20, 255))
     draw = ImageDraw.Draw(canvas)
 
-    for entry in state["images"]:
-        image = decode_image(entry)
-        row = int(entry["row"])
-        col = int(entry["col"])
-        index = int(entry["index"])
-
-        x = margin + col * (thumb + margin)
-        y = margin + row * (thumb + margin)
+    for i, image in enumerate(population_images):
+        row = i // cols
+        col = i % cols
+        x = margin + col * (thumb_size + margin)
+        y = margin + row * (thumb_size + margin)
         canvas.paste(image, (x, y))
 
-        label = str(index)
+        label = str(i)
         draw_label(draw, (x + 6, y + 6), label, font)
 
-        if index in selected_set:
+        if i in selected_set:
             draw.rectangle(
-                (x, y, x + thumb, y + thumb),
+                (x, y, x + thumb_size, y + thumb_size),
                 outline=(255, 0, 0),
                 width=4,
             )

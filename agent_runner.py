@@ -12,13 +12,14 @@ import shutil
 import tempfile
 from typing import Optional, Callable, Dict, Any, List, Sequence, Set, Tuple, Iterable
 
+import PIL
 import graphviz
 import neat
 from PIL import Image, ImageDraw
 
 from archive_manager import ARCHIVE_GRID_MARGIN, ArchiveEntry, ArchiveManager
-from artifacts import build_generation_state, save_neat_genome_diagrams, save_neat_population
-from chat import extract_json_object, query_with_history, reset_chat_session, restore_chat_history_from_metadata, select_parents_from_grid, summarize_genome_structure
+from artifacts import render_genome_images, save_neat_genome_diagrams
+from chat import GeminiPromptBlockedError, extract_json_object, query_with_history, reset_chat_session, restore_chat_history_from_metadata, select_parents_from_grid, summarize_genome_structure
 from config import CollaborativeConfig
 from constants import DEFAULT_BASELINE_SELECTION_LIMIT
 from neat_components import CHECKPOINT_SUFFIX, GenerationCheckpointer, seed_initial_population, sync_population_node_indexer, sync_population_output_activations
@@ -26,8 +27,10 @@ from prompts import ARCHIVE_BRANCHING_PROMPT, ARCHIVE_NOVELTY_PROMPT, COLOR_PROM
 from rendering import _draw_dotted_rectangle, create_numbered_grid
 from utils import _ensure_int_list
 
+
 BRANCH_TOP_RATED_LIMIT = 50
 BRANCH_RANDOM_LIMIT = 50
+
 
 @dataclass
 class ImageVariantPaths:
@@ -37,14 +40,13 @@ class ImageVariantPaths:
     def for_color_mode(self, color_enabled: bool) -> Path:
         return self.color if color_enabled else self.gray
 
+
 @dataclass
 class GenerationArtifacts:
-    state_path: Path
     grid_path: Path
     selection_path: Path
     image_paths: Dict[int, ImageVariantPaths] = field(default_factory=dict)
     genome_snapshots: Dict[int, neat.DefaultGenome] = field(default_factory=dict)
-
 
 
 class AgentRunner:
@@ -97,6 +99,7 @@ class AgentRunner:
         self.warm_start_active = bool(warm_start_active)
         self.resume_mode = resume_mode or (population is not None)
         self.personality_prompt = personality_prompt.strip() if personality_prompt else None
+        self.request_rationale = bool(getattr(self.config, "request_rationale", True))
 
         # Start each agent with a fresh conversation history before any VLM calls.
         reset_chat_session()
@@ -146,7 +149,7 @@ class AgentRunner:
         else:
             color_prompt = ""
 
-        if self.chat_history_turns is None:
+        if self.chat_history_turns is None and self.request_rationale:
             archive_novelty_prompt = ARCHIVE_NOVELTY_PROMPT
         else:
             archive_novelty_prompt = ""
@@ -166,6 +169,8 @@ class AgentRunner:
             mutation_mode_prompt = ""
 
         mutation_strength_prompt = MUTATION_STRENGTH_PROMPT
+        selection_json_suffix = ', "rationale": "brief explanation"' if self.request_rationale else ""
+        publish_reason_suffix = ', "reason": "Brief publication note."' if self.request_rationale else ""
         instruction_body = DEFAULT_SYSTEM_INSTRUCTION.format(
             goal_prompt=GOAL_PROMPTS[self.config.goal],
             selection_prompt=gen_selection_prompt(self.select_k),
@@ -174,6 +179,8 @@ class AgentRunner:
             archive_novelty_prompt=archive_novelty_prompt,
             mutation_strength_prompt=mutation_strength_prompt,
             mutation_mode_prompt=mutation_mode_prompt,
+            selection_json_suffix=selection_json_suffix,
+            publish_reason_suffix=publish_reason_suffix,
         )
         if self.personality_prompt:
             self.system_instruction = f"{self.personality_prompt}\n\n{instruction_body}"
@@ -187,6 +194,7 @@ class AgentRunner:
         should_restore_chat = (self.selection_baseline == "none") and (self.chat_history_turns is None or self.chat_history_turns != 0)
         if should_restore_chat:
             restored = restore_chat_history_from_metadata(
+                self.config.model,
                 self.query_dir,
                 chat_history_turns=self.chat_history_turns,
                 prompt_template=self.prompt_template,
@@ -223,6 +231,27 @@ class AgentRunner:
                 shutil.copy(source_path, target)
             except OSError:
                 continue
+
+    def _save_generation_images(
+        self,
+        generation: int,
+        color_images: List[PIL.Image.Image],
+        gray_images: List[PIL.Image.Image],
+    ) -> Dict[int, ImageVariantPaths]:
+        images_dir = self.images_dir / f"gen_{generation:03d}"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        image_paths: Dict[int, ImageVariantPaths] = {}
+        if len(color_images) != len(gray_images):
+            raise ValueError(
+                f"Mismatched color/gray image list lengths: {len(color_images)} vs {len(gray_images)}"
+            )
+        for idx, (color_im, gray_im) in enumerate(zip(color_images, gray_images)):
+            color_path = images_dir / f"idx_{idx:02d}.png"
+            gray_path = images_dir / f"idx_{idx:02d}_gray.png"
+            color_im.save(color_path, format="PNG")
+            gray_im.save(gray_path, format="PNG")
+            image_paths[idx] = ImageVariantPaths(color=color_path, gray=gray_path)
+        return image_paths
 
     def _load_pending_publication(self) -> None:
         if not self._pending_publication_path.exists():
@@ -446,7 +475,6 @@ class AgentRunner:
     # Population initialisation and branching
     # ------------------------------------------------------------------
     def select_starting_point(self) -> Dict[str, Any]:
-        self.archive_manager.create_archive_grid(self.thumb_size)
         top_entries_raw, random_entries_raw = self.archive_manager.sample_branching_entries(
             BRANCH_TOP_RATED_LIMIT,
             BRANCH_RANDOM_LIMIT,
@@ -464,13 +492,10 @@ class AgentRunner:
             archive_entries.append(entry_copy)
 
         archive_grid: Optional[Path] = None
-        if archive_entries:
-            archive_grid = self.archive_manager.create_archive_grid(
-                self.thumb_size,
-                entries=archive_entries,
-            )
-        else:
-            archive_grid = None
+        archive_grid = self.archive_manager.create_archive_grid(
+            self.thumb_size,
+        )
+
         elite_name_list = self.archive_manager.get_elite_names()
         if not archive_entries:
             rationale = "Archive empty; defaulting to fresh population."
@@ -526,7 +551,9 @@ class AgentRunner:
             display_to_archive_index = {idx: archive_idx for idx, archive_idx in enumerate(display_order)}
 
             response = query_with_history(
+                self.config.model,
                 image_caption_pairs,
+                self.config.thinking_budget,
                 prompt=archive_prompt,
                 system_instruction=self.system_instruction,
                 chat_history_turns=self.chat_history_turns,
@@ -674,7 +701,7 @@ class AgentRunner:
         genomes: List[Tuple[int, neat.DefaultGenome]],
         config: neat.Config,
     ) -> None:
-        generation = int(self.population.generation)
+        generation_i = int(self.population.generation)
         if len(genomes) != self.rows * self.cols:
             raise ValueError(
                 f"Expected {self.rows * self.cols} genomes, received {len(genomes)}."
@@ -683,7 +710,7 @@ class AgentRunner:
         self._zero_color_weights(genome for _, genome in genomes)
 
         if self.render_genome_diagrams:
-            diagram_paths = save_neat_genome_diagrams(genomes, config, self.population_dir, generation)
+            diagram_paths = save_neat_genome_diagrams(genomes, config, self.population_dir, generation_i)
             if diagram_paths:
                 diagram_dir = diagram_paths[0].parent
                 print(f"Genome diagrams saved to {diagram_dir}")
@@ -691,26 +718,18 @@ class AgentRunner:
                 print("Graphviz not available; skipping genome diagram export.")
                 self._diagram_warning_emitted = True
 
-        states, caches = build_generation_state(
+        gray_images, color_images = render_genome_images(
             genomes,
             config,
-            generation,
-            self.rows,
-            self.cols,
             self.thumb_size,
-            variant="both",
         )
-        color_state = states["color"]
-        gray_state = states["gray"]
-        color_cache = caches["color"]
-        gray_cache = caches["gray"]
 
-        state_path = save_neat_population(color_state, self.population_dir, generation, color_cache)
+        image_paths = self._save_generation_images(generation_i, color_images, gray_images)
 
         system_instruction = self.system_instruction
         prompt_template = self.prompt_template
         require_selection = True
-        if generation == self.generations - 1:
+        if generation_i == self.generations - 1:
             require_selection = False
             require_publish = not self._has_publication()
             if require_publish:
@@ -727,7 +746,7 @@ class AgentRunner:
                     "(Note that your parent selections from this generation will have no effect.)"
                 )
 
-        if generation == 0 and self.chat_history_turns == 0:
+        if generation_i == 0 and self.chat_history_turns == 0:
             decision = self.branching_decision or {}
             if decision.get("choice") == "branch":
                 prompt_template += (
@@ -739,7 +758,7 @@ class AgentRunner:
                 )
 
         # If it's the first generation of the first agent, let it know that the first generation is not a branching step.
-        if generation == 0 and self.agent_id.endswith("0"):
+        if generation_i == 0 and self.agent_id.endswith("0"):
             prompt_template += (
                 " You are the first agent. This is an initial random population, and you may select one or more parents for the next step of evolution. "
             )
@@ -752,22 +771,49 @@ class AgentRunner:
             while True:
                 prompt_with_settings = self._prompt_with_settings(prompt_template)
                 variant_key = "color" if self._color_enabled else "gray"
-                state_variant = color_state if variant_key == "color" else gray_state
-                selection_meta_candidate = select_parents_from_grid(
-                    state_variant,
-                    prompt_with_settings,
-                    self.query_dir,
-                    self.select_k,
-                    system_instruction,
-                    self.chat_history_turns,
-                    require_selection=require_selection,
-                    allow_color_toggle=True,
-                    current_color=self._color_enabled,
-                    view_index=view_index,
-                )
+                population_images = color_images if self._color_enabled else gray_images
+                variant_image_map = {
+                    idx: paths.color if variant_key == "color" else paths.gray
+                    for idx, paths in image_paths.items()
+                }
+                try:
+                    selection_meta_candidate = select_parents_from_grid(
+                        self.config.model,
+                        population_images,
+                        self.config.thinking_budget,
+                        generation_i,
+                        prompt_with_settings,
+                        self.query_dir,
+                        self.select_k,
+                        system_instruction,
+                        self.chat_history_turns,
+                        require_selection=require_selection,
+                        request_rationale=self.request_rationale,
+                        allow_color_toggle=True,
+                        current_color=self._color_enabled,
+                        view_index=view_index,
+                        image_path_map=variant_image_map,
+                    )
+                    fallback_invoked = False
+                except GeminiPromptBlockedError as exc:
+                    reason = exc.block_reason or "unspecified"
+                    print(
+                        f"[{self.agent_id}] Gemini blocked generation {generation_i} prompt (reason: {reason}). Using fallback selection."
+                    )
+                    selection_meta_candidate = self._fallback_selection_after_block(
+                        population_images,
+                        generation_i,
+                        exc,
+                    )
+                    fallback_invoked = True
+
                 grid_path_candidate = self._resolve_query_path(selection_meta_candidate.get("grid_path"))
                 if grid_path_candidate is not None and grid_path_candidate.exists():
                     self._update_latest_image(grid_path_candidate)
+                if fallback_invoked:
+                    selection_meta_raw = selection_meta_candidate
+                    grid_path = grid_path_candidate
+                    break
                 requested_color = self._coerce_bool(selection_meta_candidate.get("color"))
                 if requested_color is not None and requested_color != self._color_enabled:
                     self._color_enabled = requested_color
@@ -775,20 +821,18 @@ class AgentRunner:
                     view_index += 1
                     continue
                 selection_meta_raw = selection_meta_candidate
-                state = state_variant
                 grid_path = grid_path_candidate
                 break
         else:
-            state = color_state
-            grid_image = create_numbered_grid(state)
-            grid_path = self.query_dir / f"gen_{generation:03d}_view_{view_index:02d}_grid.png"
+            grid_image = create_numbered_grid(population_images, self.rows, self.cols, self.thumb_size)
+            grid_path = self.query_dir / f"gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
             grid_image.save(grid_path, format="PNG")
             self._update_latest_image(grid_path)
             selection_meta_raw = self._select_parents_baseline(
-                generation,
+                
+                generation_i,
                 genomes,
                 config,
-                state,
             )
             selection_meta_raw["grid_path"] = str(grid_path)
         selection_meta = dict(selection_meta_raw)
@@ -797,7 +841,7 @@ class AgentRunner:
             if resolved_grid_str:
                 grid_path = Path(resolved_grid_str)
             else:
-                grid_path = self.query_dir / f"gen_{generation:03d}_view_{view_index:02d}_grid.png"
+                grid_path = self.query_dir / f"gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
         selection_meta["grid_path"] = str(grid_path)
         selection_meta["color"] = self._color_enabled
         resolved_mode = self._update_mutation_mode(selection_meta.get("mutation_mode"))
@@ -813,30 +857,19 @@ class AgentRunner:
         for idx, (_, genome) in enumerate(genomes):
             genome.fitness = 1.0 if idx in selected_indices else 0.0
 
-        images_dir = self.images_dir / f"gen_{generation:03d}"
-        images_dir.mkdir(parents=True, exist_ok=True)
-        image_paths: Dict[int, ImageVariantPaths] = {}
         genome_snapshots: Dict[int, neat.DefaultGenome] = {}
         for idx, (_, genome) in enumerate(genomes):
-            color_bytes = color_cache[idx]
-            gray_bytes = gray_cache[idx]
-            color_path = images_dir / f"idx_{idx:02d}.png"
-            gray_path = images_dir / f"idx_{idx:02d}_gray.png"
-            color_path.write_bytes(color_bytes)
-            gray_path.write_bytes(gray_bytes)
-            image_paths[idx] = ImageVariantPaths(color=color_path, gray=gray_path)
             genome_snapshots[idx] = copy.deepcopy(genome)
 
         record = GenerationArtifacts(
-            state_path=state_path,
             grid_path=grid_path,
             selection_path=selection_path,
             image_paths=image_paths,
             genome_snapshots=genome_snapshots,
         )
         print(f"Saved selection grid to {selection_path}")
-        self._generation_records[generation] = record
-        self._log_generation_lineage(generation, genomes)
+        self._generation_records[generation_i] = record
+        self._log_generation_lineage(generation_i, genomes)
 
         publish_payload = None
         if self.selection_baseline == "none":
@@ -859,7 +892,7 @@ class AgentRunner:
                 favorite_reason = publish_payload.get("reason", "")
                 favorite_title = publish_payload.get("title", "")
                 favorite = {
-                    "generation": generation,
+                    "generation": generation_i,
                     "index": publish_index,
                     "reason": favorite_reason,
                     "title": favorite_title,
@@ -895,7 +928,7 @@ class AgentRunner:
 
         if (
             not publication_scheduled
-            and generation == self.generations - 1
+            and generation_i == self.generations - 1
             and not self._has_publication()
             and record.image_paths
         ):
@@ -904,7 +937,7 @@ class AgentRunner:
                 "Forced publication from selected parents." if fallback_index in selected_indices else "Forced publication at final generation."
             )
             favorite = {
-                "generation": generation,
+                "generation": generation_i,
                 "index": fallback_index,
                 "rationale": forced_rationale,
             }
@@ -934,7 +967,7 @@ class AgentRunner:
 
         selection_path = Path(selection_meta.get("selection_path") or grid_path)
         self._render_selection_with_publication(
-            state,
+            population_images,
             selected_indices,
             publish_index_for_highlight,
             selection_path,
@@ -943,7 +976,7 @@ class AgentRunner:
         record.selection_path = selection_path
 
         self._print_selection_response(
-            generation,
+            generation_i,
             selected_indices,
             selection_meta.get("rationale", ""),
             selection_meta.get("mutation_mode"),
@@ -960,8 +993,8 @@ class AgentRunner:
                 if self.favorite_archive_entry
                 else None
             )
-            self.progress_callback(generation, favorite_payload, archive_payload)
-        self._append_selection_history(generation, selection_meta)
+            self.progress_callback(generation_i, favorite_payload, archive_payload)
+        self._append_selection_history(generation_i, selection_meta)
 
     def publish_to_archive(self, favorite: Dict[str, Any]) -> Optional[ArchiveEntry]:
         generation = favorite["generation"]
@@ -1358,35 +1391,30 @@ class AgentRunner:
 
     def _render_selection_with_publication(
         self,
-        state: Dict[str, Any],
+        population_images: List[Image.Image],
         selected_indices: Sequence[int],
         publish_index: Optional[int],
         selection_path: Path,
     ) -> None:
-        image = create_numbered_grid(state, selected=selected_indices)
+        image = create_numbered_grid(population_images, rows=self.rows, cols=self.cols, thumb_size=self.thumb_size, selected=selected_indices)
         if publish_index is not None:
-            entry = next(
-                (item for item in state.get("images", []) if int(item.get("index", -1)) == publish_index),
-                None,
+            row = publish_index // self.cols
+            col = publish_index % self.cols
+            thumb = self.thumb_size
+            margin = 12
+            x0 = margin + col * (thumb + margin)
+            y0 = margin + row * (thumb + margin)
+            x1 = x0 + thumb
+            y1 = y0 + thumb
+            draw = ImageDraw.Draw(image)
+            _draw_dotted_rectangle(
+                draw,
+                (x0, y0, x1, y1),
+                color=(0, 255, 0),
+                width=4,
+                dash_length=10,
+                gap_length=6,
             )
-            if entry is not None:
-                margin = 12
-                thumb = int(state.get("thumbSize", 0))
-                col = int(entry.get("col", 0))
-                row = int(entry.get("row", 0))
-                x0 = margin + col * (thumb + margin)
-                y0 = margin + row * (thumb + margin)
-                x1 = x0 + thumb
-                y1 = y0 + thumb
-                draw = ImageDraw.Draw(image)
-                _draw_dotted_rectangle(
-                    draw,
-                    (x0, y0, x1, y1),
-                    color=(0, 255, 0),
-                    width=4,
-                    dash_length=10,
-                    gap_length=6,
-                )
         image.save(selection_path, format="PNG")
 
     def _save_archive_branch_preview(
@@ -1515,10 +1543,10 @@ class AgentRunner:
 
     def _select_parents_baseline(
         self,
+        population_images: List[Image.Image],
         generation: int,
         genomes: List[Tuple[int, neat.DefaultGenome]],
         config: neat.Config,
-        state: Dict[str, Any],
     ) -> Dict[str, Any]:
         genome_config = config.genome_config
         metrics: List[Dict[str, Any]] = []
@@ -1571,23 +1599,21 @@ class AgentRunner:
             "selection_count": selection_count,
         }
 
-        return self._write_baseline_artifacts(generation, state, metadata)
+        return self._write_baseline_artifacts(generation, population_images, metadata)
 
     def _write_baseline_artifacts(
         self,
         generation: int,
-        state: Dict[str, Any],
+        population_images: List[Image.Image],
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         self.query_dir.mkdir(parents=True, exist_ok=True)
         selected = metadata.get("selected", [])
-        grid_image = create_numbered_grid(state)
-        selection_image = create_numbered_grid(state, selected=selected)
+        selection_image = create_numbered_grid(population_images=population_images, rows=self.rows, cols=self.cols, thumb_size=self.thumb_size, selected=selected)
 
         suffix = "_view_00"
         grid_path = self.query_dir / f"gen_{generation:03d}{suffix}_grid.png"
         selection_path = self.query_dir / f"gen_{generation:03d}{suffix}_selection.png"
-        grid_image.save(grid_path, format="PNG")
         selection_image.save(selection_path, format="PNG")
 
         payload = dict(metadata)
@@ -1600,7 +1626,7 @@ class AgentRunner:
                 "chat_history_turns": self.chat_history_turns,
                 "response_text": None,
                 "view_index": 0,
-                "color": bool(state.get("variant") == "color"),
+                "color": self._color_enabled,
                 "color_toggle_only": False,
             }
         )

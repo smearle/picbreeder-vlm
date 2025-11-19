@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 import pygame
 
-from artifacts import build_generation_state, save_neat_genome_diagrams, save_neat_population
+from artifacts import render_genome_images, save_neat_genome_diagrams, save_neat_population
 from neat_components import (
     InteractiveStagnation,
     PicbreederGenome,
@@ -499,7 +499,7 @@ class HumanDrivenEvolver:
                 print(f"Grayscale renders saved to {self.gray_render_dir}")
                 self._gray_notice_emitted = True
 
-        states, caches = build_generation_state(
+        states, caches = render_genome_images(
             genomes,
             config,
             generation,

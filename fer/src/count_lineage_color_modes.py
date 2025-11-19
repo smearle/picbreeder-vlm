@@ -21,7 +21,7 @@ def parse_args():
     )
     parser.add_argument(
         "--pb-dir",
-        required=True,
+        default=Path("../spaghetti/pbrender/genomeAll"),
         type=Path,
         help="Directory containing pid subdirectories with Picbreeder archives.",
     )
@@ -76,7 +76,11 @@ def main():
     per_lineage_rows: List[str] = []
 
     for pid in tqdm(pids, desc="Scanning lineages"):
-        genomes = get_lineage_genomes(pb_dir, pid)
+        try:
+            genomes = get_lineage_genomes(pb_dir, pid)
+        except Exception as exc:
+            print(f"Warning: failed to load lineage for pid {pid}: {exc}")
+            continue
         if not genomes:
             if args.per_lineage:
                 per_lineage_rows.append(f"{pid},0,none,0,0")

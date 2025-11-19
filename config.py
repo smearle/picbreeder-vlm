@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 from hydra.conf import HelpConf, HydraConf
 from hydra.core.config_store import ConfigStore
 
-from constants import DEFAULT_AGENT_GENERATIONS, DEFAULT_CHAT_HISTORY_TURNS, REPO_ROOT, SELECTION_BASELINES
+from constants import REPO_ROOT, SELECTION_BASELINES
 from utils import _ensure_absolute
 
 
@@ -16,11 +16,14 @@ class CollaborativeConfig:
     goal: str = "familiar_objects"
     rows: int = 3  # Rows in the CPPN grid (legacy Picbreeder default)
     cols: int = 5  # Columns in the CPPN grid
-    thumb_size: int = 200  # Pixel size for rendered genome thumbnails
-    chat_history_turns: int = DEFAULT_CHAT_HISTORY_TURNS  # How many prior turns each agent sees (-1 keeps all)
+    thumb_size: int = 128  # Pixel size for rendered genome thumbnails
+    chat_history_turns: int = -1  # How many prior turns each agent sees (-1 keeps all)
+    model: str = "gemini-2.5-pro"
+    thinking_budget: int = -1
+    request_rationale: bool = True  # Request natural-language reasoning in agent selections
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
-    agent_generations: int = DEFAULT_AGENT_GENERATIONS  # Generations executed for each agent
+    agent_generations: int = 20  # Generations executed for each agent
     num_agents: int = 1_000  # How many agents run sequentially in this session
     neat_config_path: Optional[Path] = None  # Path to NEAT config file (uses default if None)
     num_proc: int = 1  # Number of parallel agent processes
@@ -34,7 +37,7 @@ class CollaborativeConfig:
     resume: bool = False  # Resume a previously interrupted experiment
     resume_agent_id: Optional[str] = None  # Specific agent identifier to resume (requires resume=true)
     test_mode: bool = False  # Shortened settings for quick validation runs
-    seed: Optional[int] = None  # Random seed for deterministic behaviour
+    seed: int = 0  # Random seed for deterministic behaviour
     render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
@@ -95,37 +98,42 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at {config_path}")
 
+    if cfg.experiment_dir is None:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_model-{cfg.model}_tb{cfg.thinking_budget}"
+        if cfg.goal != "familiar_objects":
+            experiment_name += f"_goal-{cfg.goal}"
+        experiment_name += f"_scheme-{cfg.scheme}"
+        if cfg.thumb_size != 128:
+            experiment_name += f"_ts{cfg.thumb_size}"
+        if cfg.warm_start_structure > 0:
+            experiment_name += f"_warmstart{cfg.warm_start_structure}"
+        if cfg.selection_baseline != "none":
+            experiment_name += f"_baseline-{cfg.selection_baseline}"
+        experiment_name += "_personalities" if cfg.generate_personalities else "_nopersonalities"
+        experiment_name += "_norationale" if not cfg.request_rationale else ""
+        # experiment_name += f"_{timestamp}"
+        experiment_name += f"_s{cfg.seed}"
+        relative = Path("logs_collaborative") / experiment_name
+        exp_dir = _ensure_absolute(relative, original_cwd)
+    else:
+        exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    cfg.experiment_dir = exp_dir
+
     if cfg.resume:
-        if cfg.experiment_dir is None:
-            raise ValueError("--resume requires --experiment-dir pointing to an existing directory")
         exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)
         if not exp_dir.exists():
             raise FileNotFoundError(f"Experiment directory not found at {exp_dir}")
-    else:
-        if cfg.experiment_dir is None:
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_na{cfg.num_agents}"
-            if cfg.goal != "familiar_objects":
-                experiment_name += f"_goal-{cfg.goal}"
-            experiment_name += f"_scheme-{cfg.scheme}"
-            if cfg.warm_start_structure > 0:
-                experiment_name += f"_warmstart{cfg.warm_start_structure}"
-            if cfg.selection_baseline != "none":
-                experiment_name += f"_baseline-{cfg.selection_baseline}"
-            experiment_name += "_personalities" if cfg.generate_personalities else "_nopersonalities"
-            experiment_name += f"_{timestamp}"
-            relative = Path("logs_collaborative") / experiment_name
-            exp_dir = _ensure_absolute(relative, original_cwd)
-        else:
-            exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)
-        exp_dir.mkdir(parents=True, exist_ok=True)
-    cfg.experiment_dir = exp_dir
 
-    if cfg.personality_path is None:
-        personality_path = Path("outputs") / "personalities.json"
+    if not cfg.generate_personalities:
+        cfg.personality_path = None
     else:
-        personality_path = Path(cfg.personality_path)
-    cfg.personality_path = _ensure_absolute(personality_path, original_cwd)
+        if cfg.personality_path is None:
+            personality_path = Path("outputs") / "personalities.json"
+        else:
+            personality_path = Path(cfg.personality_path)
+        cfg.personality_path = _ensure_absolute(personality_path, original_cwd)
 
     if cfg.select_k is not None:
         max_possible = cfg.rows * cfg.cols

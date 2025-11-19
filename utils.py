@@ -50,6 +50,9 @@ def _resolve_image_path(
         rebased = _rebase_submitit_path(raw_path, experiment_prefix)
         if rebased:
             candidates.append(rebased)
+        archive_suffix = relative_suffix_after_dir(raw_path)
+        if archive_suffix is not None:
+            candidates.append((archive_dir / archive_suffix).resolve())
     else:
         candidates.append((archive_dir / raw_path).resolve())
 
@@ -58,6 +61,18 @@ def _resolve_image_path(
             return candidate
 
     return None
+
+
+def relative_suffix_after_dir(path: Path, dir_name: str = "archive") -> Optional[Path]:
+    parts = path.parts
+    try:
+        idx = parts.index(dir_name)
+    except ValueError:
+        return None
+    suffix_parts = parts[idx + 1 :]
+    if not suffix_parts:
+        return None
+    return Path(*suffix_parts)
 
 
 def _resolve_source_experiment_dir(

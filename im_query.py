@@ -119,6 +119,7 @@ class ImageChatSession:
     def send(
         self,
         image_caption_pairs: Sequence[ImageCaptionInput],
+        thinking_budget: int,
         prompt: Optional[str] = "",
         history_turns: Optional[int] = 0,
         mime_type: str = "image/png",
@@ -132,7 +133,12 @@ class ImageChatSession:
 
         config = None
         if system_instruction:
-            config = types.GenerateContentConfig(system_instruction=system_instruction)
+            config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                thinking_config=types.ThinkingConfig(
+                    thinking_budget=thinking_budget
+                ),
+            )
 
         pair_list = list(image_caption_pairs or ())
         if not pair_list:
