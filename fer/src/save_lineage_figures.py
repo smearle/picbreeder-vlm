@@ -179,7 +179,8 @@ def render_lineage_figure(genomes: List[Dict], max_genomes: int, grid_cols: int,
                     )
                     tqdm.write(f"        cycle: {cycle_fmt}")
         else:
-            print("No recurrent edges detected.")
+            pass
+            # print("No recurrent edges detected.")
 
     plt.tight_layout(pad=0.3)
     return fig, take
@@ -206,7 +207,8 @@ def render_final_image(genomes: List[Dict], res: int = 200):
                 )
                 tqdm.write(f"        cycle: {cycle_fmt}")
     else:
-        print("No recurrent edges detected.")
+        pass
+        # print("No recurrent edges detected.")
     rgb = np.asarray(forward["rgb"])
     return np.clip(rgb, 0, 1)
 
@@ -261,6 +263,12 @@ def parse_args():
         default=Path("archive"),
         help="Directory for PNGs when --archive-final is set (default: ./archive).",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional cap on the number of pid folders to process (helps with smoke tests).",
+    )
     return parser.parse_args()
 
 
@@ -283,10 +291,10 @@ def main():
         if pid.is_dir() and (pid / "main.zip").exists()
     )
 
+    if args.limit is not None:
+        pids = pids[: args.limit]
     if not pids:
         raise SystemExit(f"No pid directories found in {pb_dir}")
-
-    pids = ['1125']
 
     for pid in tqdm(pids, desc="Rendering lineages"):
         try:

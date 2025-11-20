@@ -9,7 +9,10 @@ import dotenv
 
 dotenv.load_dotenv()
 api_key = os.environ.get('GEMINI_API_KEY')
-client = genai.Client(api_key=api_key)
+client = genai.Client(
+    api_key=api_key,
+    http_options={'api_version': 'v1alpha'}
+)
 
 DEFAULT_MODEL = 'gemini-2.5-pro'
 
@@ -51,13 +54,23 @@ class ImageChatSession:
             start_index = 0
         for image_caption_pairs, trailing_prompt, response_text in self._turn_history[start_index:]:
             user_parts: List[types.Part] = []
+            extra_args = {}
+            if self.model == 'gemini-3-pro-preview':
+                extra_args["media_resolution"] = {"level": "media_resolution_high"}
             for image_data, caption_text in image_caption_pairs:
                 if caption_text:
                     user_parts.append(types.Part(text=caption_text))
                 user_parts.append(
-                    types.Part.from_bytes(
-                        data=image_data,
-                        mime_type="image/png",
+                    # types.Part.from_bytes(
+                    #     data=image_data,
+                    #     mime_type="image/png",
+                    # )
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type="image/png",
+                            data=image_data,
+                        ),
+                        **extra_args,
                     )
                 )
             if trailing_prompt:
@@ -135,9 +148,9 @@ class ImageChatSession:
         if system_instruction:
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=thinking_budget
-                ),
+                # thinking_config=types.ThinkingConfig(
+                #     thinking_budget=thinking_budget
+                # ),
             )
 
         pair_list = list(image_caption_pairs or ())
@@ -166,9 +179,15 @@ class ImageChatSession:
             if caption_to_use:
                 parts.append(types.Part(text=caption_to_use))
             parts.append(
-                types.Part.from_bytes(
-                    data=image_data,
-                    mime_type=mime_type,
+                # types.Part.from_bytes(
+                #     data=image_data,
+                #     mime_type=mime_type,
+                # )
+                types.Part(
+                    inline_data=types.Blob(
+                        mime_type=mime_type,
+                        data=image_data,
+                    ),
                 )
             )
             stored_pairs.append((bytes(image_data), caption_to_use))
@@ -226,7 +245,8 @@ def query_im(image_bytes, prompt: str, mime_type="image/png", system_instruction
     contents = [
         types.Content(
             role="user",
-            parts=parts
+            parts=parts,
+            media_resolution={"level": "media_resolution_high"},
         )
     ]
     while True:
@@ -262,13 +282,23 @@ def query_images_with_captions(
         raise ValueError("At least one image must be provided.")
 
     parts: List[types.Part] = []
+    extra_args = {}
+    if model == 'gemini-3-pro-preview':
+        extra_args["media_resolution"] = {"level": "media_resolution_high"}
     for idx, (image_bytes, caption) in enumerate(zip(image_bytes_list, captions)):
         caption_text = caption or f"Image {idx + 1}:"
         parts.append(types.Part(text=caption_text))
         parts.append(
-            types.Part.from_bytes(
-                data=image_bytes,
-                mime_type=mime_type,
+            # types.Part.from_bytes(
+            #     data=image_bytes,
+            #     mime_type=mime_type,
+            # )
+            types.Part(
+                inline_data=types.Blob(
+                    mime_type=mime_type,
+                    data=image_bytes,
+                    **extra_args,
+                )
             )
         )
 
@@ -276,7 +306,7 @@ def query_images_with_captions(
         parts.append(types.Part(text=prompt))
 
     config = types.GenerateContentConfig(system_instruction=system_instruction)
-    contents = [types.Content(role="user", parts=parts)]
+    contents = [types.Content(role="user", parts=parts, **extra_args)]
 
     while True:
         try:

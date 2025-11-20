@@ -26,7 +26,9 @@ import multiprocessing
 import os
 import pickle
 import random
+import shutil
 import traceback
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -227,6 +229,11 @@ class CollaborativeMultiAgentOrchestrator:
         self.seed = seed
         self.render_genome_diagrams = render_genome_diagrams
         self.process_index = process_index
+        self.keep_query_images = bool(getattr(self.config, "keep_query_images", False))
+
+        self._parallel_total_agents: Optional[int] = None
+        self._parallel_num_workers: Optional[int] = None
+        self._parallel_unlock_limit: Optional[int] = None
 
         self.archive_manager = ArchiveManager(self.experiment_dir / ARCHIVE_DIR_NAME,
                                               goal_prompt=GOAL_PROMPTS[self.config.goal])
@@ -494,6 +501,45 @@ class CollaborativeMultiAgentOrchestrator:
         index = self._parse_agent_index(agent_id)
         return index is not None and index < self.warm_start_structure
 
+    def _initialize_parallel_unlock_limit(self, total_agents: int, num_workers: int) -> None:
+        self._parallel_total_agents = total_agents
+        self._parallel_num_workers = max(1, num_workers)
+        self._recompute_parallel_unlock_limit()
+
+    def _reset_parallel_unlock_limit(self) -> None:
+        self._parallel_total_agents = None
+        self._parallel_num_workers = None
+        self._parallel_unlock_limit = None
+
+    def _recompute_parallel_unlock_limit(self) -> None:
+        if self._parallel_total_agents is None or self._parallel_num_workers is None:
+            self._parallel_unlock_limit = None
+            return
+        max_index = self._parallel_total_agents - 1
+        if max_index < 0:
+            self._parallel_unlock_limit = None
+            return
+        prefix_complete = -1
+        agents = self._metadata.get("agents", [])
+        limit = min(len(agents), self._parallel_total_agents)
+        for idx in range(limit):
+            record = agents[idx]
+            status = record.get("status")
+            if status not in {"complete", "extinct"}:
+                break
+            prefix_complete = idx
+        allowed = prefix_complete + self._parallel_num_workers
+        if allowed > max_index:
+            allowed = max_index
+        if allowed < -1:
+            allowed = -1
+        self._parallel_unlock_limit = allowed
+
+    def _can_schedule_parallel_task(self, agent_index: int) -> bool:
+        if self._parallel_unlock_limit is None:
+            return True
+        return agent_index <= self._parallel_unlock_limit
+
     def _find_agent_record(self, agent_id: str) -> Optional[Dict[str, Any]]:
         agent_idx = self._parse_agent_index(agent_id)
         if len(self._metadata.get("agents", [])) <= agent_idx or agent_idx is None:
@@ -739,12 +785,14 @@ class CollaborativeMultiAgentOrchestrator:
         pending_tasks = self._prepare_parallel_tasks(total_agents, resume, resume_agent_id)
         if not pending_tasks:
             return
+        self._initialize_parallel_unlock_limit(total_agents, num_workers)
 
         ctx = multiprocessing.get_context("spawn")
         config_payload = _serialize_config_for_worker(self.config)
         worker_states: List[WorkerState] = []
         conn_to_worker: Dict[Connection, WorkerState] = {}
         errors: List[str] = []
+        abort_requested = False
 
         try:
             for worker_index in range(num_workers):
@@ -776,6 +824,8 @@ class CollaborativeMultiAgentOrchestrator:
                         message = conn.recv()
                     except EOFError:
                         errors.append(f"Worker {state.index} exited unexpectedly.")
+                        abort_requested = True
+                        pending_tasks.clear()
                         active_workers -= 1
                         self._cleanup_worker(state, conn_to_worker)
                         continue
@@ -786,7 +836,7 @@ class CollaborativeMultiAgentOrchestrator:
 
                     msg_type = message.get("type")
                     if msg_type == "ready":
-                        self._handle_worker_ready(state, pending_tasks)
+                        self._handle_worker_ready(state, pending_tasks, abort_requested)
                     elif msg_type == "branching_decision":
                         decision = message.get("decision")
                         agent_id = message.get("agent_id")
@@ -822,10 +872,14 @@ class CollaborativeMultiAgentOrchestrator:
                         errors.append(
                             f"Worker {state.index} failed on {agent_id or 'unknown agent'}: {error_text}"
                         )
+                        abort_requested = True
+                        pending_tasks.clear()
                         state.current_task = None
                     elif msg_type == "worker_error":
                         error_text = message.get("error") or "Unknown worker error"
                         errors.append(f"Worker {state.index} error: {error_text}")
+                        abort_requested = True
+                        pending_tasks.clear()
                         state.errored = True
                     elif msg_type == "stopped":
                         active_workers -= 1
@@ -843,12 +897,23 @@ class CollaborativeMultiAgentOrchestrator:
                 except Exception:
                     pass
                 state.process.join()
+        self._reset_parallel_unlock_limit()
 
         if errors:
             raise RuntimeError("\n".join(errors))
 
-    def _handle_worker_ready(self, state: WorkerState, pending_tasks: Deque[AgentTask]) -> None:
+    def _handle_worker_ready(
+        self,
+        state: WorkerState,
+        pending_tasks: Deque[AgentTask],
+        abort: bool = False,
+    ) -> None:
         if state.current_task is not None:
+            return
+        if abort:
+            if not state.stopping:
+                state.task_conn.send({"type": "stop"})
+                state.stopping = True
             return
         try:
             rating_targets, trigger_entry_count = self.archive_manager.prepare_auto_rating_batch(
@@ -870,13 +935,18 @@ class CollaborativeMultiAgentOrchestrator:
             state.stopping = False
             return
         if pending_tasks:
-            task = pending_tasks.popleft()
-            state.current_task = task
-            payload = {
-                "type": "run_agent",
-                "task": task.to_message(),
-            }
-            state.task_conn.send(payload)
+            next_task = pending_tasks[0]
+            if self._can_schedule_parallel_task(next_task.agent_index):
+                task = pending_tasks.popleft()
+                state.current_task = task
+                payload = {
+                    "type": "run_agent",
+                    "task": task.to_message(),
+                }
+                state.task_conn.send(payload)
+                state.stopping = False
+                return
+            state.task_conn.send({"type": "wait", "delay": 0.5})
             state.stopping = False
             return
         if not state.stopping:
@@ -1023,6 +1093,8 @@ class CollaborativeMultiAgentOrchestrator:
             extinct=extinct,
             final_generation=final_generation,
         )
+        if self._parallel_total_agents is not None and self._parallel_num_workers is not None:
+            self._recompute_parallel_unlock_limit()
 
     def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
         self._ensure_agent_number_progress(agent_id)
@@ -1182,6 +1254,16 @@ class CollaborativeMultiAgentOrchestrator:
         self._maybe_run_auto_rating_serial()
         return True
 
+    def _cleanup_agent_artifacts(self, agent_dir: Path) -> None:
+        images_dir = agent_dir / "images"
+        if images_dir.exists():
+            shutil.rmtree(images_dir, ignore_errors=True)
+        if self.keep_query_images:
+            return
+        queries_dir = agent_dir / "queries"
+        if queries_dir.exists():
+            shutil.rmtree(queries_dir, ignore_errors=True)
+
     def _finalize_agent(
         self,
         agent_id: str,
@@ -1206,6 +1288,7 @@ class CollaborativeMultiAgentOrchestrator:
         if archive_entry is not None:
             updates["archive_entry"] = archive_entry.as_dict()
         self._update_agent_record(agent_id, **updates)
+        self._cleanup_agent_artifacts(agent_dir)
 
 
 
@@ -1659,6 +1742,14 @@ def _continual_agent_worker(
                             "trigger_entry_count": trigger_entry_count,
                         }
                     )
+            elif msg_type == "wait":
+                delay_value = message.get("delay")
+                try:
+                    delay_seconds = float(delay_value) if delay_value is not None else 0.5
+                except (TypeError, ValueError):
+                    delay_seconds = 0.5
+                time.sleep(max(0.0, delay_seconds))
+                continue
             elif msg_type == "stop":
                 task_conn.send({"type": "stopped"})
                 break

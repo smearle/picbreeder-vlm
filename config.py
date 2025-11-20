@@ -21,6 +21,7 @@ class CollaborativeConfig:
     model: str = "gemini-2.5-pro"
     thinking_budget: int = -1
     request_rationale: bool = True  # Request natural-language reasoning in agent selections
+    keep_query_images: bool = False  # Preserve query images/logs for post-run inspection
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = 20  # Generations executed for each agent
