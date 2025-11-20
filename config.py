@@ -24,7 +24,7 @@ class CollaborativeConfig:
     keep_query_images: bool = False  # Preserve query images/logs for post-run inspection
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
-    agent_generations: int = 20  # Generations executed for each agent
+    agent_generations: int = 200  # Generations executed for each agent
     num_agents: int = 1_000  # How many agents run sequentially in this session
     neat_config_path: Optional[Path] = None  # Path to NEAT config file (uses default if None)
     num_proc: int = 1  # Number of parallel agent processes
@@ -32,6 +32,7 @@ class CollaborativeConfig:
     experiment_dir: Optional[Path] = None  # Output directory for logs and artefacts
     output_activations: bool = True  # Enable CPPN output activation mutations
     input_activations: bool = False
+    enable_crossover: bool = True  # Toggle Picbreeder-style crossover (CrossoverCombiner)
     selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes
     generate_personalities: bool = False  # Generate persona prompts before agent runs
     personality_path: Optional[Path] = None  # Destination for generated personality JSON

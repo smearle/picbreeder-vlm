@@ -92,8 +92,7 @@ class PicbreederReproduction(DefaultClassConfig):
                 parent2 = parents[mate_index]
                 parent2_id = parent_ids[mate_index]
 
-                child = config.genome_type(gid)
-                child.configure_crossover(parent1, parent2, config.genome_config)
+                child = self._picbreeder_crossover(config, parent1, parent2, gid)
                 child.mutate(config.genome_config)
                 for _ in range(mutation_repeats):
                     child.mutate(config.genome_config)
@@ -111,6 +110,36 @@ class PicbreederReproduction(DefaultClassConfig):
             self.ancestors[child.key] = ancestor_record
 
         return new_population
+
+    def _picbreeder_crossover(self, config, parent1, parent2, new_key):
+        child = self._clone_genome(parent2, new_key)
+
+        parent1_affinity = getattr(parent1, "get_node_affinity", None)
+        child_set_affinity = getattr(child, "set_node_affinity", None)
+
+        for key, donor_node in parent1.nodes.items():
+            recipient = child.nodes.get(key)
+            if recipient is None:
+                child.nodes[key] = donor_node.copy()
+                if parent1_affinity and child_set_affinity:
+                    try:
+                        affinity_value = parent1_affinity(key)
+                    except Exception:  # pragma: no cover - defensive
+                        affinity_value = None
+                    if affinity_value is not None:
+                        child_set_affinity(key, affinity_value)
+            else:
+                if random.random() < 0.5:
+                    recipient.activation = donor_node.activation
+
+        for key, donor_conn in parent1.connections.items():
+            recipient_conn = child.connections.get(key)
+            if recipient_conn is None:
+                child.connections[key] = donor_conn.copy()
+            else:
+                recipient_conn.weight = (recipient_conn.weight + donor_conn.weight) / 2.0
+
+        return child
 
     @staticmethod
     def _clone_genome(parent, new_key):

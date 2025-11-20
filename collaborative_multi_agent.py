@@ -2,8 +2,8 @@
 """Multi-agent collaborative Picbreeder workflow with shared archive.
 
 This script orchestrates a chain of visual-language-model (VLM) driven agents
-that collaboratively evolve CPPN image populations. The first agent runs a
-20-generation session with full conversational history. After completing its
+that collaboratively evolve CPPN image populations. Each agent can now run up to
+200 generations (turns) with full conversational history. After completing its
 run, it publishes a favourite image to a public archive. Future agents review
 that archive before starting; they may branch from any previously published
 favourites or begin from a fresh population. Each agent can optionally publish
@@ -15,7 +15,7 @@ Key behaviours:
 - Agents record numbered grids and selection overlays per generation.
 - Branching and favourite-selection prompts (and responses) are logged.
 - The archive stores PNGs, pickled genomes, and rolling checkpoints whenever a
-  new favourite is added.
+    new favourite is added.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from itertools import count
 import hydra
 from hydra.utils import get_original_cwd
 
-from agent_runner import AgentRunner
+from agent_runner import AgentRunner, AgentQuitRequested
 from config import CollaborativeConfig, _deserialize_config_for_worker, _serialize_config_for_worker, ensure_valid_config
 import personalities
 
@@ -174,6 +174,7 @@ def build_neat_config(
     cols: int,
     enable_output_activations: bool,
     enable_input_activations: bool,
+    enable_crossover: bool,
 ) -> neat.Config:
     config = neat.Config(
         PicbreederGenome,
@@ -186,6 +187,7 @@ def build_neat_config(
         config,
         enable_output_activations=enable_output_activations,
         enable_input_activations=enable_input_activations,
+        enable_crossover=enable_crossover,
     )
     config.pop_size = rows * cols
     return config
@@ -225,13 +227,18 @@ class CollaborativeMultiAgentOrchestrator:
         self.agent_generations = agent_generations
         self.warm_start_structure = warm_start_structure
         self.enable_output_activations = enable_output_activations
+        self.enable_input_activations = config.input_activations
+        self.enable_crossover = config.enable_crossover
         self.selection_baseline = selection_baseline
         self.seed = seed
         self.render_genome_diagrams = render_genome_diagrams
         self.process_index = process_index
         self.keep_query_images = bool(getattr(self.config, "keep_query_images", False))
-        self.archive_manager = ArchiveManager(self.experiment_dir / ARCHIVE_DIR_NAME,
-                                              goal_prompt=GOAL_PROMPTS[self.config.goal])
+        self.archive_manager = ArchiveManager(
+            self.experiment_dir / ARCHIVE_DIR_NAME,
+            goal_prompt=GOAL_PROMPTS[self.config.goal],
+            thumb_size=self.thumb_size,
+        )
         self.agents_dir = self.experiment_dir / "agents"
         self.agents_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_path = self.experiment_dir / "agents_metadata.json"
@@ -332,6 +339,8 @@ class CollaborativeMultiAgentOrchestrator:
             "select_k": self.select_k,
             "agent_generations": self.agent_generations,
             "enable_output_activations": self.enable_output_activations,
+            "enable_input_activations": self.enable_input_activations,
+            "enable_crossover": self.enable_crossover,
             "warm_start_structure": self.warm_start_structure,
             "selection_baseline": self.selection_baseline,
             "generate_personalities": self.config.generate_personalities,
@@ -355,6 +364,10 @@ class CollaborativeMultiAgentOrchestrator:
             missing.append(("personality_path", personality_path_str))
         if "request_rationale" not in existing:
             missing.append(("request_rationale", self.config.request_rationale))
+        if "enable_input_activations" not in existing:
+            missing.append(("enable_input_activations", self.enable_input_activations))
+        if "enable_crossover" not in existing:
+            missing.append(("enable_crossover", self.enable_crossover))
         if missing:
             def mutator(data: Dict[str, Any]) -> None:
                 details = data.setdefault("run_config", {})
@@ -538,7 +551,7 @@ class CollaborativeMultiAgentOrchestrator:
     ) -> Optional[Dict[str, Any]]:
         self._reload_metadata()
         agents = self._metadata.get("agents", [])
-        finished = {"complete", "extinct"}
+        finished = {"complete", "extinct", "stopped"}
         if resume_agent_id:
             if allowed_agent_ids is not None and resume_agent_id not in allowed_agent_ids:
                 return None
@@ -609,6 +622,8 @@ class CollaborativeMultiAgentOrchestrator:
         apply_picbreeder_config_defaults(
             population.config,
             enable_output_activations=self.enable_output_activations,
+            enable_input_activations=self.enable_input_activations,
+            enable_crossover=self.enable_crossover,
         )
         sync_population_output_activations(population, population.config.genome_config)
         _rehydrate_reproduction_state(population)
@@ -620,7 +635,8 @@ class CollaborativeMultiAgentOrchestrator:
             self.rows,
             self.cols,
             self.enable_output_activations,
-            self.config.input_activations,
+            self.enable_input_activations,
+            self.enable_crossover,
         )
 
     def _build_runner(
@@ -676,18 +692,25 @@ class CollaborativeMultiAgentOrchestrator:
         self,
         agent_id: str,
         runner: AgentRunner,
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[ArchiveEntry], bool, int]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[ArchiveEntry], bool, int, bool, Optional[str]]:
         remaining = max(0, runner.generations - runner.population.generation)
         extinct = False
+        quit_requested = False
+        quit_reason: Optional[str] = None
         if remaining > 0:
             try:
                 runner.population.run(runner.evaluate_generation, remaining)
             except CompleteExtinctionException:
                 extinct = True
-        archive_entry = runner.commit_pending_publication()
+            except AgentQuitRequested as exc:
+                quit_requested = True
+                quit_reason = str(exc) or runner.quit_reason
+        archive_entry = runner.favorite_archive_entry
         favorite = runner.favorite_decision if runner.favorite_decision else None
         final_generation = runner.population.generation
-        return favorite, archive_entry, extinct, final_generation
+        if quit_reason is None:
+            quit_reason = runner.quit_reason
+        return favorite, archive_entry, extinct, final_generation, quit_requested, quit_reason
 
     def run_agents(
         self,
@@ -721,7 +744,7 @@ class CollaborativeMultiAgentOrchestrator:
         for index in target_indices:
             agent_id = self._agent_id_from_index(index)
             record = self._find_agent_record(agent_id)
-            if record is not None and record.get("status") in {"complete", "extinct"}:
+            if record is not None and record.get("status") in {"complete", "extinct", "stopped"}:
                 continue
             if record is not None:
                 self._resume_agent(agent_id, allowed_agent_ids={agent_id})
@@ -1022,6 +1045,8 @@ class CollaborativeMultiAgentOrchestrator:
             archive_entry = None
         extinct = bool(payload.get("extinct"))
         final_generation = _safe_int(payload.get("final_generation"), default=0)
+        quit_requested = bool(payload.get("quit_requested"))
+        quit_reason = payload.get("quit_reason")
         branching_decision = None
         if payload.get("branching_decision") is not None:
             branching_decision = payload.get("branching_decision")
@@ -1039,6 +1064,8 @@ class CollaborativeMultiAgentOrchestrator:
             archive_entry,
             extinct=extinct,
             final_generation=final_generation,
+            quit_requested=quit_requested,
+            quit_reason=quit_reason,
         )
 
     def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
@@ -1096,7 +1123,7 @@ class CollaborativeMultiAgentOrchestrator:
         scheduled: Set[str] = set()
         if resume and resume_agent_id and resume_agent_id in target_ids:
             record = self._find_agent_record(resume_agent_id)
-            if record and record.get("status") not in {"complete", "extinct"}:
+            if record and record.get("status") not in {"complete", "extinct", "stopped"}:
                 pending.append(self._build_resume_agent_task(record))
                 scheduled.add(resume_agent_id)
         for index in target_indices:
@@ -1104,7 +1131,7 @@ class CollaborativeMultiAgentOrchestrator:
             if agent_id in scheduled:
                 continue
             record = self._find_agent_record(agent_id)
-            if record is not None and record.get("status") in {"complete", "extinct"}:
+            if record is not None and record.get("status") in {"complete", "extinct", "stopped"}:
                 continue
             if record is not None:
                 task = self._build_resume_agent_task(record)
@@ -1127,7 +1154,7 @@ class CollaborativeMultiAgentOrchestrator:
         runner.initialise_population(decision)
         runner.branching_decision = decision
         self._update_agent_record(agent_id, branching_decision=decision, status="in_progress", last_generation=0)
-        favorite, archive_entry, extinct, final_generation = self._execute_runner(agent_id, runner)
+        favorite, archive_entry, extinct, final_generation, quit_requested, quit_reason = self._execute_runner(agent_id, runner)
         self._finalize_agent(
             agent_id,
             agent_dir,
@@ -1136,6 +1163,8 @@ class CollaborativeMultiAgentOrchestrator:
             archive_entry,
             extinct=extinct,
             final_generation=final_generation,
+            quit_requested=quit_requested,
+            quit_reason=quit_reason,
         )
         self._maybe_run_auto_rating_serial()
 
@@ -1179,14 +1208,13 @@ class CollaborativeMultiAgentOrchestrator:
                 entry = None
             if entry is not None:
                 runner.favorite_archive_entry = entry
-                runner._current_publication_entry_id = entry.entry_id
         self._update_agent_record(
             agent_id,
             status="in_progress",
             resumed_at=datetime.now().isoformat(),
             last_generation=runner.population.generation,
         )
-        favorite, archive_entry, extinct, final_generation = self._execute_runner(agent_id, runner)
+        favorite, archive_entry, extinct, final_generation, quit_requested, quit_reason = self._execute_runner(agent_id, runner)
         self._finalize_agent(
             agent_id,
             agent_dir,
@@ -1195,6 +1223,8 @@ class CollaborativeMultiAgentOrchestrator:
             archive_entry,
             extinct=extinct,
             final_generation=final_generation,
+            quit_requested=quit_requested,
+            quit_reason=quit_reason,
         )
         self._maybe_run_auto_rating_serial()
         return True
@@ -1219,13 +1249,22 @@ class CollaborativeMultiAgentOrchestrator:
         *,
         extinct: bool,
         final_generation: int,
+        quit_requested: bool = False,
+        quit_reason: Optional[str] = None,
     ) -> None:
+        if quit_requested:
+            status = "stopped"
+        else:
+            status = "extinct" if extinct else "complete"
         updates: Dict[str, Any] = {
             "extinct": extinct,
-            "status": "extinct" if extinct else "complete",
+            "status": status,
             "completed_at": datetime.now().isoformat(),
             "last_generation": final_generation,
+            "quit_requested": quit_requested,
         }
+        if quit_reason:
+            updates["quit_reason"] = quit_reason
         if branching_decision is not None:
             updates["branching_decision"] = branching_decision
         if favourite is not None:
@@ -1374,6 +1413,7 @@ def _load_population_for_worker(
     agent_dir: Path,
     enable_output_activations: bool,
     enable_input_activations: bool,
+    enable_crossover: bool,
 ) -> Tuple[Optional[neat.Population], Optional[Path]]:
     population_dir = agent_dir / "populations"
     if not population_dir.exists():
@@ -1386,6 +1426,7 @@ def _load_population_for_worker(
         population.config,
         enable_output_activations=enable_output_activations,
         enable_input_activations=enable_input_activations,
+        enable_crossover=enable_crossover,
     )
     sync_population_output_activations(population, population.config.genome_config)
     _rehydrate_reproduction_state(population)
@@ -1395,18 +1436,25 @@ def _load_population_for_worker(
 def _execute_runner_in_worker(
     agent_id: str,
     runner: AgentRunner,
-) -> Tuple[Optional[Dict[str, Any]], Optional[ArchiveEntry], bool, int]:
+) -> Tuple[Optional[Dict[str, Any]], Optional[ArchiveEntry], bool, int, bool, Optional[str]]:
     remaining = max(0, runner.generations - runner.population.generation)
     extinct = False
+    quit_requested = False
+    quit_reason: Optional[str] = None
     if remaining > 0:
         try:
             runner.population.run(runner.evaluate_generation, remaining)
         except CompleteExtinctionException:
             extinct = True
-    archive_entry = runner.commit_pending_publication()
+        except AgentQuitRequested as exc:
+            quit_requested = True
+            quit_reason = str(exc) or runner.quit_reason
+    archive_entry = runner.favorite_archive_entry
     favorite = runner.favorite_decision if runner.favorite_decision else None
     final_generation = runner.population.generation
-    return favorite, archive_entry, extinct, final_generation
+    if quit_reason is None:
+        quit_reason = runner.quit_reason
+    return favorite, archive_entry, extinct, final_generation, quit_requested, quit_reason
 
 
 def _perform_rating(
@@ -1491,6 +1539,7 @@ def _execute_agent_task(
             agent_dir,
             enable_output_activations=cfg.output_activations,
             enable_input_activations=cfg.input_activations,
+            enable_crossover=cfg.enable_crossover,
         )
         if population is not None:
             config = population.config
@@ -1501,6 +1550,7 @@ def _execute_agent_task(
                 cfg.cols,
                 cfg.output_activations,
                 cfg.input_activations,
+                cfg.enable_crossover,
             )
     else:
         config = build_neat_config(
@@ -1509,6 +1559,7 @@ def _execute_agent_task(
             cfg.cols,
             cfg.output_activations,
             cfg.input_activations,
+            cfg.enable_crossover,
         )
 
     def progress_callback(
@@ -1575,7 +1626,6 @@ def _execute_agent_task(
                 favourite_entry = None
             if favourite_entry is not None:
                 runner.favorite_archive_entry = favourite_entry
-                runner._current_publication_entry_id = favourite_entry.entry_id
     else:
         decision = runner.select_starting_point()
         runner.initialise_population(decision)
@@ -1588,7 +1638,7 @@ def _execute_agent_task(
             }
         )
 
-    favorite, archive_entry, extinct, final_generation = _execute_runner_in_worker(
+    favorite, archive_entry, extinct, final_generation, quit_requested, quit_reason = _execute_runner_in_worker(
         task.agent_id,
         runner,
     )
@@ -1603,6 +1653,8 @@ def _execute_agent_task(
         "extinct": extinct,
         "final_generation": final_generation,
         "branching_decision": runner.branching_decision,
+        "quit_requested": quit_requested,
+        "quit_reason": quit_reason,
     }
 
 

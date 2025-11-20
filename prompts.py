@@ -29,8 +29,8 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "At each subsequent generation, you will be shown a set of numbered images produced by CPPNs. "
     "{selection_prompt}"
     "If so inclined, you may also select an image to publish to the online archive. "
-    "You must publish at least once during your session. Publishing multiple times is allowed, though the most recent publication overwrites any previous ones. "
-    "Your session will run for {n_generations} generations. "
+    "You don't need to publish if you don't want to. Publishing multiple times is allowed and every publication is preserved. "
+    "Your session can last up to {n_generations} generations, but you may end early whenever you feel finished. "
     "Try to contribute something novel, interesting or useful to the online archive. "
     "Do not add something to the archive that is identical to an existing image. "
     "Respond with JSON only: {{\"selected\": [indices]{selection_json_suffix}}}. "
@@ -38,6 +38,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     " set \"selected\" to null to start from a fresh population.) "
     "You may also include a \"publish\" field in the JSON response if you wish to publish an image from the current population. It should have the form: "
     '{{\"index\": image_index, \"title\": \"Image Title\"{publish_reason_suffix}}}. '
+    "When you wish to stop generating new populations, add \"quit\": true to your JSON (optionally include \"quit_reason\" for context). "
     # f"{DEBUG_PROMPT}"
     "{color_prompt}"
     "{mutation_mode_prompt}"
@@ -56,12 +57,13 @@ MUTATION_STRENGTH_PROMPT = (
     "(\"Big Changes\" – very strong mutations). If you omit the field, the slider remains at its previous value."
 )
 
-def gen_selection_prompt(select_k: Optional[int]) -> str:
+def gen_selection_prompt(select_k: Optional[int], enable_crossover: bool) -> str:
+    crossover_mutation_note = "(using both mutation and crossover)." if enable_crossover else "(using mutation only; no crossover). "
     if select_k is None:
-        return "Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation (using mutation only; no crossover). "
+        return f"Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation {crossover_mutation_note}"
     if select_k == 1:
-        return "Pick one image by its numeric label--the corresponding CPPN will be used as the parent of the next generation. "
-    return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. (using mutation only; no crossover). "
+        return f"Pick one image by its numeric label--the corresponding CPPN will be used as the parent of the next generation. "
+    return f"Pick up to {select_k} images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation. {crossover_mutation_note}"
 
 
 PARENT_SELECTION_PROMPT = "Above is the grid at generation {generation}."

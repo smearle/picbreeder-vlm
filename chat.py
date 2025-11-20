@@ -232,6 +232,8 @@ def select_parents_from_grid(
     raw_selected: Union[List[Any], None] = None
     cleaned: List[int] = []
     color_value: Optional[bool] = None
+    quit_requested: bool = False
+    quit_reason_value: Optional[str] = None
 
     def _coerce_bool(value: Any) -> Optional[bool]:
         if isinstance(value, bool):
@@ -305,6 +307,18 @@ def select_parents_from_grid(
                     or bool(color_value) != bool(current_color)
                 )
             )
+            quit_requested_candidate = bool(
+                _coerce_bool(
+                    parsed.get("quit")
+                    or parsed.get("terminate")
+                    or parsed.get("stop")
+                )
+            )
+            quit_reason_candidate = (
+                parsed.get("quit_reason")
+                or parsed.get("quit_rationale")
+                or parsed.get("quit_message")
+            )
             if color_toggle_requested:
                 cleaned = []
             if (
@@ -312,9 +326,13 @@ def select_parents_from_grid(
                 and require_selection
                 and not cleaned
                 and not color_toggle_requested
+                and not quit_requested_candidate
             ):
                 error_reason = "Response did not contain any valid selection indices."
             color_toggle_only = error_reason is None and color_toggle_requested
+            if error_reason is None:
+                quit_requested = quit_requested_candidate
+                quit_reason_value = quit_reason_candidate
         if error_reason is None and not response_text.strip():
             if block_reason:
                 error_reason = f"Gemini blocked the prompt ({block_reason})."
@@ -437,6 +455,8 @@ def select_parents_from_grid(
         "color_toggle_only": color_toggle_only,
         "response_attempts": attempt,
         "response_latencies_sec": attempt_latencies,
+        "quit": quit_requested,
+        "quit_reason": (str(quit_reason_value).strip() if quit_reason_value else None),
     }
 
     return metadata

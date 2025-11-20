@@ -58,6 +58,7 @@ def apply_picbreeder_config_defaults(
     config: neat.Config,
     enable_output_activations: bool = False,
     enable_input_activations: bool = False,
+    enable_crossover: bool = False,
 ) -> None:
     """Match NEAT settings to the defaults used by CPPNArtEvolution."""
 
@@ -158,10 +159,16 @@ def apply_picbreeder_config_defaults(
     config.picbreeder_weight_power_max = genome_config.picbreeder_weight_power_max
 
     reproduction_config = config.reproduction_config
-    if hasattr(reproduction_config, "mating"):
-        reproduction_config.mating = False
+    default_rate = None
     if hasattr(reproduction_config, "crossover_rate"):
-        reproduction_config.crossover_rate = 0.0
+        default_rate = getattr(reproduction_config, "picbreeder_default_crossover_rate", None)
+        if default_rate is None:
+            default_rate = getattr(reproduction_config, "crossover_rate", 0.0)
+            setattr(reproduction_config, "picbreeder_default_crossover_rate", default_rate)
+    if hasattr(reproduction_config, "mating"):
+        reproduction_config.mating = bool(enable_crossover)
+    if default_rate is not None:
+        reproduction_config.crossover_rate = default_rate if enable_crossover else 0.0
     if hasattr(reproduction_config, "mutation_repeats"):
         reproduction_config.mutation_repeats = 0
 

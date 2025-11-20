@@ -35,6 +35,10 @@ BRANCH_BEST_NEW_WINDOW_MULTIPLIER = 10
 BRANCH_NEWEST_LIMIT = 25
 
 
+class AgentQuitRequested(RuntimeError):
+    """Raised when the VLM explicitly stops the current evolutionary run."""
+
+
 @dataclass
 class ImageVariantPaths:
     color: Path
@@ -176,7 +180,7 @@ class AgentRunner:
         publish_reason_suffix = ', "reason": "Brief publication note."' if self.request_rationale else ""
         instruction_body = DEFAULT_SYSTEM_INSTRUCTION.format(
             goal_prompt=GOAL_PROMPTS[self.config.goal],
-            selection_prompt=gen_selection_prompt(self.select_k),
+            selection_prompt=gen_selection_prompt(self.select_k, self.config.enable_crossover),
             n_generations=self.generations,
             color_prompt=color_prompt,
             archive_novelty_prompt=archive_novelty_prompt,
@@ -209,23 +213,23 @@ class AgentRunner:
         self.branching_decision: Dict[str, Any] = {}
         self.favorite_decision: Dict[str, Any] = {}
         self.favorite_archive_entry: Optional[ArchiveEntry] = None
-        self._pending_publication_request: Optional[Dict[str, Any]] = None
         self._generation_records: Dict[int, GenerationArtifacts] = {}
         self._selection_history_path = self.logs_dir / "selection_history.jsonl"
         self._selection_history_path.touch(exist_ok=True)
         self.publication_history_path = self.logs_dir / "publication_history.jsonl"
         self.publication_history_path.touch(exist_ok=True)
-        self._current_publication_entry_id: Optional[str] = None
         self._lineage_log_path = self.logs_dir / "lineage.jsonl"
         self._lineage_log_path.touch(exist_ok=True)
-        self._pending_publication_path = self.logs_dir / "pending_publication.json"
-        self._load_pending_publication()
         self._archive_seed_map: Dict[int, Dict[str, Any]] = {}
         self._genome_lineage: Dict[int, Dict[str, Any]] = {}
         self.render_genome_diagrams = render_genome_diagrams
         self._diagram_warning_emitted = False
+        self._quit_requested = False
+        self._quit_reason: Optional[str] = None
+        self._quit_generation: Optional[int] = None
         if self.resume_mode:
             self._load_existing_publication_state()
+            self._restore_selection_settings()
 
     def _update_latest_image(self, source_path: Path) -> None:
         for target in self.latest_img_paths:
@@ -256,21 +260,6 @@ class AgentRunner:
             image_paths[idx] = ImageVariantPaths(color=color_path, gray=gray_path)
         return image_paths
 
-    def _load_pending_publication(self) -> None:
-        if not self._pending_publication_path.exists():
-            return
-        try:
-            payload = json.loads(self._pending_publication_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return
-        if not isinstance(payload, dict):
-            return
-        favorite = payload.get("favorite")
-        if not isinstance(favorite, dict):
-            return
-        self._pending_publication_request = payload
-        self.favorite_decision = favorite
-
     def _validate_branch_indices(
         self,
         selected_indices: Sequence[int],
@@ -288,7 +277,7 @@ class AgentRunner:
         return valid, invalid
 
     def _has_publication(self) -> bool:
-        return bool(self.favorite_archive_entry or self._pending_publication_request)
+        return self.favorite_archive_entry is not None
 
     def _normalize_mutation_mode(self, mode: Optional[str]) -> str:
         candidate = str(mode).lower() if mode is not None else ""
@@ -524,11 +513,6 @@ class AgentRunner:
             )
             running_index += count
 
-        archive_grid: Optional[Path] = None
-        archive_grid = self.archive_manager.create_archive_grid(
-            self.thumb_size,
-        )
-
         elite_name_list = self.archive_manager.get_elite_names()
         if not archive_entries:
             rationale = "Archive empty; defaulting to fresh population."
@@ -614,7 +598,6 @@ class AgentRunner:
                 "rationale": rationale,
                 "raw_response": response_text,
                 "timestamp": datetime.now().isoformat(),
-                "archive_grid_path": str(archive_grid) if archive_grid else None,
                 "archive_elite_names": elite_name_list,
                 "archive_display_order": list(display_order),
                 "input_parts": input_parts_metadata,
@@ -874,6 +857,14 @@ class AgentRunner:
                 grid_path = self.query_dir / f"gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
         selection_meta["grid_path"] = str(grid_path)
         selection_meta["color"] = self._color_enabled
+        quit_requested = bool(selection_meta.get("quit"))
+        quit_reason = selection_meta.get("quit_reason")
+        if quit_requested:
+            reason_text = str(quit_reason).strip() if quit_reason else ""
+            if not self._quit_requested:
+                self._quit_reason = reason_text or None
+                self._quit_generation = generation_i
+            self._quit_requested = True
         resolved_mode = self._update_mutation_mode(selection_meta.get("mutation_mode"))
         selection_meta["mutation_mode"] = resolved_mode
         resolved_strength = self._update_mutation_strength(selection_meta.get("mutation_strength"))
@@ -915,7 +906,6 @@ class AgentRunner:
 
         publication_scheduled = False
         publish_index_for_highlight: Optional[int] = None
-        previous_entry_id = self._current_publication_entry_id
         if publish_payload is not None:
             publish_index = publish_payload.get("index")
             if publish_index in record.image_paths:
@@ -938,7 +928,6 @@ class AgentRunner:
                     forced=False,
                     response_text=selection_meta.get("response_text"),
                     source="vlm",
-                    replaced_entry_id=previous_entry_id,
                 )
                 publication_scheduled = scheduled
                 selection_meta["publish"] = {
@@ -982,7 +971,6 @@ class AgentRunner:
                 forced=True,
                 response_text=selection_meta.get("response_text"),
                 source="forced",
-                replaced_entry_id=previous_entry_id,
             )
             if scheduled:
                 selection_meta["forced_publish"] = {
@@ -1025,6 +1013,10 @@ class AgentRunner:
             )
             self.progress_callback(generation_i, favorite_payload, archive_payload)
         self._append_selection_history(generation_i, selection_meta)
+        if quit_requested:
+            message = self._quit_reason or "Agent requested to end the session."
+            print(f"[{self.agent_id}] Quit requested at generation {generation_i}: {message}")
+            raise AgentQuitRequested(message)
 
     def publish_to_archive(self, favorite: Dict[str, Any]) -> Optional[ArchiveEntry]:
         generation = favorite["generation"]
@@ -1280,7 +1272,42 @@ class AgentRunner:
             entry = self.archive_manager.get_entry(entry_id)
             if entry is not None:
                 self.favorite_archive_entry = entry
-                self._current_publication_entry_id = entry.entry_id
+
+    def _restore_selection_settings(self) -> None:
+        if not self.resume_mode:
+            return
+        if not self._selection_history_path.exists():
+            return
+        last_entry: Optional[Dict[str, Any]] = None
+        with self._selection_history_path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                last_entry = payload
+        if not last_entry:
+            return
+
+        color_value = last_entry.get("color")
+        color_bool = self._coerce_bool(color_value)
+        if color_bool is not None:
+            self._color_enabled = color_bool
+
+        mutation_mode_value = last_entry.get("mutation_mode")
+        if mutation_mode_value is not None:
+            self._update_mutation_mode(mutation_mode_value)
+
+        mutation_strength_value = last_entry.get("mutation_strength")
+        if mutation_strength_value is not None:
+            self._update_mutation_strength(mutation_strength_value)
+
+        print(
+            f"[{self.agent_id}] Restored color/mutation settings from selection history."
+        )
 
     def _apply_publication(
         self,
@@ -1289,7 +1316,6 @@ class AgentRunner:
         forced: bool,
         response_text: Optional[str],
         source: str,
-        replaced_entry_id: Optional[str],
     ) -> bool:
         generation_raw = favorite.get("generation")
         index_raw = favorite.get("index")
@@ -1315,8 +1341,6 @@ class AgentRunner:
         payload["color_enabled"] = bool(self._color_enabled)
         if response_text is not None:
             payload["response_text"] = response_text
-        if replaced_entry_id is not None:
-            payload["replaced_entry_id"] = replaced_entry_id
 
         genome_snapshot = record.genome_snapshots.get(index_int) if record else None
         reproduction = getattr(self.population, "reproduction", None)
@@ -1349,63 +1373,36 @@ class AgentRunner:
         payload["ancestor_genome_keys"] = ancestor_keys
 
         self._write_favorite_log(payload)
-
-        pending_request = {
-            "favorite": payload,
-            "forced": forced,
-            "response_text": response_text,
-            "source": source,
-            "replaced_entry_id": replaced_entry_id,
-        }
-        self._pending_publication_request = pending_request
-        try:
-            self._pending_publication_path.write_text(
-                json.dumps(pending_request, indent=2),
-                encoding="utf-8",
+        entry = self.publish_to_archive(payload)
+        if entry is None:
+            print(
+                f"[{self.agent_id}] Publication failed: generation={generation_int}, index={index_int}, title='{title}', forced={payload.get('forced')}" 
             )
-        except OSError:
-            pass
+            return False
+
+        payload["archive_entry_id"] = entry.entry_id
+        genome_key_committed = payload.get("genome_key")
+        if genome_key_committed is not None:
+            self._archive_seed_map[genome_key_committed] = {
+                "entry_id": entry.entry_id,
+                "agent_id": self.agent_id,
+                "generation": payload.get("generation"),
+            }
+        self._append_publication_history(payload)
+        self.favorite_archive_entry = entry
         self.favorite_decision = payload
         print(
-            f"[{self.agent_id}] Queued publication for generation={generation_int}, index={index_int}, title='{title}', forced={payload.get('forced')}."
+            f"[{self.agent_id}] Publication committed: generation={generation_int}, index={index_int}, title='{title}', forced={payload.get('forced')}" 
         )
         return True
 
-    def commit_pending_publication(self) -> Optional[ArchiveEntry]:
-        if not self._pending_publication_request:
-            return self.favorite_archive_entry
-        pending = self._pending_publication_request
-        favorite = pending.get("favorite", {})
-        if not isinstance(favorite, dict):
-            return self.favorite_archive_entry
-        replaced_entry_id = pending.get("replaced_entry_id")
-        entry = self.publish_to_archive(favorite)
-        if entry is None:
-            print(f"[{self.agent_id}] Pending publication failed; entry could not be created.")
-            return self.favorite_archive_entry
-        favorite["archive_entry_id"] = entry.entry_id
-        genome_key = favorite.get("genome_key")
-        if genome_key is not None:
-            self._archive_seed_map[genome_key] = {
-                "entry_id": entry.entry_id,
-                "agent_id": self.agent_id,
-                "generation": favorite.get("generation"),
-            }
-        self._append_publication_history(favorite)
-        if replaced_entry_id:
-            self.archive_manager.remove_entry(replaced_entry_id)
-        self.favorite_archive_entry = entry
-        self.favorite_decision = favorite
-        self._current_publication_entry_id = entry.entry_id
-        self._pending_publication_request = None
-        try:
-            self._pending_publication_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        print(
-            f"[{self.agent_id}] Publication committed: generation={favorite.get('generation')}, index={favorite.get('index')}, title='{favorite.get('title', '')}', forced={favorite.get('forced')}."
-        )
-        return entry
+    @property
+    def quit_reason(self) -> Optional[str]:
+        return self._quit_reason
+
+    @property
+    def quit_generation(self) -> Optional[int]:
+        return self._quit_generation
 
     def _choose_forced_publication_index(
         self,

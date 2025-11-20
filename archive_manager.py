@@ -160,9 +160,10 @@ class ArchiveEntry:
 class ArchiveManager:
     """Manages the shared archive of published favourites."""
 
-    def __init__(self, archive_dir: Path, goal_prompt: str) -> None:
+    def __init__(self, archive_dir: Path, goal_prompt: str, thumb_size: int) -> None:
         self.archive_dir = archive_dir
         self.goal_prompt = goal_prompt
+        self.thumb_size = thumb_size
         self.metadata_file = archive_dir / "archive_metadata.json"
         self.images_dir = archive_dir / "images"
         self.genomes_dir = archive_dir / "genomes"
@@ -573,6 +574,7 @@ class ArchiveManager:
         entries_list.append(archive_entry.as_dict())
 
         self._persist()
+        self.create_archive_grid(self.thumb_size)
         # self._write_checkpoint(archive_entry)
 
         return archive_entry
