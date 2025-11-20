@@ -219,14 +219,30 @@ class ArchiveManager:
         self,
         top_count: int,
         random_count: int,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Return top-rated and random archive subsets for branching."""
+        *,
+        best_new_count: int = 25,
+        best_new_window_multiplier: int = 10,
+        newest_count: Optional[int] = None,
+    ) -> Tuple[
+        List[Dict[str, Any]],
+        List[Dict[str, Any]],
+        List[Dict[str, Any]],
+        List[Dict[str, Any]],
+    ]:
+        """Return top-rated, best-new, newest, and random subsets for branching."""
         self.refresh()
         entries = list(self._metadata.get("entries", []))
         if not entries:
-            return [], []
+            return [], [], [], []
 
-        decorated: List[Tuple[float, int, int, Dict[str, Any]]] = []
+        newest_limit = best_new_count if newest_count is None else newest_count
+        top_limit = max(0, int(top_count))
+        random_limit = max(0, int(random_count))
+        best_new_limit = max(0, int(best_new_count))
+        newest_limit = max(0, int(newest_limit))
+        window_multiplier = max(1, int(best_new_window_multiplier))
+
+        entry_infos: List[Dict[str, Any]] = []
         for idx, entry in enumerate(entries):
             image_path = Path(entry.get("image_path", ""))
             if not image_path.exists():
@@ -246,52 +262,93 @@ class ArchiveManager:
             else:
                 average_rating = float("-inf")
                 rating_count = 0
-            decorated.append((average_rating, rating_count, idx, entry))
 
-        if not decorated:
-            return [], []
+            added_at_raw = entry.get("added_at")
+            if isinstance(added_at_raw, str):
+                try:
+                    added_at = datetime.fromisoformat(added_at_raw)
+                except ValueError:
+                    added_at = datetime.min
+            else:
+                added_at = datetime.min
 
-        decorated.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
+            entry_id_raw = entry.get("id")
+            entry_key = str(entry_id_raw) if entry_id_raw not in (None, "") else f"__idx_{idx}"
 
-        top_subset: List[Dict[str, Any]] = []
-        for average_rating, rating_count, idx, entry in decorated:
-            if len(top_subset) >= max(0, top_count):
-                break
-            payload = copy.deepcopy(entry)
-            payload["_archive_index"] = idx
-            payload["_average_rating"] = average_rating if math.isfinite(average_rating) else None
-            payload["_rating_count"] = rating_count
-            top_subset.append(payload)
+            entry_infos.append(
+                {
+                    "entry": entry,
+                    "idx": idx,
+                    "avg": average_rating,
+                    "count": rating_count,
+                    "added_at": added_at,
+                    "key": entry_key,
+                }
+            )
 
-        selected_ids = {item.get("id") for item in top_subset if item.get("id")}
-        eligible_random: List[Tuple[float, int, int, Dict[str, Any]]] = []
-        for average_rating, rating_count, idx, entry in decorated:
-            entry_id = entry.get("id")
-            if entry_id in selected_ids:
-                continue
-            eligible_random.append((average_rating, rating_count, idx, entry))
+        if not entry_infos:
+            return [], [], [], []
 
-        if eligible_random:
-            random_pool = [item[3] for item in eligible_random]
-        else:
-            random_pool = []
+        def _decorate(info: Dict[str, Any]) -> Dict[str, Any]:
+            payload = copy.deepcopy(info["entry"])
+            payload["_archive_index"] = info["idx"]
+            payload["_average_rating"] = info["avg"] if math.isfinite(info["avg"]) else None
+            payload["_rating_count"] = info["count"]
+            payload["_added_at"] = info["added_at"].isoformat()
+            return payload
 
-        if random_count <= 0 or not random_pool:
-            random_subset: List[Dict[str, Any]] = []
-        else:
-            sample_size = min(random_count, len(random_pool))
-            sampled_entries = random.sample(random_pool, sample_size)
-            random_subset = []
-            id_to_meta = {entry.get("id"): (avg, cnt, idx) for avg, cnt, idx, entry in eligible_random}
-            for entry in sampled_entries:
-                avg, cnt, idx = id_to_meta.get(entry.get("id"), (float("nan"), 0, -1))
-                payload = copy.deepcopy(entry)
-                payload["_archive_index"] = idx
-                payload["_average_rating"] = avg if math.isfinite(avg) else None
-                payload["_rating_count"] = cnt
-                random_subset.append(payload)
+        used_keys: Set[str] = set()
 
-        return top_subset, random_subset
+        def _remaining_infos() -> List[Dict[str, Any]]:
+            return [info for info in entry_infos if info["key"] not in used_keys]
+
+        # Top rated subset
+        decorated = list(entry_infos)
+        random.shuffle(decorated)
+        decorated.sort(key=lambda info: (info["avg"], info["count"]), reverse=True)
+        top_infos = decorated[:top_limit]
+        used_keys.update(info["key"] for info in top_infos)
+
+        # Best new subset: highest-rated within most recent window of remaining entries
+        best_new_infos: List[Dict[str, Any]] = []
+        if best_new_limit > 0:
+            remaining_infos = _remaining_infos()
+            if remaining_infos:
+                window_size = min(len(remaining_infos), best_new_limit * window_multiplier)
+                recent_pool = list(remaining_infos)
+                random.shuffle(recent_pool)
+                recent_pool.sort(key=lambda info: info["added_at"], reverse=True)
+                window = recent_pool[:window_size]
+                random.shuffle(window)
+                window.sort(key=lambda info: (info["avg"], info["count"]), reverse=True)
+                best_new_infos = window[:best_new_limit]
+                used_keys.update(info["key"] for info in best_new_infos)
+
+        # Newest subset: newest remaining entries regardless of rating
+        newest_infos: List[Dict[str, Any]] = []
+        if newest_limit > 0:
+            remaining_infos = _remaining_infos()
+            if remaining_infos:
+                newest_pool = list(remaining_infos)
+                random.shuffle(newest_pool)
+                newest_pool.sort(key=lambda info: info["added_at"], reverse=True)
+                newest_infos = newest_pool[:newest_limit]
+                used_keys.update(info["key"] for info in newest_infos)
+
+        # Random subset: draw randomly from the remainder
+        random_infos: List[Dict[str, Any]] = []
+        if random_limit > 0:
+            remaining_infos = _remaining_infos()
+            if remaining_infos:
+                sample_size = min(random_limit, len(remaining_infos))
+                random_infos = random.sample(remaining_infos, sample_size)
+
+        top_subset = [_decorate(info) for info in top_infos]
+        best_new_subset = [_decorate(info) for info in best_new_infos]
+        newest_subset = [_decorate(info) for info in newest_infos]
+        random_subset = [_decorate(info) for info in random_infos]
+
+        return top_subset, best_new_subset, newest_subset, random_subset
 
     def prepare_rating_batch(self, limit: int) -> List[Dict[str, str]]:
         if limit <= 0:

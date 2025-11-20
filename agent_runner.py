@@ -15,7 +15,7 @@ from typing import Optional, Callable, Dict, Any, List, Sequence, Set, Tuple, It
 import PIL
 import graphviz
 import neat
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from archive_manager import ARCHIVE_GRID_MARGIN, ArchiveEntry, ArchiveManager
 from artifacts import render_genome_images, save_neat_genome_diagrams
@@ -25,11 +25,14 @@ from constants import DEFAULT_BASELINE_SELECTION_LIMIT
 from neat_components import CHECKPOINT_SUFFIX, GenerationCheckpointer, seed_initial_population, sync_population_node_indexer, sync_population_output_activations
 from prompts import ARCHIVE_BRANCHING_PROMPT, ARCHIVE_NOVELTY_PROMPT, COLOR_PROMPT, GOAL_PROMPTS, MUTATION_STRENGTH_PROMPT, PARENT_SELECTION_PROMPT, DEFAULT_SYSTEM_INSTRUCTION, gen_selection_prompt
 from rendering import _draw_dotted_rectangle, create_numbered_grid
-from utils import _ensure_int_list
+from utils import _ensure_int_list, relative_suffix_after_dir
 
 
-BRANCH_TOP_RATED_LIMIT = 50
-BRANCH_RANDOM_LIMIT = 50
+BRANCH_TOP_RATED_LIMIT = 25
+BRANCH_RANDOM_LIMIT = 25
+BRANCH_BEST_NEW_LIMIT = 25
+BRANCH_BEST_NEW_WINDOW_MULTIPLIER = 10
+BRANCH_NEWEST_LIMIT = 25
 
 
 @dataclass
@@ -475,21 +478,51 @@ class AgentRunner:
     # Population initialisation and branching
     # ------------------------------------------------------------------
     def select_starting_point(self) -> Dict[str, Any]:
-        top_entries_raw, random_entries_raw = self.archive_manager.sample_branching_entries(
+        (
+            top_entries_raw,
+            best_new_entries_raw,
+            newest_entries_raw,
+            random_entries_raw,
+        ) = self.archive_manager.sample_branching_entries(
             BRANCH_TOP_RATED_LIMIT,
             BRANCH_RANDOM_LIMIT,
+            best_new_count=BRANCH_BEST_NEW_LIMIT,
+            best_new_window_multiplier=BRANCH_BEST_NEW_WINDOW_MULTIPLIER,
+            newest_count=BRANCH_NEWEST_LIMIT,
         )
+
+        subset_specs: List[Tuple[str, str, List[Dict[str, Any]]]] = [
+            ("top_rated", "Top Rated", top_entries_raw),
+            ("best_new", "Best New Images", best_new_entries_raw),
+            ("newest", "Newest", newest_entries_raw),
+            ("random", "Random", random_entries_raw),
+        ]
+
         archive_entries: List[Dict[str, Any]] = []
-        for entry in top_entries_raw:
-            entry_copy = copy.deepcopy(entry)
-            entry_copy["branching_subset"] = "top_rated"
-            entry_copy["branching_subset_label"] = "Top Rated"
-            archive_entries.append(entry_copy)
-        for entry in random_entries_raw:
-            entry_copy = copy.deepcopy(entry)
-            entry_copy["branching_subset"] = "random"
-            entry_copy["branching_subset_label"] = "Random"
-            archive_entries.append(entry_copy)
+        subset_ranges: List[Dict[str, Any]] = []
+        subset_counts: Dict[str, int] = {}
+        running_index = 0
+        for subset_key, subset_label, subset_entries in subset_specs:
+            count = len(subset_entries)
+            subset_counts[subset_key] = count
+            if not count:
+                continue
+            start = running_index
+            for entry in subset_entries:
+                entry_copy = copy.deepcopy(entry)
+                entry_copy["branching_subset"] = subset_key
+                entry_copy["branching_subset_label"] = subset_label
+                archive_entries.append(entry_copy)
+            end = running_index + count - 1
+            subset_ranges.append(
+                {
+                    "key": subset_key,
+                    "label": subset_label,
+                    "start": start,
+                    "end": end,
+                }
+            )
+            running_index += count
 
         archive_grid: Optional[Path] = None
         archive_grid = self.archive_manager.create_archive_grid(
@@ -508,6 +541,7 @@ class AgentRunner:
                 "raw_response": None,
                 "timestamp": datetime.now().isoformat(),
                 "archive_elite_names": elite_name_list,
+                "archive_subset_counts": subset_counts,
             }
 
         elif self.selection_baseline != "none":
@@ -521,6 +555,7 @@ class AgentRunner:
                 "raw_response": None,
                 "timestamp": datetime.now().isoformat(),
                 "archive_elite_names": elite_name_list,
+                "archive_subset_counts": subset_counts,
             }
             if decision["choice"] == "branch":
                 decision["selected_images"] = [random.randrange(len(archive_entries))]
@@ -530,16 +565,14 @@ class AgentRunner:
             shuffled_entries = [archive_entries[idx] for idx in display_order]
 
             prompt_lines = [ARCHIVE_BRANCHING_PROMPT]
-            top_count = len(top_entries_raw)
-            random_count = len(random_entries_raw)
-            if top_count:
-                top_range = "0" if top_count == 1 else f"0-{top_count - 1}"
-                prompt_lines.append(f"Top Rated: images {top_range}.")
-            if random_count:
-                start = top_count
-                end = start + random_count - 1
-                random_range = f"{start}" if random_count == 1 else f"{start}-{end}"
-                prompt_lines.append(f"Random: images {random_range}.")
+            for subset in subset_ranges:
+                start = subset["start"]
+                end = subset["end"]
+                if start == end:
+                    range_str = f"{start}"
+                else:
+                    range_str = f"{start}-{end}"
+                prompt_lines.append(f"{subset['label']}: images {range_str}.")
             archive_prompt = "\n".join(prompt_lines)
 
             image_caption_pairs, input_parts_metadata = self._build_archive_query_parts(shuffled_entries)
@@ -586,10 +619,7 @@ class AgentRunner:
                 "archive_display_order": list(display_order),
                 "input_parts": input_parts_metadata,
                 "selected_display_indices": selected_display_indices,
-                "archive_subset_counts": {
-                    "top_rated": top_count,
-                    "random": random_count,
-                },
+                "archive_subset_counts": subset_counts,
             }
             if choice == "branch":
                 preview_path = self._save_archive_branch_preview(decision, archive_entries)
@@ -1427,87 +1457,134 @@ class AgentRunner:
         selected = _ensure_int_list(decision.get("selected_images", []))
         if not selected:
             raise ValueError("No selected images in branching decision.")
-        grid_path_str = decision.get("archive_grid_path")
-        if not grid_path_str:
-            raise ValueError("Missing archive grid path in branching decision.")
-        grid_path = Path(grid_path_str)
-        if not grid_path.exists():
-            raise FileNotFoundError(f"Archive grid image not found: {grid_path}")
-
-        total_entries = len(archive_entries)
-        if total_entries == 0:
+        if not archive_entries:
             raise ValueError("No archive entries available for preview generation.")
 
-        metadata_path = grid_path.with_suffix(".json")
-        index_to_bbox: Dict[int, Tuple[int, int, int, int]] = {}
-        if metadata_path.exists():
-            try:
-                payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                payload = {}
-            for entry in payload.get("entries", []):
-                idx_value = entry.get("index")
-                bbox_value = entry.get("bbox")
-                if not isinstance(idx_value, int):
+        archive_root = Path(getattr(self.archive_manager, "archive_dir", self.agent_dir))
+
+        def _resolve_image_path(path_value: Any) -> Path:
+            if not path_value:
+                raise ValueError("Missing image path in archive entry.")
+            candidates: List[Path] = []
+            raw_path = Path(path_value)
+            candidates.append(raw_path)
+            if not raw_path.is_absolute():
+                candidates.append((archive_root / raw_path).resolve())
+            relative_suffix = relative_suffix_after_dir(raw_path, "archive")
+            if relative_suffix is not None:
+                candidates.append((archive_root / relative_suffix).resolve())
+            seen: Set[Path] = set()
+            for candidate in candidates:
+                if candidate in seen:
                     continue
-                if (
-                    isinstance(bbox_value, (list, tuple))
-                    and len(bbox_value) == 4
-                    and all(isinstance(coord, (int, float)) for coord in bbox_value)
-                ):
-                    index_to_bbox[idx_value] = tuple(int(round(coord)) for coord in bbox_value)
+                seen.add(candidate)
+                if candidate.exists():
+                    return candidate
+            raise FileNotFoundError(f"Archive image not found: {raw_path}")
 
-        fallback_layout_needed = not index_to_bbox
+        grouped: Dict[str, List[Tuple[int, Dict[str, Any]]]] = {}
+        label_order: List[str] = []
+        for idx, entry in enumerate(archive_entries):
+            label = str(entry.get("branching_subset_label") or entry.get("branching_subset") or "Archive").strip() or "Archive"
+            if label not in grouped:
+                grouped[label] = []
+                label_order.append(label)
+            grouped[label].append((idx, entry))
 
-        if fallback_layout_needed:
-            valid_indices: List[int] = []
-            for entry_index, entry in enumerate(archive_entries):
+        background_color = (18, 18, 22)
+        margin = ARCHIVE_GRID_MARGIN
+        header_gap = max(4, margin // 3)
+        font = ImageFont.load_default()
+        panes: List[Dict[str, Any]] = []
+
+        for label in label_order:
+            subset = grouped[label]
+            subset_images: List[Image.Image] = []
+            subset_indices: List[int] = []
+            for idx, entry in subset:
                 path_value = entry.get("image_path")
-                if not path_value:
-                    raise ValueError(f"Missing image path for archive entry at index {entry_index}.")
-                if Path(path_value).exists():
-                    valid_indices.append(entry_index)
+                resolved_path = _resolve_image_path(path_value)
+                with Image.open(resolved_path) as img:
+                    processed = img.convert("RGB").resize((self.thumb_size, self.thumb_size), Image.Resampling.LANCZOS)
+                subset_images.append(processed)
+                subset_indices.append(idx)
 
-            if not valid_indices:
-                raise ValueError("No valid archive entries with existing images found.")
+            if not subset_images:
+                continue
 
-            columns = max(1, math.ceil(math.sqrt(len(valid_indices))))
-            index_to_position = {entry_idx: pos for pos, entry_idx in enumerate(valid_indices)}
-            tile_size = self.thumb_size
-            margin = ARCHIVE_GRID_MARGIN
+            columns = max(1, math.ceil(math.sqrt(len(subset_images))))
+            rows = math.ceil(len(subset_images) / columns)
+            tile_width, tile_height = subset_images[0].size
+            pane_width = columns * tile_width + (columns + 1) * margin
+            pane_height = rows * tile_height + (rows + 1) * margin
+            pane_canvas = Image.new("RGB", (pane_width, pane_height), background_color)
+            pane_positions: List[Dict[str, Any]] = []
+            for img_idx, processed in enumerate(subset_images):
+                col = img_idx % columns
+                row = img_idx // columns
+                x = margin + col * (tile_width + margin)
+                y = margin + row * (tile_height + margin)
+                pane_canvas.paste(processed, (x, y))
+                pane_positions.append(
+                    {
+                        "index": subset_indices[img_idx],
+                        "bbox": [x, y, x + tile_width, y + tile_height],
+                    }
+                )
 
-        output_path = self.query_dir / "archive_branch.png"
+            try:
+                label_bbox = font.getbbox(f"{label}:")
+                header_height = label_bbox[3] - label_bbox[1]
+            except AttributeError:
+                header_height = font.getsize(f"{label}:")[1]
 
-        with Image.open(grid_path) as img:
-            preview = img.convert("RGB")
-            draw = ImageDraw.Draw(preview)
-            for idx in selected:
-                if not (0 <= idx < total_entries):
-                    raise ValueError(f"Selected index {idx} outside archive sample range.")
-                if index_to_bbox:
-                    bbox = index_to_bbox.get(idx)
-                    if bbox is None:
-                        raise ValueError(f"Bounding box not found for selected index {idx}.")
-                    x0, y0, x1, y1 = bbox
-                else:
-                    position = index_to_position.get(idx)
-                    if position is None:
-                        raise ValueError(f"Selected index {idx} not found among valid archive entries.")
-                    col = position % columns
-                    row = position // columns
-                    x0 = margin + col * (tile_size + margin)
-                    y0 = margin + row * (tile_size + margin)
-                    x1 = x0 + tile_size
-                    y1 = y0 + tile_size
+            panes.append(
+                {
+                    "label": label,
+                    "canvas": pane_canvas,
+                    "width": pane_width,
+                    "height": pane_height,
+                    "header_height": header_height,
+                    "positions": pane_positions,
+                }
+            )
+
+        if not panes:
+            raise ValueError("Failed to construct branch preview; no valid subset images found.")
+
+        max_header_height = max(pane["header_height"] for pane in panes)
+        max_grid_height = max(pane["height"] for pane in panes)
+        total_width = sum(pane["width"] for pane in panes) + margin * (len(panes) + 1)
+        total_height = margin + max_header_height + header_gap + max_grid_height + margin
+        canvas = Image.new("RGB", (total_width, total_height), background_color)
+        draw = ImageDraw.Draw(canvas)
+        x_cursor = margin
+        grid_y = margin + max_header_height + header_gap
+        selected_set = set(selected)
+
+        for pane in panes:
+            header_text = f"{pane['label']}:"
+            draw.text((x_cursor, margin), header_text, fill=(235, 235, 240), font=font)
+            canvas.paste(pane["canvas"], (x_cursor, grid_y))
+            for position in pane["positions"]:
+                idx = position["index"]
+                if idx not in selected_set:
+                    continue
+                x0 = x_cursor + position["bbox"][0]
+                y0 = grid_y + position["bbox"][1]
+                x1 = x_cursor + position["bbox"][2]
+                y1 = grid_y + position["bbox"][3]
                 _draw_dotted_rectangle(
                     draw,
                     (x0, y0, x1, y1),
                     color=(255, 0, 0),
                     width=5,
                 )
-            preview.save(output_path, format="PNG")
-            self._update_latest_image(output_path)
+            x_cursor += pane["width"] + margin
 
+        output_path = self.query_dir / "archive_branch.png"
+        canvas.save(output_path, format="PNG")
+        self._update_latest_image(output_path)
         return output_path
 
     def _print_selection_response(

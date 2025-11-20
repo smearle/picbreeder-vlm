@@ -291,7 +291,6 @@ def _build_parent_maps(
         parent_keys = _extract_parent_keys(record.genome)
         if len(parent_keys) == 0 and record.age > 1:
             pass
-            # breakpoint()
         for parent in parent_keys:
             if parent not in genomes:
                 if record.age > 1:

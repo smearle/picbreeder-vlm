@@ -230,17 +230,11 @@ class CollaborativeMultiAgentOrchestrator:
         self.render_genome_diagrams = render_genome_diagrams
         self.process_index = process_index
         self.keep_query_images = bool(getattr(self.config, "keep_query_images", False))
-
-        self._parallel_total_agents: Optional[int] = None
-        self._parallel_num_workers: Optional[int] = None
-        self._parallel_unlock_limit: Optional[int] = None
-
         self.archive_manager = ArchiveManager(self.experiment_dir / ARCHIVE_DIR_NAME,
                                               goal_prompt=GOAL_PROMPTS[self.config.goal])
         self.agents_dir = self.experiment_dir / "agents"
         self.agents_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_path = self.experiment_dir / "agents_metadata.json"
-        # self._metadata_lock_path = self.metadata_path.with_suffix(".lock")
         self._metadata = self._load_metadata()
         self._ensure_run_config()
 
@@ -260,7 +254,6 @@ class CollaborativeMultiAgentOrchestrator:
             )
 
     def _load_metadata(self) -> Dict[str, Any]:
-    #     with interprocess_lock(self._metadata_lock_path):
         if self.metadata_path.exists():
             metadata = self._read_metadata_file()
         else:
@@ -500,45 +493,6 @@ class CollaborativeMultiAgentOrchestrator:
             return False
         index = self._parse_agent_index(agent_id)
         return index is not None and index < self.warm_start_structure
-
-    def _initialize_parallel_unlock_limit(self, total_agents: int, num_workers: int) -> None:
-        self._parallel_total_agents = total_agents
-        self._parallel_num_workers = max(1, num_workers)
-        self._recompute_parallel_unlock_limit()
-
-    def _reset_parallel_unlock_limit(self) -> None:
-        self._parallel_total_agents = None
-        self._parallel_num_workers = None
-        self._parallel_unlock_limit = None
-
-    def _recompute_parallel_unlock_limit(self) -> None:
-        if self._parallel_total_agents is None or self._parallel_num_workers is None:
-            self._parallel_unlock_limit = None
-            return
-        max_index = self._parallel_total_agents - 1
-        if max_index < 0:
-            self._parallel_unlock_limit = None
-            return
-        prefix_complete = -1
-        agents = self._metadata.get("agents", [])
-        limit = min(len(agents), self._parallel_total_agents)
-        for idx in range(limit):
-            record = agents[idx]
-            status = record.get("status")
-            if status not in {"complete", "extinct"}:
-                break
-            prefix_complete = idx
-        allowed = prefix_complete + self._parallel_num_workers
-        if allowed > max_index:
-            allowed = max_index
-        if allowed < -1:
-            allowed = -1
-        self._parallel_unlock_limit = allowed
-
-    def _can_schedule_parallel_task(self, agent_index: int) -> bool:
-        if self._parallel_unlock_limit is None:
-            return True
-        return agent_index <= self._parallel_unlock_limit
 
     def _find_agent_record(self, agent_id: str) -> Optional[Dict[str, Any]]:
         agent_idx = self._parse_agent_index(agent_id)
@@ -785,7 +739,6 @@ class CollaborativeMultiAgentOrchestrator:
         pending_tasks = self._prepare_parallel_tasks(total_agents, resume, resume_agent_id)
         if not pending_tasks:
             return
-        self._initialize_parallel_unlock_limit(total_agents, num_workers)
 
         ctx = multiprocessing.get_context("spawn")
         config_payload = _serialize_config_for_worker(self.config)
@@ -897,7 +850,6 @@ class CollaborativeMultiAgentOrchestrator:
                 except Exception:
                     pass
                 state.process.join()
-        self._reset_parallel_unlock_limit()
 
         if errors:
             raise RuntimeError("\n".join(errors))
@@ -935,18 +887,13 @@ class CollaborativeMultiAgentOrchestrator:
             state.stopping = False
             return
         if pending_tasks:
-            next_task = pending_tasks[0]
-            if self._can_schedule_parallel_task(next_task.agent_index):
-                task = pending_tasks.popleft()
-                state.current_task = task
-                payload = {
-                    "type": "run_agent",
-                    "task": task.to_message(),
-                }
-                state.task_conn.send(payload)
-                state.stopping = False
-                return
-            state.task_conn.send({"type": "wait", "delay": 0.5})
+            task = pending_tasks.popleft()
+            state.current_task = task
+            payload = {
+                "type": "run_agent",
+                "task": task.to_message(),
+            }
+            state.task_conn.send(payload)
             state.stopping = False
             return
         if not state.stopping:
@@ -1093,8 +1040,6 @@ class CollaborativeMultiAgentOrchestrator:
             extinct=extinct,
             final_generation=final_generation,
         )
-        if self._parallel_total_agents is not None and self._parallel_num_workers is not None:
-            self._recompute_parallel_unlock_limit()
 
     def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
         self._ensure_agent_number_progress(agent_id)
@@ -1742,14 +1687,6 @@ def _continual_agent_worker(
                             "trigger_entry_count": trigger_entry_count,
                         }
                     )
-            elif msg_type == "wait":
-                delay_value = message.get("delay")
-                try:
-                    delay_seconds = float(delay_value) if delay_value is not None else 0.5
-                except (TypeError, ValueError):
-                    delay_seconds = 0.5
-                time.sleep(max(0.0, delay_seconds))
-                continue
             elif msg_type == "stop":
                 task_conn.send({"type": "stopped"})
                 break

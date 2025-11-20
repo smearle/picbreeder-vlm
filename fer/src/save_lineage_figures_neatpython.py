@@ -446,7 +446,6 @@ def _render_lineage_figure(
             tqdm.write(
                 f"[WARN] Rendering failed for genome {legacy.identifier} (age {legacy.age}): {exc}"
             )
-            breakpoint()
         ax.set_title(str(legacy.age), fontsize=6)
 
     plt.tight_layout(pad=0.3)
