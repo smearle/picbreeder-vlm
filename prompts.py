@@ -30,6 +30,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "{selection_prompt}"
     "If so inclined, you may also select an image to publish to the online archive. "
     "You don't need to publish if you don't want to. Publishing multiple times is allowed and every publication is preserved. "
+    "Please do not publish a lot of very-similar images. Be sparing. Your publications will be judged by future users, and associated with your user ID. "
     "Your session can last up to {n_generations} generations, but you may end early whenever you feel finished. "
     "Try to contribute something novel, interesting or useful to the online archive. "
     "Do not add something to the archive that is identical to an existing image. "

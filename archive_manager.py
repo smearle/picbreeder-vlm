@@ -356,7 +356,7 @@ class ArchiveManager:
             return []
         # with interprocess_lock(self._lock_path):
         self.refresh()
-        targets = self._select_least_rated_entries(limit)
+        targets = self._select_entries_for_rating(limit)
         if targets:
             manual_meta = self._metadata.setdefault("manual_rating", {})
             manual_meta["in_progress_ids"] = [item.get("id") for item in targets]
@@ -432,28 +432,22 @@ class ArchiveManager:
     def prepare_auto_rating_batch(self, limit: Optional[int] = None) -> Tuple[List[Dict[str, str]], int]:
         batch_size = RATING_BATCH_SIZE if limit is None else max(1, min(limit, RATING_BATCH_SIZE))
         if batch_size <= 0 or RATE_EVERY <= 0:
+            print("Auto-rating is disabled due to non-positive batch size or rate interval.")
             return [], 0
 
         self.refresh()
         entries = self._metadata.get("entries", [])
         total_entries = len(entries)
         if total_entries < RATING_BATCH_SIZE:
+            print("Not enough entries in archive to trigger auto-rating.")
             return [], 0
         if total_entries % RATE_EVERY != 0:
+            print("Not the right time to trigger auto-rating based on RATE_EVERY setting.")
             return [], 0
 
         auto_meta = self._metadata.setdefault("auto_rating", {})
-        trigger_entry_count = int(auto_meta.get("trigger_entry_count") or 0)
-        if trigger_entry_count:
-            if trigger_entry_count == total_entries:
-                return [], 0
-            return [], 0
 
-        last_completed = int(auto_meta.get("last_completed_count", 0) or 0)
-        if total_entries <= last_completed:
-            return [], 0
-
-        targets = self._select_least_rated_entries(batch_size)
+        targets = self._select_entries_for_rating(batch_size)
         if not targets:
             return [], 0
 
@@ -805,7 +799,7 @@ class ArchiveManager:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _select_least_rated_entries(self, limit: int) -> List[Dict[str, str]]:
+    def _select_entries_for_rating(self, limit: int) -> List[Dict[str, str]]:
         if limit <= 0:
             return []
         entries = list(self._metadata.get("entries", []))

@@ -244,6 +244,7 @@ class CollaborativeMultiAgentOrchestrator:
         self.metadata_path = self.experiment_dir / "agents_metadata.json"
         self._metadata = self._load_metadata()
         self._ensure_run_config()
+        self._parallel_workers_active = False
 
         self._personality_records: List[Dict[str, Any]] = []
         self._personality_prompts: List[str] = []
@@ -681,12 +682,28 @@ class CollaborativeMultiAgentOrchestrator:
         favorite_payload: Optional[Dict[str, Any]],
         archive_payload: Optional[Dict[str, Any]],
     ) -> None:
+        is_new_archive_entry = False
+        if archive_payload:
+            entry_id = archive_payload.get("id")
+            if entry_id:
+                record = self._find_agent_record(agent_id)
+                previous_entry_id: Optional[str] = None
+                if record:
+                    previous_payload = record.get("archive_entry")
+                    if isinstance(previous_payload, dict):
+                        previous_entry_id = previous_payload.get("id")
+                is_new_archive_entry = entry_id != previous_entry_id
         updates: Dict[str, Any] = {"last_generation": generation}
         if favorite_payload is not None:
             updates["favorite_selection"] = favorite_payload
         if archive_payload is not None:
             updates["archive_entry"] = archive_payload
         self._update_agent_record(agent_id, **updates)
+        if is_new_archive_entry:
+            if not self._parallel_workers_active:
+                self._maybe_run_auto_rating_serial()
+            else:
+                return is_new_archive_entry
 
     def _execute_runner(
         self,
@@ -719,10 +736,16 @@ class CollaborativeMultiAgentOrchestrator:
         resume_agent_id: Optional[str],
         num_workers: int = 1,
     ) -> None:
-        if num_workers <= 1:
-            self._run_agents_serial(total_agents, resume, resume_agent_id)
-            return
-        self._run_agents_parallel(total_agents, resume, resume_agent_id, num_workers)
+        using_parallel = num_workers > 1
+        previous_mode = self._parallel_workers_active
+        self._parallel_workers_active = using_parallel
+        try:
+            if not using_parallel:
+                self._run_agents_serial(total_agents, resume, resume_agent_id)
+            else:
+                self._run_agents_parallel(total_agents, resume, resume_agent_id, num_workers)
+        finally:
+            self._parallel_workers_active = previous_mode
 
     def _run_agents_serial(
         self,
@@ -890,25 +913,6 @@ class CollaborativeMultiAgentOrchestrator:
                 state.task_conn.send({"type": "stop"})
                 state.stopping = True
             return
-        try:
-            rating_targets, trigger_entry_count = self.archive_manager.prepare_auto_rating_batch(
-                RATING_BATCH_SIZE
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            print(f"Auto-rating scheduling failed: {exc}")
-            rating_targets = []
-            trigger_entry_count = 0
-        if rating_targets:
-            payload = {
-                "type": "run_rating",
-                "targets": rating_targets,
-                "trigger_entry_count": trigger_entry_count,
-                "goal_prompt": self.archive_manager.goal_prompt,
-                "archive_dir": str(self.archive_manager.archive_dir),
-            }
-            state.task_conn.send(payload)
-            state.stopping = False
-            return
         if pending_tasks:
             task = pending_tasks.popleft()
             state.current_task = task
@@ -961,6 +965,7 @@ class CollaborativeMultiAgentOrchestrator:
             "load_genome": self.archive_manager.load_genome,
             "add_entry": self.archive_manager.add_entry,
             "remove_entry": self.archive_manager.remove_entry,
+            "prepare_auto_rating_batch": self.archive_manager.prepare_auto_rating_batch,
         }
         method = archive_methods.get(method_name)
         if method is None:
@@ -1391,6 +1396,11 @@ class RemoteArchiveClient:
     def remove_entry(self, entry_id: str) -> Any:
         return self._call("remove_entry", entry_id)
 
+    def prepare_auto_rating_batch(self, limit: Optional[int] = None) -> Any:
+        if limit is None:
+            return self._call("prepare_auto_rating_batch")
+        return self._call("prepare_auto_rating_batch", limit)
+
     @property
     def entries(self) -> Any:
         return self._call("get_entries")
@@ -1479,6 +1489,8 @@ def _perform_rating(
     if not entries:
         return {}
 
+    random.shuffle(entries)
+
     results: Dict[str, RatingResult] = {}
     prompt_dir = archive_dir / "vlm_ratings"
     prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -1520,7 +1532,79 @@ def _perform_rating(
         for idx, rating in parsed.items():
             if 0 <= idx < len(batch):
                 results[batch[idx].image_id] = rating
+    # print(f"Auto-rated {len(results)} / {len(entries)} entries in batches of {rating_batch_size}.")
     return results
+
+
+def _run_auto_rating_job(
+    task_conn: Connection,
+    rating_targets: Sequence[Dict[str, str]],
+    trigger_entry_count: int,
+    goal_prompt: str,
+    archive_dir: Path,
+) -> None:
+    if not rating_targets:
+        task_conn.send(
+            {
+                "type": "rating_failed",
+                "trigger_entry_count": trigger_entry_count,
+                "error": "No rating targets provided.",
+            }
+        )
+        return
+    try:
+        rating_results = _perform_rating(rating_targets, goal_prompt, archive_dir)
+    except Exception as exc:  # pylint: disable=broad-except
+        task_conn.send(
+            {
+                "type": "rating_failed",
+                "trigger_entry_count": trigger_entry_count,
+                "error": f"Rating failed: {exc}",
+            }
+        )
+        return
+    serializable_results = {
+        entry_id: {
+            "score": rating.score,
+            "justification": rating.justification,
+            "reported_title": rating.reported_title,
+        }
+        for entry_id, rating in rating_results.items()
+    }
+    task_conn.send(
+        {
+            "type": "rating_result",
+            "results": serializable_results,
+            "trigger_entry_count": trigger_entry_count,
+        }
+    )
+
+
+def _maybe_trigger_auto_rating_after_publish(
+    cfg: CollaborativeConfig,
+    archive_client: RemoteArchiveClient,
+    task_conn: Connection,
+) -> None:
+    try:
+        response = archive_client.prepare_auto_rating_batch()
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"Auto-rating check failed in worker: {exc}")
+        return
+    if not isinstance(response, (list, tuple)) or len(response) != 2:
+        return
+    rating_targets, trigger_entry_count = response
+    trigger_entry_count = _safe_int(trigger_entry_count, default=0)
+    if not rating_targets or trigger_entry_count <= 0:
+        return
+    goal_prompt = GOAL_PROMPTS[cfg.goal]
+    archive_dir = Path(cfg.experiment_dir) / ARCHIVE_DIR_NAME
+    _run_auto_rating_job(
+        task_conn=task_conn,
+        rating_targets=rating_targets,
+        trigger_entry_count=trigger_entry_count,
+        goal_prompt=goal_prompt,
+        archive_dir=archive_dir,
+    )
 
 
 def _execute_agent_task(
@@ -1562,11 +1646,16 @@ def _execute_agent_task(
             cfg.enable_crossover,
         )
 
+    last_archive_entry_id: Optional[str] = None
+    if isinstance(task.archive_entry, dict):
+        last_archive_entry_id = task.archive_entry.get("id")
+
     def progress_callback(
         generation: int,
         favorite_payload: Optional[Dict[str, Any]],
         archive_payload: Optional[Dict[str, Any]],
     ) -> None:
+        nonlocal last_archive_entry_id
         task_conn.send(
             {
                 "type": "progress",
@@ -1576,6 +1665,12 @@ def _execute_agent_task(
                 "archive": archive_payload,
             }
         )
+        entry_id: Optional[str] = None
+        if archive_payload and isinstance(archive_payload, dict):
+            entry_id = archive_payload.get("id")
+        if entry_id and entry_id != last_archive_entry_id:
+            last_archive_entry_id = entry_id
+            _maybe_trigger_auto_rating_after_publish(cfg, archive_client, task_conn)
 
     runner = AgentRunner(
         task.agent_id,
@@ -1645,6 +1740,9 @@ def _execute_agent_task(
 
     archive_payload = archive_entry.as_dict() if isinstance(archive_entry, ArchiveEntry) else None
 
+    # if archive_entry is not None:
+    #     _maybe_trigger_auto_rating_after_publish(cfg, archive_client, task_conn)
+
     return {
         "type": "job_complete",
         "agent_id": task.agent_id,
@@ -1704,41 +1802,13 @@ def _continual_agent_worker(
                 goal_prompt = message.get("goal_prompt") or GOAL_PROMPTS[cfg.goal]
                 archive_dir_value = message.get("archive_dir")
                 archive_dir = Path(archive_dir_value) if archive_dir_value else cfg.experiment_dir / ARCHIVE_DIR_NAME
-                if not rating_targets:
-                    task_conn.send(
-                        {
-                            "type": "rating_failed",
-                            "trigger_entry_count": trigger_entry_count,
-                            "error": "No rating targets provided.",
-                        }
-                    )
-                    continue
-                try:
-                    rating_results = _perform_rating(rating_targets, goal_prompt, archive_dir)
-                except Exception as exc:  # pylint: disable=broad-except
-                    task_conn.send(
-                        {
-                            "type": "rating_failed",
-                            "trigger_entry_count": trigger_entry_count,
-                            "error": f"Rating failed: {exc}",
-                        }
-                    )
-                else:
-                    serializable_results = {
-                        entry_id: {
-                            "score": rating.score,
-                            "justification": rating.justification,
-                            "reported_title": rating.reported_title,
-                        }
-                        for entry_id, rating in rating_results.items()
-                    }
-                    task_conn.send(
-                        {
-                            "type": "rating_result",
-                            "results": serializable_results,
-                            "trigger_entry_count": trigger_entry_count,
-                        }
-                    )
+                _run_auto_rating_job(
+                    task_conn=task_conn,
+                    rating_targets=rating_targets,
+                    trigger_entry_count=trigger_entry_count,
+                    goal_prompt=goal_prompt,
+                    archive_dir=archive_dir,
+                )
             elif msg_type == "stop":
                 task_conn.send({"type": "stopped"})
                 break
