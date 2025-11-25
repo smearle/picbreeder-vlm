@@ -29,11 +29,12 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "At each subsequent generation, you will be shown a set of numbered images produced by CPPNs. "
     "{selection_prompt}"
     "If so inclined, you may also select an image to publish to the online archive. "
-    "You don't need to publish if you don't want to. Publishing multiple times is allowed and every publication is preserved. "
-    "Please do not publish a lot of very-similar images. Be sparing. Your publications will be judged by future users, and associated with your user ID. "
     "Your session can last up to {n_generations} generations, but you may end early whenever you feel finished. "
-    "Try to contribute something novel, interesting or useful to the online archive. "
-    "Do not add something to the archive that is identical to an existing image. "
+    "You should publish no more than once every 20 generations or so. "
+    "You do not *need* to publish. This is an open-ended, exploratory process that may or may not lead to publishable results. "
+    "It's better to contribute nothing than to contribute garbage. "
+    "If you ever want to abandon the current evolutionary trajectory, include a `\"restart\"` object in your JSON. "
+    '{{"restart": {{"mode": "fresh"}}}} seeds a brand-new random population, while {{"restart": {{"mode": "branch", "selected": [archive_indices]}}}} branches directly from the archive images (omit \"selected\" to re-open the archive and pick at the next step). '
     "Respond with JSON only: {{\"selected\": [indices]{selection_json_suffix}}}. "
     "(During branching, you may select only one image from which to branch; "
     " set \"selected\" to null to start from a fresh population.) "
@@ -49,7 +50,8 @@ DEFAULT_SYSTEM_INSTRUCTION = (
 
 ARCHIVE_NOVELTY_PROMPT = (
     "When justifying your publication choice, explain why the selected contribution is valuable to the archive. "
-    "Identify the most similar existing image in the archive and explain how your selection differs from it. "
+    "Identify the most similar entry in the archive (or the most similar of your prior publications) and explain how your selection meaningfully differs from it. "
+    "Do not publish images that are redundant or boring. You will be judged by a discerning online community for your contributions. "
 )
 
 MUTATION_STRENGTH_PROMPT = (

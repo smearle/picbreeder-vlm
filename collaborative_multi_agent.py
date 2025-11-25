@@ -40,7 +40,7 @@ from itertools import count
 import hydra
 from hydra.utils import get_original_cwd
 
-from agent_runner import AgentRunner, AgentQuitRequested
+from agent_runner import AgentRunner, AgentQuitRequested, AgentRestartRequested
 from config import CollaborativeConfig, _deserialize_config_for_worker, _serialize_config_for_worker, ensure_valid_config
 import personalities
 
@@ -714,14 +714,23 @@ class CollaborativeMultiAgentOrchestrator:
         extinct = False
         quit_requested = False
         quit_reason: Optional[str] = None
-        if remaining > 0:
+        while remaining > 0:
             try:
                 runner.population.run(runner.evaluate_generation, remaining)
+                break
             except CompleteExtinctionException:
                 extinct = True
+                break
             except AgentQuitRequested as exc:
                 quit_requested = True
                 quit_reason = str(exc) or runner.quit_reason
+                break
+            except AgentRestartRequested:
+                decision = runner.apply_pending_restart()
+                if decision is not None:
+                    self._update_agent_record(agent_id, branching_decision=decision)
+                remaining = max(0, runner.generations - runner.population.generation)
+                continue
         archive_entry = runner.favorite_archive_entry
         favorite = runner.favorite_decision if runner.favorite_decision else None
         final_generation = runner.population.generation
@@ -1446,19 +1455,36 @@ def _load_population_for_worker(
 def _execute_runner_in_worker(
     agent_id: str,
     runner: AgentRunner,
+    task_conn: Connection,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[ArchiveEntry], bool, int, bool, Optional[str]]:
     remaining = max(0, runner.generations - runner.population.generation)
     extinct = False
     quit_requested = False
     quit_reason: Optional[str] = None
-    if remaining > 0:
+    while remaining > 0:
         try:
             runner.population.run(runner.evaluate_generation, remaining)
+            break
         except CompleteExtinctionException:
             extinct = True
+            break
         except AgentQuitRequested as exc:
             quit_requested = True
             quit_reason = str(exc) or runner.quit_reason
+            break
+        except AgentRestartRequested:
+            decision = runner.apply_pending_restart()
+            if decision is not None:
+                task_conn.send(
+                    {
+                        "type": "branching_decision",
+                        "agent_id": agent_id,
+                        "decision": decision,
+                        "restart": True,
+                    }
+                )
+            remaining = max(0, runner.generations - runner.population.generation)
+            continue
     archive_entry = runner.favorite_archive_entry
     favorite = runner.favorite_decision if runner.favorite_decision else None
     final_generation = runner.population.generation
@@ -1736,6 +1762,7 @@ def _execute_agent_task(
     favorite, archive_entry, extinct, final_generation, quit_requested, quit_reason = _execute_runner_in_worker(
         task.agent_id,
         runner,
+        task_conn,
     )
 
     archive_payload = archive_entry.as_dict() if isinstance(archive_entry, ArchiveEntry) else None

@@ -39,6 +39,14 @@ class AgentQuitRequested(RuntimeError):
     """Raised when the VLM explicitly stops the current evolutionary run."""
 
 
+class AgentRestartRequested(RuntimeError):
+    """Raised when the VLM asks to abandon the current trajectory and restart."""
+
+    def __init__(self, payload: Dict[str, Any]):
+        super().__init__("Agent requested a restart")
+        self.payload = payload
+
+
 @dataclass
 class ImageVariantPaths:
     color: Path
@@ -156,7 +164,7 @@ class AgentRunner:
         else:
             color_prompt = ""
 
-        if self.chat_history_turns is None and self.request_rationale:
+        if self.chat_history_turns == -1 and self.request_rationale:
             archive_novelty_prompt = ARCHIVE_NOVELTY_PROMPT
         else:
             archive_novelty_prompt = ""
@@ -220,6 +228,17 @@ class AgentRunner:
         self.publication_history_path.touch(exist_ok=True)
         self._lineage_log_path = self.logs_dir / "lineage.jsonl"
         self._lineage_log_path.touch(exist_ok=True)
+        self._branching_snapshot_path = self.logs_dir / "branching_snapshot.json"
+        self._restart_log_path = self.logs_dir / "restart_history.jsonl"
+        self._restart_log_path.touch(exist_ok=True)
+        self._initial_branch_archive_entries: List[Dict[str, Any]] = []
+        self._initial_branch_subset_ranges: List[Dict[str, Any]] = []
+        self._initial_branch_subset_counts: Dict[str, int] = {}
+        self._initial_branch_elite_names: List[str] = []
+        self._initial_branch_display_order: List[int] = []
+        self._pending_restart_request: Optional[Dict[str, Any]] = None
+        self._restart_history: List[Dict[str, Any]] = []
+        self._restart_counter = 0
         self._archive_seed_map: Dict[int, Dict[str, Any]] = {}
         self._genome_lineage: Dict[int, Dict[str, Any]] = {}
         self.render_genome_diagrams = render_genome_diagrams
@@ -227,6 +246,7 @@ class AgentRunner:
         self._quit_requested = False
         self._quit_reason: Optional[str] = None
         self._quit_generation: Optional[int] = None
+        self._load_branching_snapshot()
         if self.resume_mode:
             self._load_existing_publication_state()
             self._restore_selection_settings()
@@ -514,115 +534,410 @@ class AgentRunner:
             running_index += count
 
         elite_name_list = self.archive_manager.get_elite_names()
-        if not archive_entries:
-            rationale = "Archive empty; defaulting to fresh population."
-            selected_images: List[int] = []
-            choice = "fresh"
-            decision = {
-                "choice": choice,
-                "selected_images": selected_images,
-                "rationale": rationale,
-                "raw_response": None,
-                "timestamp": datetime.now().isoformat(),
-                "archive_elite_names": elite_name_list,
-                "archive_subset_counts": subset_counts,
-            }
-
-        elif self.selection_baseline != "none":
-            rationale = "Dry-run mode; random decision."
-            selected_images: List[int] = []
-            choice = "fresh" if random.random() < 0.5 else "branch"
-            decision = {
-                "choice": choice,
-                "selected_images": selected_images,
-                "rationale": rationale,
-                "raw_response": None,
-                "timestamp": datetime.now().isoformat(),
-                "archive_elite_names": elite_name_list,
-                "archive_subset_counts": subset_counts,
-            }
-            if decision["choice"] == "branch":
-                decision["selected_images"] = [random.randrange(len(archive_entries))]
-        
-        else:
-            display_order = list(range(len(archive_entries)))
-            shuffled_entries = [archive_entries[idx] for idx in display_order]
-
-            prompt_lines = [ARCHIVE_BRANCHING_PROMPT]
-            for subset in subset_ranges:
-                start = subset["start"]
-                end = subset["end"]
-                if start == end:
-                    range_str = f"{start}"
-                else:
-                    range_str = f"{start}-{end}"
-                prompt_lines.append(f"{subset['label']}: images {range_str}.")
-            archive_prompt = "\n".join(prompt_lines)
-
-            image_caption_pairs, input_parts_metadata = self._build_archive_query_parts(shuffled_entries)
-            for display_index, archive_index in enumerate(display_order):
-                input_parts_metadata[display_index]["archive_sample_index"] = archive_index
-                entry_archive_index = shuffled_entries[display_index].get("_archive_index")
-                if entry_archive_index is not None:
-                    input_parts_metadata[display_index]["archive_index"] = entry_archive_index
-            display_to_archive_index = {idx: archive_idx for idx, archive_idx in enumerate(display_order)}
-
-            response = query_with_history(
-                self.config.model,
-                image_caption_pairs,
-                self.config.thinking_budget,
-                prompt=archive_prompt,
-                system_instruction=self.system_instruction,
-                chat_history_turns=self.chat_history_turns,
-            )
-
-            response_text = getattr(response, "text", "") or ""
-            try:
-                parsed = extract_json_object(response_text)
-            except Exception:
-                parsed = {}
-
-            selected_display_indices = parsed.get("selected", [])
-            selected_display_indices = [] if selected_display_indices is None else selected_display_indices
-            selected_display_indices = _ensure_int_list(selected_display_indices)
-            selected_images = [
-                display_to_archive_index[idx]
-                for idx in selected_display_indices
-                if idx in display_to_archive_index
-            ][:1]
-            rationale = str(parsed.get("rationale", ""))
-            choice = "branch" if selected_images else "fresh"
-            decision = {
-                "choice": choice,
-                "selected_images": selected_images,
-                "rationale": rationale,
-                "raw_response": response_text,
-                "timestamp": datetime.now().isoformat(),
-                "archive_elite_names": elite_name_list,
-                "archive_display_order": list(display_order),
-                "input_parts": input_parts_metadata,
-                "selected_display_indices": selected_display_indices,
-                "archive_subset_counts": subset_counts,
-            }
-            if choice == "branch":
-                preview_path = self._save_archive_branch_preview(decision, archive_entries)
-                decision["branch_preview_path"] = str(preview_path)
-
-        if archive_entries:
-            selected_entry_ids = [
-                archive_entries[idx]["id"]
-                for idx in decision.get("selected_images", [])
-                if 0 <= idx < len(archive_entries)
-            ]
-        else:
-            selected_entry_ids = []
-        decision["selected_entry_ids"] = selected_entry_ids
-
+        decision = self._decide_branching_from_entries(
+            archive_entries,
+            subset_ranges,
+            subset_counts,
+            elite_name_list,
+        )
+        self._store_branching_snapshot(
+            archive_entries,
+            subset_ranges,
+            subset_counts,
+            elite_name_list,
+            decision.get("archive_display_order"),
+        )
+        choice = decision.get("choice")
+        selected_images = decision.get("selected_images", [])
+        rationale = decision.get("rationale", "")
         self._write_branching_log(decision)
         print(
             f"[{self.agent_id}] Branching decision:\nChoice: {choice}\nSelected: {selected_images}\nRationale: {rationale}"
         )
         return decision
+
+    def _decide_branching_from_entries(
+        self,
+        archive_entries: List[Dict[str, Any]],
+        subset_ranges: List[Dict[str, Any]],
+        subset_counts: Dict[str, int],
+        elite_name_list: Sequence[str],
+        *,
+        prompt_note: Optional[str] = None,
+        display_order: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        timestamp = datetime.now().isoformat()
+        if not archive_entries:
+            return {
+                "choice": "fresh",
+                "selected_images": [],
+                "rationale": "Archive empty; defaulting to fresh population.",
+                "raw_response": None,
+                "timestamp": timestamp,
+                "archive_elite_names": list(elite_name_list),
+                "archive_subset_counts": dict(subset_counts),
+                "selected_entry_ids": [],
+            }
+
+        if self.selection_baseline != "none":
+            rationale = "Dry-run mode; random decision."
+            if prompt_note:
+                rationale = f"{prompt_note} ({rationale})"
+            choice = "fresh" if random.random() < 0.5 else "branch"
+            selected_images: List[int] = []
+            if choice == "branch":
+                selected_images = [random.randrange(len(archive_entries))]
+            decision = {
+                "choice": choice,
+                "selected_images": selected_images,
+                "rationale": rationale,
+                "raw_response": None,
+                "timestamp": timestamp,
+                "archive_elite_names": list(elite_name_list),
+                "archive_subset_counts": dict(subset_counts),
+            }
+            decision["selected_entry_ids"] = [
+                archive_entries[idx]["id"]
+                for idx in selected_images
+                if 0 <= idx < len(archive_entries)
+            ]
+            return decision
+
+        working_display_order = list(display_order) if display_order is not None else list(range(len(archive_entries)))
+        shuffled_entries = [archive_entries[idx] for idx in working_display_order]
+
+        prompt_lines = [ARCHIVE_BRANCHING_PROMPT]
+        if prompt_note:
+            prompt_lines.append(prompt_note)
+        for subset in subset_ranges:
+            start = subset["start"]
+            end = subset["end"]
+            range_str = f"{start}" if start == end else f"{start}-{end}"
+            prompt_lines.append(f"{subset['label']}: images {range_str}.")
+        archive_prompt = "\n".join(prompt_lines)
+
+        image_caption_pairs, input_parts_metadata = self._build_archive_query_parts(shuffled_entries)
+        display_to_archive_index: Dict[int, int] = {}
+        for display_index, archive_index in enumerate(working_display_order):
+            display_to_archive_index[display_index] = archive_index
+            input_parts_metadata[display_index]["archive_sample_index"] = archive_index
+            entry_archive_index = shuffled_entries[display_index].get("_archive_index")
+            if entry_archive_index is not None:
+                input_parts_metadata[display_index]["archive_index"] = entry_archive_index
+
+        response = query_with_history(
+            self.config.model,
+            image_caption_pairs,
+            self.config.thinking_budget,
+            prompt=archive_prompt,
+            system_instruction=self.system_instruction,
+            chat_history_turns=self.chat_history_turns,
+        )
+
+        response_text = getattr(response, "text", "") or ""
+        try:
+            parsed = extract_json_object(response_text)
+        except Exception:
+            parsed = {}
+
+        selected_display_indices = parsed.get("selected", [])
+        selected_display_indices = [] if selected_display_indices is None else selected_display_indices
+        selected_display_indices = _ensure_int_list(selected_display_indices)
+        selected_images = [
+            display_to_archive_index[idx]
+            for idx in selected_display_indices
+            if idx in display_to_archive_index
+        ][:1]
+        rationale = str(parsed.get("rationale", ""))
+        choice = "branch" if selected_images else "fresh"
+        decision = {
+            "choice": choice,
+            "selected_images": selected_images,
+            "rationale": rationale,
+            "raw_response": response_text,
+            "timestamp": timestamp,
+            "archive_elite_names": list(elite_name_list),
+            "archive_display_order": list(working_display_order),
+            "input_parts": input_parts_metadata,
+            "selected_display_indices": selected_display_indices,
+            "archive_subset_counts": dict(subset_counts),
+        }
+        decision["selected_entry_ids"] = [
+            archive_entries[idx]["id"]
+            for idx in selected_images
+            if 0 <= idx < len(archive_entries)
+        ]
+        if choice == "branch":
+            preview_path = self._save_archive_branch_preview(decision, archive_entries)
+            decision["branch_preview_path"] = str(preview_path)
+        return decision
+
+    def _store_branching_snapshot(
+        self,
+        archive_entries: List[Dict[str, Any]],
+        subset_ranges: List[Dict[str, Any]],
+        subset_counts: Dict[str, int],
+        elite_name_list: Sequence[str],
+        display_order: Optional[List[int]],
+    ) -> None:
+        self._initial_branch_archive_entries = copy.deepcopy(archive_entries)
+        self._initial_branch_subset_ranges = copy.deepcopy(subset_ranges)
+        self._initial_branch_subset_counts = dict(subset_counts)
+        self._initial_branch_elite_names = list(elite_name_list)
+        if display_order is None:
+            self._initial_branch_display_order = list(range(len(archive_entries)))
+        else:
+            self._initial_branch_display_order = list(display_order)
+        snapshot = {
+            "entries": self._initial_branch_archive_entries,
+            "subset_ranges": self._initial_branch_subset_ranges,
+            "subset_counts": self._initial_branch_subset_counts,
+            "elite_names": self._initial_branch_elite_names,
+            "display_order": self._initial_branch_display_order,
+            "timestamp": datetime.now().isoformat(),
+        }
+        try:
+            self._branching_snapshot_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _load_branching_snapshot(self) -> None:
+        if not hasattr(self, "_branching_snapshot_path"):
+            return
+        if not self._branching_snapshot_path.exists():
+            return
+        try:
+            data = json.loads(self._branching_snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        self._initial_branch_archive_entries = data.get("entries") or []
+        self._initial_branch_subset_ranges = data.get("subset_ranges") or []
+        stored_counts = data.get("subset_counts") or {}
+        self._initial_branch_subset_counts = dict(stored_counts)
+        self._initial_branch_elite_names = list(data.get("elite_names") or [])
+        display_order = data.get("display_order") or list(range(len(self._initial_branch_archive_entries)))
+        self._initial_branch_display_order = list(display_order)
+
+    def _normalize_restart_request(self, payload: Any, generation: int) -> Optional[Dict[str, Any]]:
+        if payload in (None, False, "", [], {}):
+            return None
+        mode: Optional[str] = None
+        reason: Optional[str] = None
+        selected_indices: List[int] = []
+        if isinstance(payload, str):
+            value = payload.strip().lower()
+            if value in {"branch", "archive", "rebranch"}:
+                mode = "branch"
+            elif value in {"fresh", "random", "reset", "restart", "new"}:
+                mode = "fresh"
+        elif isinstance(payload, bool):
+            mode = "fresh" if payload else None
+        elif isinstance(payload, dict):
+            raw_mode = payload.get("mode") or payload.get("choice") or payload.get("type")
+            if isinstance(raw_mode, str):
+                value = raw_mode.strip().lower()
+                if value in {"branch", "archive", "rebranch"}:
+                    mode = "branch"
+                elif value in {"fresh", "random", "reset", "restart", "new"}:
+                    mode = "fresh"
+            reason_value = payload.get("reason") or payload.get("rationale") or payload.get("why")
+            if reason_value is not None:
+                text = str(reason_value).strip()
+                if text:
+                    reason = text
+            selected_value = (
+                payload.get("selected")
+                or payload.get("indices")
+                or payload.get("selection")
+                or payload.get("archive_indices")
+            )
+            if selected_value is not None:
+                selected_indices = _ensure_int_list(selected_value)
+        elif isinstance(payload, (list, tuple)):
+            selected_indices = _ensure_int_list(payload)
+            if selected_indices:
+                mode = mode or "branch"
+        if mode is None:
+            return None
+        return {
+            "mode": mode,
+            "reason": reason,
+            "selected_indices": selected_indices,
+            "generation": generation,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    def apply_pending_restart(self) -> Optional[Dict[str, Any]]:
+        if not self._pending_restart_request:
+            return None
+        request = self._pending_restart_request
+        self._pending_restart_request = None
+        decision = self._build_restart_decision(request)
+        restart_context = {
+            "mode": request.get("mode"),
+            "reason": request.get("reason"),
+            "generation": request.get("generation"),
+            "timestamp": request.get("timestamp"),
+            "count": self._restart_counter + 1,
+        }
+        decision["restart_context"] = restart_context
+        self.branching_decision = decision
+        self.initialise_population(decision)
+        log_entry = {
+            "agent_id": self.agent_id,
+            "restart": restart_context,
+            "decision_choice": decision.get("choice"),
+            "selected_images": decision.get("selected_images"),
+            "selected_entry_ids": decision.get("selected_entry_ids"),
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._restart_history.append(log_entry)
+        self._append_restart_log(log_entry)
+        self._restart_counter += 1
+        return decision
+
+    def _build_restart_decision(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        mode = request.get("mode") or "fresh"
+        if mode == "branch":
+            decision = self._build_restart_branch_decision(request)
+        else:
+            decision = self._build_restart_fresh_decision(request)
+        if not decision.get("selected_entry_ids"):
+            decision.setdefault("selected_entry_ids", [])
+        return decision
+
+    def _build_restart_fresh_decision(
+        self,
+        request: Dict[str, Any],
+        rationale: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        base_text = rationale or "Restart requested; starting from a fresh random population."
+        reason = request.get("reason")
+        if reason:
+            base_text = f"{base_text} ({reason})"
+        return {
+            "choice": "fresh",
+            "selected_images": [],
+            "selected_entry_ids": [],
+            "rationale": base_text,
+            "raw_response": None,
+            "timestamp": datetime.now().isoformat(),
+            "archive_elite_names": list(self._initial_branch_elite_names),
+            "archive_subset_counts": dict(self._initial_branch_subset_counts),
+        }
+
+    def _build_restart_branch_decision(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._initial_branch_archive_entries:
+            return self._build_restart_fresh_decision(
+                request,
+                rationale="Restart requested but the original archive snapshot is unavailable; starting fresh instead.",
+            )
+        archive_entries = copy.deepcopy(self._initial_branch_archive_entries)
+        subset_counts = dict(self._initial_branch_subset_counts)
+        elite_names = list(self._initial_branch_elite_names)
+        working_display_order = (
+            list(self._initial_branch_display_order)
+            if self._initial_branch_display_order
+            else list(range(len(archive_entries)))
+        )
+        if len(working_display_order) != len(archive_entries):
+            working_display_order = list(range(len(archive_entries)))
+
+        display_to_archive_index: Dict[int, int] = {
+            display_idx: archive_idx
+            for display_idx, archive_idx in enumerate(working_display_order)
+            if 0 <= archive_idx < len(archive_entries)
+        }
+
+        requested_display_indices = _ensure_int_list(request.get("selected_indices") or [])
+        archive_indices: List[int] = []
+        invalid_display_indices: List[int] = []
+        for display_idx in requested_display_indices:
+            archive_idx = display_to_archive_index.get(display_idx)
+            if archive_idx is None:
+                invalid_display_indices.append(display_idx)
+                continue
+            archive_indices.append(archive_idx)
+
+        # Preserve order while removing duplicates.
+        seen_indices: Set[int] = set()
+        unique_archive_indices: List[int] = []
+        for idx in archive_indices:
+            if idx in seen_indices:
+                continue
+            seen_indices.add(idx)
+            unique_archive_indices.append(idx)
+
+        valid_indices, invalid_archive_indices = self._validate_branch_indices(
+            unique_archive_indices,
+            archive_entries,
+        )
+
+        if valid_indices:
+            rationale_parts = ["Restart requested; branching from the archive using specified indices."]
+            reason = request.get("reason")
+            if reason:
+                rationale_parts.append(f"Reason: {reason}")
+            ignored: List[int] = []
+            if invalid_display_indices:
+                ignored.extend(invalid_display_indices)
+            if invalid_archive_indices:
+                ignored.extend(invalid_archive_indices)
+            if ignored:
+                rationale_parts.append(f"Ignored invalid indices: {ignored}")
+            decision = {
+                "choice": "branch",
+                "selected_images": valid_indices,
+                "selected_entry_ids": [
+                    archive_entries[idx]["id"]
+                    for idx in valid_indices
+                    if 0 <= idx < len(archive_entries)
+                ],
+                "rationale": " ".join(rationale_parts),
+                "raw_response": None,
+                "timestamp": datetime.now().isoformat(),
+                "archive_elite_names": elite_names,
+                "archive_subset_counts": subset_counts,
+                "archive_display_order": working_display_order,
+                "selected_display_indices": [
+                    idx
+                    for idx in requested_display_indices
+                    if idx in display_to_archive_index and display_to_archive_index[idx] in valid_indices
+                ],
+            }
+            preview_path = self._save_archive_branch_preview(decision, archive_entries)
+            decision["branch_preview_path"] = str(preview_path)
+            return decision
+
+        prompt_note = (
+            "Restart request: this is the same archive grid you saw at the beginning of the session. "
+            "Pick a different favorite (indices unchanged) or respond with null to start fresh."
+        )
+        if invalid_display_indices or invalid_archive_indices:
+            prompt_note = (
+                f"{prompt_note} (Previous restart indices were invalid and ignored: "
+                f"{invalid_display_indices + invalid_archive_indices})."
+            )
+        decision = self._decide_branching_from_entries(
+            copy.deepcopy(archive_entries),
+            copy.deepcopy(self._initial_branch_subset_ranges),
+            dict(self._initial_branch_subset_counts),
+            list(elite_names),
+            prompt_note=prompt_note,
+            display_order=list(working_display_order) if working_display_order else None,
+        )
+        if not decision.get("selected_images") and request.get("reason"):
+            decision.setdefault("rationale", "")
+            decision["rationale"] = f"{decision['rationale']} (restart reason: {request['reason']})".strip()
+        return decision
+
+    def _append_restart_log(self, payload: Dict[str, Any]) -> None:
+        try:
+            with self._restart_log_path.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(payload))
+                fp.write("\n")
+        except OSError:
+            pass
 
     def initialise_population(self, decision: Dict[str, Any]) -> None:
         self._archive_seed_map.clear()
@@ -857,6 +1172,9 @@ class AgentRunner:
                 grid_path = self.query_dir / f"gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
         selection_meta["grid_path"] = str(grid_path)
         selection_meta["color"] = self._color_enabled
+        restart_request = self._normalize_restart_request(selection_meta_raw.get("restart"), generation_i)
+        if restart_request:
+            self._pending_restart_request = restart_request
         quit_requested = bool(selection_meta.get("quit"))
         quit_reason = selection_meta.get("quit_reason")
         if quit_requested:
@@ -1017,6 +1335,8 @@ class AgentRunner:
             message = self._quit_reason or "Agent requested to end the session."
             print(f"[{self.agent_id}] Quit requested at generation {generation_i}: {message}")
             raise AgentQuitRequested(message)
+        if restart_request:
+            raise AgentRestartRequested(restart_request)
 
     def publish_to_archive(self, favorite: Dict[str, Any]) -> Optional[ArchiveEntry]:
         generation = favorite["generation"]
@@ -1712,5 +2032,3 @@ class AgentRunner:
         payload["metadata_path"] = str(meta_path)
 
         return payload
-
-
