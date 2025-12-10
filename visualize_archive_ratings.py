@@ -34,7 +34,7 @@ class ArchiveRatingsConfig(CollaborativeConfig):
                     "  goal/scheme/seed    Combine with ensure_valid_config to infer the archive directory.\n"
                     "  output/summary_json Customize export paths.\n"
                 ),
-                footer="Override with +option=value (e.g. output=outputs/vlm_plot.png).",
+                footer="Override with +option=value (e.g. output=outputs/vlm_plot.pdf).",
             )
         )
     )
@@ -86,7 +86,7 @@ def main(cfg: ArchiveRatingsConfig) -> None:
 
     output_path = _resolve_optional_path(validated_cfg.output, original_cwd)
     if output_path is None:
-        output_path = archive_dir / "vlm_ratings_metadata.png"
+        output_path = archive_dir / "vlm_ratings_metadata.pdf"
     else:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 

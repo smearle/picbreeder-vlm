@@ -41,6 +41,7 @@ class CollaborativeConfig:
     test_mode: bool = False  # Shortened settings for quick validation runs
     seed: int = 0  # Random seed for deterministic behaviour
     render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
+    log_raw_responses: bool = False  # When true, dump raw VLM responses to timestamped text files
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -120,7 +121,6 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
         exp_dir = _ensure_absolute(relative, original_cwd)
     else:
         exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)
-    exp_dir.mkdir(parents=True, exist_ok=True)
     cfg.experiment_dir = exp_dir
 
     if cfg.resume:

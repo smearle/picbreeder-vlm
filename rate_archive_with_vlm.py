@@ -40,9 +40,12 @@ Respond with JSON ONLY in this exact shape:
 Include exactly one rating per index shown in the grid."""
 
 
+EntryId = str | int
+
+
 @dataclass
 class ArchiveEntry:
-    image_id: str
+    image_id: EntryId
     title: str
     image_path: Path
 
@@ -136,38 +139,77 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_archive_entries(archive_dir: Path) -> List[ArchiveEntry]:
-    metadata_path = archive_dir / "archive_metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Could not find {metadata_path}")
-    metadata = json.loads(metadata_path.read_text())
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
+
+
+def _infer_image_id(stem: str) -> EntryId:
+    try:
+        return int(stem)
+    except ValueError:
+        return stem
+
+
+def _collect_image_entries(image_dir: Path) -> List[ArchiveEntry]:
     entries: List[ArchiveEntry] = []
-    goal_prompt = metadata.get("goal_prompt")
-    for entry in metadata.get("entries", []):
-        raw_path = Path(entry["image_path"]).expanduser()
-        resolved = raw_path
-        if "archive" in raw_path.parts:
-            try:
-                archive_idx = raw_path.parts.index("archive")
-            except ValueError:
-                archive_idx = -1
-            if archive_idx >= 0:
-                rel_path = Path(*raw_path.parts[archive_idx + 1 :])
-                candidate = (archive_dir / rel_path).resolve()
-                if candidate.exists():
-                    resolved = candidate
-        if not resolved.exists():
+    seen_paths = set()
+    if not image_dir.exists() or not image_dir.is_dir():
+        return entries
+    for path in sorted(image_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
-        entries.append(
-            ArchiveEntry(
-                image_id=entry["id"],
-                title=entry.get("title") or entry["id"],
-                image_path=resolved,
+        resolved = path.expanduser().resolve()
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
+        image_id = _infer_image_id(resolved.stem)
+        entries.append(ArchiveEntry(image_id=image_id, title="", image_path=resolved))
+    return entries
+
+
+def load_archive_entries(archive_dir: Path) -> Tuple[List[ArchiveEntry], str]:
+    metadata_path = archive_dir / "archive_metadata.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text())
+        entries: List[ArchiveEntry] = []
+        goal_prompt = metadata.get("goal_prompt") or "Unspecified objective"
+        for entry in metadata.get("entries", []):
+            raw_path = Path(entry["image_path"]).expanduser()
+            resolved = raw_path
+            if "archive" in raw_path.parts:
+                try:
+                    archive_idx = raw_path.parts.index("archive")
+                except ValueError:
+                    archive_idx = -1
+                if archive_idx >= 0:
+                    rel_path = Path(*raw_path.parts[archive_idx + 1 :])
+                    candidate = (archive_dir / rel_path).resolve()
+                    if candidate.exists():
+                        resolved = candidate
+            if not resolved.exists():
+                continue
+            entries.append(
+                ArchiveEntry(
+                    image_id=entry["id"],
+                    title=entry.get("title") or entry["id"],
+                    image_path=resolved,
+                )
             )
+        if not entries:
+            raise ValueError(f"No entries with images found in {metadata_path}")
+        return entries, goal_prompt
+
+    images_dir = archive_dir / "images"
+    fallback_entries = _collect_image_entries(images_dir)
+    if not fallback_entries and archive_dir.is_dir():
+        fallback_entries = _collect_image_entries(archive_dir)
+    if not fallback_entries:
+        raise FileNotFoundError(
+            f"Could not find {metadata_path} or any images under {archive_dir}"
         )
-    if not entries:
-        raise ValueError(f"No entries with images found in {metadata_path}")
-    return entries, goal_prompt
+    print(
+        f"archive_metadata.json missing; inferring {len(fallback_entries)} entries from {images_dir if images_dir.exists() else archive_dir}"
+    )
+    return fallback_entries, "Unspecified objective"
 
 
 def format_rating_entry_label(idx: int, entry: ArchiveEntry, include_titles: bool) -> str:
@@ -243,9 +285,9 @@ def log_record(log_path: Path, record: Dict) -> None:
         handle.write(json.dumps(record) + "\n")
 
 
-def load_scores_from_log(log_path: Path) -> Tuple[Dict[str, List[float]], int, Dict[str, Dict[str, List[float]]]]:
-    scores: Dict[str, List[float]] = defaultdict(list)
-    mode_scores: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+def load_scores_from_log(log_path: Path) -> Tuple[Dict[EntryId, List[float]], int, Dict[str, Dict[EntryId, List[float]]]]:
+    scores: Dict[EntryId, List[float]] = defaultdict(list)
+    mode_scores: Dict[str, Dict[EntryId, List[float]]] = defaultdict(lambda: defaultdict(list))
     max_run_index = -1
     if not log_path.exists():
         return scores, 0, mode_scores
@@ -282,7 +324,7 @@ def load_scores_from_log(log_path: Path) -> Tuple[Dict[str, List[float]], int, D
     return scores, completed_runs, mode_scores
 
 
-def summarize_scores(entries: Iterable[ArchiveEntry], scores: Dict[str, List[float]]) -> List[Dict]:
+def summarize_scores(entries: Iterable[ArchiveEntry], scores: Dict[EntryId, List[float]]) -> List[Dict]:
     summary = []
     for entry in entries:
         image_scores = scores.get(entry.image_id, [])
@@ -375,7 +417,7 @@ def render_ranked_figure(summary: List[Dict], output_path: Path) -> None:
 
 def write_mode_variability_report(
     entries: Sequence[ArchiveEntry],
-    mode_scores: Dict[str, Dict[str, List[float]]],
+    mode_scores: Dict[str, Dict[EntryId, List[float]]],
     output_path: Path,
 ) -> None:
     if not mode_scores:
@@ -602,8 +644,8 @@ def main() -> None:
     stats_path = output_dir / "ratings_summary.json"
     figure_path = output_dir / "ratings_figure.png"
 
-    scores: Dict[str, List[float]] = defaultdict(list)
-    mode_scores: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+    scores: Dict[EntryId, List[float]] = defaultdict(list)
+    mode_scores: Dict[str, Dict[EntryId, List[float]]] = defaultdict(lambda: defaultdict(list))
     thumb_cache: Dict[str, bytes] = {}
     image_bytes_cache: Dict[str, bytes] = {}
     title_mismatches: List[Dict[str, Any]] = []
@@ -658,12 +700,12 @@ def main() -> None:
             ordered_entries[i : i + effective_batch_size]
             for i in range(0, len(ordered_entries), effective_batch_size)
         ]
-        system_prompt = build_rating_system_prompt(
-            batch,
-            require_titles=args.verify_titles,
-            goal_prompt=goal_prompt,
-        )
         for batch_idx, batch in enumerate(batches):
+            system_prompt = build_rating_system_prompt(
+                batch,
+                require_titles=args.verify_titles,
+                goal_prompt=goal_prompt,
+            )
             response_text = ""
             error_message = None
             ratings: Dict[int, RatingResult] = {}

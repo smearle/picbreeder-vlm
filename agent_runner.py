@@ -28,11 +28,12 @@ from rendering import _draw_dotted_rectangle, create_numbered_grid
 from utils import _ensure_int_list, relative_suffix_after_dir
 
 
-BRANCH_TOP_RATED_LIMIT = 25
-BRANCH_RANDOM_LIMIT = 25
-BRANCH_BEST_NEW_LIMIT = 25
+BRANCH_TOP_RATED_LIMIT = 20
+BRANCH_RANDOM_LIMIT = 20
+BRANCH_BEST_NEW_LIMIT = 20
 BRANCH_BEST_NEW_WINDOW_MULTIPLIER = 10
-BRANCH_NEWEST_LIMIT = 25
+BRANCH_MOST_BRANCHED_LIMIT = 20
+BRANCH_NEWEST_LIMIT = 20
 
 
 class AgentQuitRequested(RuntimeError):
@@ -115,6 +116,7 @@ class AgentRunner:
         self.resume_mode = resume_mode or (population is not None)
         self.personality_prompt = personality_prompt.strip() if personality_prompt else None
         self.request_rationale = bool(getattr(self.config, "request_rationale", True))
+        self.log_raw_responses = bool(getattr(self.config, "log_raw_responses", False))
 
         # Start each agent with a fresh conversation history before any VLM calls.
         reset_chat_session()
@@ -265,7 +267,7 @@ class AgentRunner:
         color_images: List[PIL.Image.Image],
         gray_images: List[PIL.Image.Image],
     ) -> Dict[int, ImageVariantPaths]:
-        images_dir = self.images_dir / f"gen_{generation:03d}"
+        images_dir = self.images_dir / self._current_run_label() / f"gen_{generation:03d}"
         images_dir.mkdir(parents=True, exist_ok=True)
         image_paths: Dict[int, ImageVariantPaths] = {}
         if len(color_images) != len(gray_images):
@@ -490,6 +492,7 @@ class AgentRunner:
         (
             top_entries_raw,
             best_new_entries_raw,
+            most_branched_entries_raw,
             newest_entries_raw,
             random_entries_raw,
         ) = self.archive_manager.sample_branching_entries(
@@ -497,12 +500,14 @@ class AgentRunner:
             BRANCH_RANDOM_LIMIT,
             best_new_count=BRANCH_BEST_NEW_LIMIT,
             best_new_window_multiplier=BRANCH_BEST_NEW_WINDOW_MULTIPLIER,
+            most_branched_count=BRANCH_MOST_BRANCHED_LIMIT,
             newest_count=BRANCH_NEWEST_LIMIT,
         )
 
         subset_specs: List[Tuple[str, str, List[Dict[str, Any]]]] = [
             ("top_rated", "Top Rated", top_entries_raw),
             ("best_new", "Best New Images", best_new_entries_raw),
+            ("most_branched", "Most Branched", most_branched_entries_raw),
             ("newest", "Newest", newest_entries_raw),
             ("random", "Random", random_entries_raw),
         ]
@@ -638,6 +643,8 @@ class AgentRunner:
         try:
             parsed = extract_json_object(response_text)
         except Exception:
+            parsed = {}
+        if isinstance(parsed, ValueError) or not isinstance(parsed, dict):
             parsed = {}
 
         selected_display_indices = parsed.get("selected", [])
@@ -915,21 +922,50 @@ class AgentRunner:
         )
         if invalid_display_indices or invalid_archive_indices:
             prompt_note = (
-                f"{prompt_note} (Previous restart indices were invalid and ignored: "
-                f"{invalid_display_indices + invalid_archive_indices})."
+                f"Restart requested with branch mode but the provided indices were invalid: "
+                f"{invalid_display_indices + invalid_archive_indices}. Please reply with a valid index from the archive grid shown below."
             )
-        decision = self._decide_branching_from_entries(
-            copy.deepcopy(archive_entries),
-            copy.deepcopy(self._initial_branch_subset_ranges),
-            dict(self._initial_branch_subset_counts),
-            list(elite_names),
-            prompt_note=prompt_note,
-            display_order=list(working_display_order) if working_display_order else None,
+        elif not requested_display_indices:
+            prompt_note = (
+                "Restart requested with branch mode but no archive indices were provided. "
+                "Please reply with a valid index from the archive grid shown below."
+            )
+
+        branch_attempts = 0
+        max_branch_attempts = 2
+        next_prompt_note = prompt_note
+
+        while branch_attempts < max_branch_attempts:
+            branch_attempts += 1
+            decision = self._decide_branching_from_entries(
+                copy.deepcopy(archive_entries),
+                copy.deepcopy(self._initial_branch_subset_ranges),
+                dict(self._initial_branch_subset_counts),
+                list(elite_names),
+                prompt_note=next_prompt_note,
+                display_order=list(working_display_order) if working_display_order else None,
+            )
+            if decision.get("selected_images"):
+                if request.get("reason"):
+                    rationale_text = decision.get("rationale", "") or ""
+                    decision["rationale"] = f"{rationale_text} (restart reason: {request['reason']})".strip()
+                return decision
+
+            next_prompt_note = (
+                "No valid archive selection was detected in your restart request. "
+                "Please choose a valid index from the archive grid shown again."
+            )
+
+        fallback_rationale = (
+            "Restart requested with branch mode but no valid archive selection was provided after retrying; "
+            "starting from a fresh random population instead."
         )
-        if not decision.get("selected_images") and request.get("reason"):
-            decision.setdefault("rationale", "")
-            decision["rationale"] = f"{decision['rationale']} (restart reason: {request['reason']})".strip()
-        return decision
+        if request.get("reason"):
+            fallback_rationale = f"{fallback_rationale} (restart reason: {request['reason']})"
+        return self._build_restart_fresh_decision(
+            request,
+            rationale=fallback_rationale,
+        )
 
     def _append_restart_log(self, payload: Dict[str, Any]) -> None:
         try:
@@ -1030,6 +1066,8 @@ class AgentRunner:
         config: neat.Config,
     ) -> None:
         generation_i = int(self.population.generation)
+        run_label = self._current_run_label()
+        name_prefix = f"{run_label}_"
         if len(genomes) != self.rows * self.cols:
             raise ValueError(
                 f"Expected {self.rows * self.cols} genomes, received {len(genomes)}."
@@ -1121,6 +1159,8 @@ class AgentRunner:
                         current_color=self._color_enabled,
                         view_index=view_index,
                         image_path_map=variant_image_map,
+                        log_raw_response=self.log_raw_responses,
+                        run_label=run_label,
                     )
                     fallback_invoked = False
                 except GeminiPromptBlockedError as exc:
@@ -1153,7 +1193,7 @@ class AgentRunner:
                 break
         else:
             grid_image = create_numbered_grid(population_images, self.rows, self.cols, self.thumb_size)
-            grid_path = self.query_dir / f"gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
+            grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
             grid_image.save(grid_path, format="PNG")
             self._update_latest_image(grid_path)
             selection_meta_raw = self._select_parents_baseline(
@@ -1169,7 +1209,7 @@ class AgentRunner:
             if resolved_grid_str:
                 grid_path = Path(resolved_grid_str)
             else:
-                grid_path = self.query_dir / f"gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
+                grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
         selection_meta["grid_path"] = str(grid_path)
         selection_meta["color"] = self._color_enabled
         restart_request = self._normalize_restart_request(selection_meta_raw.get("restart"), generation_i)
@@ -1502,6 +1542,9 @@ class AgentRunner:
         memo[genome_key] = ancestors
         return ancestors
 
+    def _current_run_label(self) -> str:
+        return f"branch_{self._restart_counter:03d}"
+
     def _write_branching_log(self, payload: Dict[str, Any]) -> None:
         path = self.logs_dir / "branching_selection.json"
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1523,6 +1566,7 @@ class AgentRunner:
         entry = dict(metadata)
         entry["generation"] = generation
         entry["timestamp"] = datetime.now().isoformat()
+        entry.setdefault("run_label", self._current_run_label())
         with self._selection_history_path.open("a", encoding="utf-8") as fp:
             fp.write(json.dumps(entry))
             fp.write("\n")
@@ -1534,11 +1578,14 @@ class AgentRunner:
             parsed = extract_json_object(response_text)
         except Exception:
             return None
+        if isinstance(parsed, ValueError) or not isinstance(parsed, dict):
+            return None
         payload = parsed.get("publish")
         if payload in (None, "", "none", "null"):
             return None
         index_value: Any
         rationale: str = ""
+        title: str = ""
         if isinstance(payload, dict):
             index_value = payload.get("index")
             rationale = (
@@ -1896,10 +1943,10 @@ class AgentRunner:
                     (x0, y0, x1, y1),
                     color=(255, 0, 0),
                     width=5,
-                )
+            )
             x_cursor += pane["width"] + margin
 
-        output_path = self.query_dir / "archive_branch.png"
+        output_path = self.query_dir / f"{self._current_run_label()}_archive_branch.png"
         canvas.save(output_path, format="PNG")
         self._update_latest_image(output_path)
         return output_path
@@ -2001,13 +2048,15 @@ class AgentRunner:
         population_images: List[Image.Image],
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
+        run_label = self._current_run_label()
+        name_prefix = f"{run_label}_"
         self.query_dir.mkdir(parents=True, exist_ok=True)
         selected = metadata.get("selected", [])
         selection_image = create_numbered_grid(population_images=population_images, rows=self.rows, cols=self.cols, thumb_size=self.thumb_size, selected=selected)
 
         suffix = "_view_00"
-        grid_path = self.query_dir / f"gen_{generation:03d}{suffix}_grid.png"
-        selection_path = self.query_dir / f"gen_{generation:03d}{suffix}_selection.png"
+        grid_path = self.query_dir / f"{name_prefix}gen_{generation:03d}{suffix}_grid.png"
+        selection_path = self.query_dir / f"{name_prefix}gen_{generation:03d}{suffix}_selection.png"
         selection_image.save(selection_path, format="PNG")
 
         payload = dict(metadata)
@@ -2022,12 +2071,13 @@ class AgentRunner:
                 "view_index": 0,
                 "color": self._color_enabled,
                 "color_toggle_only": False,
+                "run_label": run_label,
             }
         )
 
         metadata_dir = self.query_dir / "metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
-        meta_path = metadata_dir / f"gen_{generation:03d}{suffix}_selection.json"
+        meta_path = metadata_dir / f"{name_prefix}gen_{generation:03d}{suffix}_selection.json"
         meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         payload["metadata_path"] = str(meta_path)
 

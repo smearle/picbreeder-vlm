@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass, field
 import json
 import math
 import pickle
@@ -21,6 +21,12 @@ from neat_components import (
 )
 from picbreeder_reproduction import PicbreederReproduction
 from rendering import render_genome_image
+from config import CollaborativeConfig, ensure_valid_config
+from utils import _ensure_absolute
+import hydra
+from hydra.conf import HelpConf, HydraConf
+from hydra.core.config_store import ConfigStore
+from hydra.utils import get_original_cwd
 
 
 try:
@@ -30,69 +36,70 @@ except AttributeError:  # pragma: no cover - Pillow < 10
 LANCZOS = RESAMPLING.LANCZOS
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--experiment-dir",
-        type=Path,
-        required=True,
-        help="Path to the experiment directory that contains (the archive subdirectory with) archive_metadata.json.",
+VALID_VARIANTS = ("auto", "color", "gray")
+
+
+@dataclass
+class ArchiveHighresConfig(CollaborativeConfig):
+    output_dir: Optional[Path] = None
+    grid_output: Optional[Path] = None
+    image_size: int = 200
+    grid_thumb_size: int = 512
+    grid_margin: int = 24
+    variant: str = "auto"
+    limit: Optional[int] = None
+    overwrite: bool = False
+    hydra: HydraConf = field(
+        default_factory=lambda: HydraConf(
+            help=HelpConf(
+                app_name="render_archive_highres",
+                header=(
+                    "Hydra entry point for rendering high-resolution archive images and grids.\n"
+                    "\n"
+                    "Common overrides:\n"
+                    "  experiment_dir      Point directly at an existing run.\n"
+                    "  goal/scheme/seed    Combine with ensure_valid_config to infer a run directory.\n"
+                    "  output_dir          Custom directory for per-image renders.\n"
+                    "  grid_output         Override the archive grid destination.\n"
+                ),
+                footer="Override with +option=value (e.g. variant=color image_size=256).",
+            )
+        )
     )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        help="Path to the NEAT config file used for the experiment "
-        "(e.g. picture2d/interactive_config_color).",
-        default="picture2d/interactive_config_color",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=None,
-        help="Destination for per-entry renders (default: <archive-dir>/highres_images).",
-    )
-    parser.add_argument(
-        "--grid-output",
-        type=Path,
-        default=None,
-        help="Path for the label-free archive grid (default: <archive-dir>/archive_grid_highres.png).",
-    )
-    parser.add_argument(
-        "--image-size",
-        type=int,
-        default=1024,
-        help="Width/height (in px) used when rendering individual genomes.",
-    )
-    parser.add_argument(
-        "--grid-thumb-size",
-        type=int,
-        default=512,
-        help="Tile size (in px) used when composing the grid.",
-    )
-    parser.add_argument(
-        "--grid-margin",
-        type=int,
-        default=24,
-        help="Margin (in px) used between tiles on the grid.",
-    )
-    parser.add_argument(
-        "--variant",
-        choices=("auto", "color", "gray"),
-        default="auto",
-        help="Color channel to export per image. 'auto' follows each archive entry's color flag.",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Optional cap on the number of archive entries to render (useful for testing).",
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Re-render entries even if their high-res image already exists.",
-    )
-    return parser.parse_args()
+
+
+ConfigStore.instance().store(name="archive_highres_base", node=ArchiveHighresConfig)
+
+
+def _validate_render_options(cfg: ArchiveHighresConfig) -> None:
+    if cfg.image_size <= 0:
+        raise ValueError("image_size must be positive")
+    if cfg.grid_thumb_size <= 0:
+        raise ValueError("grid_thumb_size must be positive")
+    if cfg.grid_margin < 0:
+        raise ValueError("grid_margin must be non-negative")
+    if cfg.limit is not None and cfg.limit <= 0:
+        raise ValueError("limit must be positive when provided")
+    if cfg.variant not in VALID_VARIANTS:
+        raise ValueError(f"variant must be one of {VALID_VARIANTS}")
+
+
+def _resolve_output_paths(
+    cfg: ArchiveHighresConfig,
+    archive_dir: Path,
+    original_cwd: Path,
+) -> tuple[Path, Path]:
+    if cfg.output_dir is None:
+        output_dir = archive_dir / "highres_images"
+    else:
+        output_dir = _ensure_absolute(Path(cfg.output_dir), original_cwd)
+
+    if cfg.grid_output is None:
+        grid_output = archive_dir / "archive_grid_highres.png"
+    else:
+        grid_output = _ensure_absolute(Path(cfg.grid_output), original_cwd)
+
+    return output_dir.resolve(), grid_output.resolve()
 
 
 def load_config(config_path: Path) -> neat.Config:
@@ -217,30 +224,35 @@ def iter_entries(metadata: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     return sorted(entries, key=lambda item: item.get("id", ""))
 
 
-def main() -> None:
-    args = parse_args()
-    archive_dir = args.experiment_dir.resolve() / "archive"
-    output_dir = (args.output_dir or (archive_dir / "highres_images")).resolve()
-    grid_output = (args.grid_output or (archive_dir / "archive_grid_highres.png")).resolve()
+@hydra.main(version_base="1.3", config_path=None, config_name="archive_highres_base")
+def main(cfg: ArchiveHighresConfig) -> None:
+    original_cwd = Path(get_original_cwd())
+    validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
+    _validate_render_options(validated_cfg)
+
+    experiment_dir = Path(validated_cfg.experiment_dir).resolve()
+    archive_dir = experiment_dir / "archive"
+    output_dir, grid_output = _resolve_output_paths(validated_cfg, archive_dir, original_cwd)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    config = load_config(args.config.resolve())
+    neat_config_path = Path(validated_cfg.neat_config_path)
+    config = load_config(neat_config_path)
     metadata = load_archive_metadata(archive_dir)
     entries = list(iter_entries(metadata))
-    if args.limit is not None:
-        entries = entries[: args.limit]
+    if validated_cfg.limit is not None:
+        entries = entries[: validated_cfg.limit]
 
     rendered_paths: List[Path] = []
     for index, entry in enumerate(entries, start=1):
         path = render_entry_image(
             entry,
             config=config,
-            image_size=args.image_size,
+            image_size=validated_cfg.image_size,
             archive_dir=archive_dir,
             output_dir=output_dir,
-            variant_mode=args.variant,
-            overwrite=args.overwrite,
+            variant_mode=validated_cfg.variant,
+            overwrite=validated_cfg.overwrite,
         )
         if path is not None:
             rendered_paths.append(path)
@@ -254,8 +266,8 @@ def main() -> None:
 
     grid_path = build_label_free_grid(
         rendered_paths,
-        thumb_size=args.grid_thumb_size,
-        margin=args.grid_margin,
+        thumb_size=validated_cfg.grid_thumb_size,
+        margin=validated_cfg.grid_margin,
         output_path=grid_output,
     )
     if grid_path:

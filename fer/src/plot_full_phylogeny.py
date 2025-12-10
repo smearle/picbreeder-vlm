@@ -16,8 +16,13 @@ from PIL import Image
 from graphviz import Digraph
 from tqdm.auto import tqdm
 
-from fer.src.lineage_utils import get_lineage_genomes
+from fer.src.lineage_utils import (
+    get_lineage_genomes,
+    iter_generation_archives,
+    recursive_parse_all_genomes,
+)
 from fer.src.save_lineage_figures import do_forward_pass, load_pbcppn
+from fer.src.picbreeder_util import load_zip_xml_as_dict
 
 VALID_FORMATS: Tuple[str, ...] = ("pdf", "png", "svg")
 PALETTE: Tuple[str, ...] = (
@@ -277,6 +282,42 @@ def _collect_lineages(pb_dir: Path, pids: Iterable[str]) -> Dict[str, List[Dict[
     return lineages
 
 
+def _load_genomes_single_pass(
+    pb_dir: Path,
+    pids: Iterable[str],
+) -> Dict[GenomeKey, IndexedGenome]:
+    """
+    Load genomes by walking each pid directory exactly once and dedupe by branch/id.
+    """
+    indexed: Dict[GenomeKey, IndexedGenome] = {}
+    for pid in tqdm(pids, desc="Loading genomes"):
+        for archive in iter_generation_archives(pb_dir, pid):
+            try:
+                root = load_zip_xml_as_dict(str(archive))
+            except Exception as exc:  # pragma: no cover - defensive logging
+                tqdm.write(f"[WARN] Failed to parse archive {archive} for pid {pid}: {exc}")
+                continue
+            generation = (
+                root.get("genome", {})
+                .get("storage", {})
+                .get("generation")
+            )
+            genomes = recursive_parse_all_genomes(generation)
+            for genome in genomes:
+                key = _extract_genome_key(genome)
+                if key is None or key in indexed:
+                    continue
+                indexed[key] = IndexedGenome(
+                    key=key,
+                    pid=pid,
+                    genome=genome,
+                    age=_safe_int(genome.get("@age"), default=0),
+                )
+    if not indexed:
+        raise SystemExit("No genomes with identifiers were recovered; nothing to render.")
+    return indexed
+
+
 def _build_parent_maps(
     genomes: Mapping[GenomeKey, IndexedGenome]
 ) -> Tuple[
@@ -483,8 +524,7 @@ def main() -> None:
     if args.limit is not None:
         pids = pids[: args.limit]
 
-    lineages = _collect_lineages(pb_dir, pids)
-    indexed_genomes = _index_genomes(lineages)
+    indexed_genomes = _load_genomes_single_pass(pb_dir, pids)
 
     graph = build_phylogeny_graph(
         genomes=indexed_genomes,

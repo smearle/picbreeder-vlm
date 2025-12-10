@@ -27,7 +27,7 @@ VALID_SCOPES: Tuple[str, ...] = ("archive", "full")
 @dataclass
 class ArchivePhylogenyConfig(CollaborativeConfig):
     output: Optional[Path] = None
-    format: str = "png"
+    format: str = "pdf"
     mode: str = "annotated"
     scope: str = "archive"
     archive_limit: Optional[int] = None

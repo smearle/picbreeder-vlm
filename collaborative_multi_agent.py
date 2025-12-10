@@ -30,7 +30,7 @@ import shutil
 import traceback
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from multiprocessing.connection import Connection
@@ -158,6 +158,52 @@ class AgentTask:
 
 
 @dataclass
+class AgentRecord:
+    agent_id: str
+    status: str = "in_progress"
+    branching_decision: Optional[Dict[str, Any]] = None
+    favorite_selection: Optional[Dict[str, Any]] = None
+    archive_entry: Optional[Dict[str, Any]] = None
+    created_at: Optional[str] = None
+    resumed_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    last_generation: int = 0
+    extinct: bool = False
+    quit_requested: bool = False
+    quit_reason: Optional[str] = None
+
+
+@dataclass
+class BranchingDecisionMessage:
+    agent_id: str
+    decision: Dict[str, Any]
+    restart: bool = False
+    type: str = field(init=False, default="branching_decision")
+
+
+@dataclass
+class ProgressMessage:
+    agent_id: str
+    generation: int
+    favorite: Optional[Dict[str, Any]]
+    archive: Optional[Dict[str, Any]]
+    type: str = field(init=False, default="progress")
+
+
+@dataclass
+class JobCompleteMessage:
+    agent_id: str
+    favorite: Optional[Dict[str, Any]]
+    archive_entry: Optional[Dict[str, Any]]
+    extinct: bool
+    final_generation: int
+    branching_decision: Optional[Dict[str, Any]]
+    quit_requested: bool
+    quit_reason: Optional[str]
+    type: str = field(init=False, default="job_complete")
+
+
+@dataclass
 class WorkerState:
     index: int
     task_conn: Connection
@@ -267,63 +313,82 @@ class CollaborativeMultiAgentOrchestrator:
         else:
             metadata = self._default_metadata()
             self._write_metadata_file(metadata)
-        metadata, changed = self._ensure_metadata_defaults(metadata)
-        if changed:
-            self._write_metadata_file(metadata)
+        # metadata, _ = self._ensure_metadata_defaults(metadata)
+        # if changed:
+        #     self._write_metadata_file(metadata)
         return metadata
 
     def _default_metadata(self) -> Dict[str, Any]:
         return {
             "created_at": datetime.now().isoformat(),
             "next_agent_number": 0,
-            "agents": [],
+            "agents": {},
             "seed": self.seed,
             "run_config": None,
         }
 
     def _read_metadata_file(self) -> Dict[str, Any]:
         with self.metadata_path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+            metadata = json.load(handle)
+
+        # TODO: This is for backward compatibility only and can be removed
+        if isinstance(metadata.get("agents"), list):
+            agents_dict = {}
+            for entry in metadata.get("agents", []):
+                agents_dict[entry["agent_id"]] = entry
+            metadata["agents"] = agents_dict
+        
+        metadata["agents"] = {agent_id: AgentRecord(**entry) for agent_id, entry in metadata.get("agents", {}).items()}
+        return metadata
 
     def _write_metadata_file(self, metadata: Dict[str, Any]) -> None:
-        atomic_write_json(self.metadata_path, metadata)
+        serializable = dict(metadata)
+        agents = serializable.get("agents", {})
+        serializable["agents"] = {agent_id: asdict(entry) if isinstance(entry, AgentRecord) else entry for agent_id, entry in agents.items()}
+        atomic_write_json(self.metadata_path, serializable)
 
-    def _ensure_metadata_defaults(self, metadata: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
-        changed = False
-        metadata.setdefault("agents", [])
-        metadata.setdefault("next_agent_number", 0)
-        metadata.setdefault("run_config", None)
-        if self.seed is not None and metadata.get("seed") != self.seed:
-            metadata["seed"] = self.seed
-            changed = True
-        elif self.seed is None and metadata.get("seed") is not None:
-            self.seed = metadata.get("seed")
-        for record in metadata["agents"]:
-            if "status" not in record:
-                record["status"] = "complete" if record.get("completed_at") else "in_progress"
-                changed = True
-            if "last_generation" not in record:
-                record["last_generation"] = None
-                changed = True
-        return metadata, changed
+    # def _ensure_metadata_defaults(self, metadata: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    #     changed = False
+    #     metadata.setdefault("agents", [])
+    #     metadata.setdefault("next_agent_number", 0)
+    #     metadata.setdefault("run_config", None)
+    #     if self.seed is not None and metadata.get("seed") != self.seed:
+    #         metadata["seed"] = self.seed
+    #         changed = True
+    #     elif self.seed is None and metadata.get("seed") is not None:
+    #         self.seed = metadata.get("seed")
+    #     agents: List[AgentRecord] = []
+    #     for entry in metadata["agents"]:
+    #         if isinstance(entry, AgentRecord):
+    #             agent_record = entry
+    #         else:
+    #             agent_record = AgentRecord(**entry)
+    #             changed = True
+    #         if agent_record.status == "in_progress" and agent_record.completed_at:
+    #             agent_record.status = "complete"
+    #             changed = True
+    #         agents.append(agent_record)
+    #     metadata["agents"] = agents
+    #     return metadata, changed
 
     def _reload_metadata(self) -> Dict[str, Any]:
         if self.metadata_path.exists():
             metadata = self._read_metadata_file()
         else:
             metadata = self._default_metadata()
-        metadata, _ = self._ensure_metadata_defaults(metadata)
+        # metadata, _ = self._ensure_metadata_defaults(metadata)
         self._metadata = metadata
         return metadata
 
-    def _mutate_metadata(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
+    def _mutate_metadata(self, mutator: Callable[[Dict[str, Any]], Any], write: bool = True) -> Any:
         if self.metadata_path.exists():
             metadata = self._read_metadata_file()
         else:
             metadata = self._default_metadata()
-        metadata, _ = self._ensure_metadata_defaults(metadata)
+        # metadata, _ = self._ensure_metadata_defaults(metadata)
         result = mutator(metadata)
-        self._write_metadata_file(metadata)
+        if write:
+            self._write_metadata_file(metadata)
         self._metadata = metadata
         return result
 
@@ -492,7 +557,7 @@ class CollaborativeMultiAgentOrchestrator:
     def _agent_dir(self, agent_id: str) -> Path:
         return self.agents_dir / agent_id
 
-    def _ensure_agent_number_progress(self, agent_id: str) -> None:
+    def _ensure_agent_number_progress(self, agent_id: str, write: bool) -> None:
         index = self._parse_agent_index(agent_id)
         if index is None:
             raise ValueError(f"Invalid agent identifier '{agent_id}'.")
@@ -500,7 +565,7 @@ class CollaborativeMultiAgentOrchestrator:
         def mutator(metadata: Dict[str, Any]) -> None:
             metadata["next_agent_number"] = max(metadata.get("next_agent_number", 0), index + 1)
 
-        self._mutate_metadata(mutator)
+        self._mutate_metadata(mutator, write=write)
 
     def _is_warm_start_agent(self, agent_id: str) -> bool:
         if self.warm_start_structure <= 0:
@@ -508,89 +573,90 @@ class CollaborativeMultiAgentOrchestrator:
         index = self._parse_agent_index(agent_id)
         return index is not None and index < self.warm_start_structure
 
-    def _find_agent_record(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        agent_idx = self._parse_agent_index(agent_id)
-        if len(self._metadata.get("agents", [])) <= agent_idx or agent_idx is None:
-            return None
-        record = self._metadata.get("agents", [])[agent_idx]
-        assert record.get("agent_id") == agent_id
+    def _find_agent_record(self, agent_id: str) -> Optional[AgentRecord]:
+        agents = self._metadata.get("agents", {})
+        record: AgentRecord = agents.get(agent_id, None)
         return record
 
-    def _register_agent(self, agent_id: str) -> Dict[str, Any]:
-        def mutator(metadata: Dict[str, Any]) -> Dict[str, Any]:
-            agents = metadata.setdefault("agents", [])
+    def _register_agent(self, agent_id: str, write: bool) -> AgentRecord:
+        def mutator(metadata: Dict[str, Any]) -> AgentRecord:
+            agents = metadata.setdefault("agents", {})
             for record in agents:
-                if record.get("agent_id") == agent_id:
+                if isinstance(record, AgentRecord) and record.agent_id == agent_id:
                     return record
-            record = {
-                "agent_id": agent_id,
-                "branching_decision": None,
-                "favorite_selection": None,
-                "archive_entry": None,
-                "status": "in_progress",
-                "created_at": datetime.now().isoformat(),
-                "last_generation": 0,
-            }
-            agents.append(record)
+            record = AgentRecord(
+                agent_id=agent_id,
+                status="in_progress",
+                created_at=datetime.now().isoformat(),
+                last_generation=0,
+            )
+            agents[agent_id] = record
             return record
 
-        return self._mutate_metadata(mutator)
+        return self._mutate_metadata(mutator, write=write)
 
-    def _update_agent_record(self, agent_id: str, **updates: Any) -> None:
+    def _update_agent_record(self, agent_id: str, write: bool = True, **updates: Any) -> None:
         def mutator(metadata: Dict[str, Any]) -> None:
-            for record in metadata.get("agents", []):
-                if record.get("agent_id") == agent_id:
-                    record.update(updates)
-                    break
+            record = metadata["agents"][agent_id]
+            if isinstance(record, AgentRecord):
+                for key, value in updates.items():
+                    setattr(record, key, value)
+            elif isinstance(record, dict):
+                record.update(updates)
 
-        self._mutate_metadata(mutator)
+        self._mutate_metadata(mutator, write=write)
 
     def _find_agent_to_resume(
         self,
         resume_agent_id: Optional[str],
         allowed_agent_ids: Optional[Set[str]] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[AgentRecord]:
         self._reload_metadata()
-        agents = self._metadata.get("agents", [])
+        agents = self._metadata.get("agents", {})
         finished = {"complete", "extinct", "stopped"}
         if resume_agent_id:
             if allowed_agent_ids is not None and resume_agent_id not in allowed_agent_ids:
                 return None
-            record = next((entry for entry in agents if entry.get("agent_id") == resume_agent_id), None)
+            record = next(
+                (entry for agent_id, entry in agents.items() if isinstance(entry, AgentRecord) and entry.agent_id == resume_agent_id),
+                None,
+            )
             if record is None:
                 raise ValueError(f"Agent '{resume_agent_id}' not found in experiment metadata.")
-            if record.get("status") in finished:
+            if record.status in finished:
                 raise ValueError(f"Agent '{resume_agent_id}' has already completed.")
             return record
         for record in reversed(agents):
-            if allowed_agent_ids is not None and record.get("agent_id") not in allowed_agent_ids:
+            if not isinstance(record, AgentRecord):
                 continue
-            if record.get("status") not in finished:
+            if allowed_agent_ids is not None and record.agent_id not in allowed_agent_ids:
+                continue
+            if record.status not in finished:
                 return record
         return None
 
-    def _hydrate_agent_record_from_disk(self, record: Dict[str, Any]) -> None:
-        agent_dir = self._agent_dir(record["agent_id"])
+    def _hydrate_agent_record_from_disk(self, record: AgentRecord) -> None:
+        agent_dir = self._agent_dir(record.agent_id)
         logs_dir = agent_dir / "logs"
         updates: Dict[str, Any] = {}
         branch_path = logs_dir / "branching_selection.json"
-        if record.get("branching_decision") is None and branch_path.exists():
+        if record.branching_decision is None and branch_path.exists():
             try:
                 branching = json.loads(branch_path.read_text(encoding="utf-8"))
-                record["branching_decision"] = branching
+                record.branching_decision = branching
                 updates["branching_decision"] = branching
             except json.JSONDecodeError:
                 pass
         favourite_path = logs_dir / "favorite_selection.json"
-        if record.get("favorite_selection") is None and favourite_path.exists():
+        if record.favorite_selection is None and favourite_path.exists():
             try:
                 favorite = json.loads(favourite_path.read_text(encoding="utf-8"))
-                record["favorite_selection"] = favorite
+                record.favorite_selection = favorite
                 updates["favorite_selection"] = favorite
             except json.JSONDecodeError:
                 pass
         publication_path = logs_dir / "publication_history.jsonl"
-        if record.get("archive_entry") is None and publication_path.exists():
+        if record.archive_entry is None and publication_path.exists():
             last_payload: Optional[Dict[str, Any]] = None
             with publication_path.open("r", encoding="utf-8") as handle:
                 for raw_line in handle:
@@ -604,13 +670,13 @@ class CollaborativeMultiAgentOrchestrator:
             if last_payload and last_payload.get("archive_entry_id"):
                 entry = self.archive_manager.get_entry(last_payload["archive_entry_id"])
                 if entry is not None:
-                    record["archive_entry"] = entry.as_dict()
-                    if record.get("favorite_selection") is None:
-                        record["favorite_selection"] = last_payload
+                    record.archive_entry = entry.as_dict()
+                    if record.favorite_selection is None:
+                        record.favorite_selection = last_payload
                         updates.setdefault("favorite_selection", last_payload)
-                    updates["archive_entry"] = record["archive_entry"]
+                    updates["archive_entry"] = record.archive_entry
         if updates:
-            self._update_agent_record(record["agent_id"], **updates)
+            self._update_agent_record(record.agent_id, **updates)
 
     def _load_population_for_agent(self, agent_dir: Path) -> Tuple[Optional[neat.Population], Optional[Path]]:
         population_dir = agent_dir / "populations"
@@ -689,7 +755,7 @@ class CollaborativeMultiAgentOrchestrator:
                 record = self._find_agent_record(agent_id)
                 previous_entry_id: Optional[str] = None
                 if record:
-                    previous_payload = record.get("archive_entry")
+                    previous_payload = record.archive_entry
                     if isinstance(previous_payload, dict):
                         previous_entry_id = previous_payload.get("id")
                 is_new_archive_entry = entry_id != previous_entry_id
@@ -776,7 +842,7 @@ class CollaborativeMultiAgentOrchestrator:
         for index in target_indices:
             agent_id = self._agent_id_from_index(index)
             record = self._find_agent_record(agent_id)
-            if record is not None and record.get("status") in {"complete", "extinct", "stopped"}:
+            if record is not None and record.status in {"complete", "extinct", "stopped"}:
                 continue
             if record is not None:
                 self._resume_agent(agent_id, allowed_agent_ids={agent_id})
@@ -846,22 +912,20 @@ class CollaborativeMultiAgentOrchestrator:
                     if msg_type == "ready":
                         self._handle_worker_ready(state, pending_tasks, abort_requested)
                     elif msg_type == "branching_decision":
-                        decision = message.get("decision")
-                        agent_id = message.get("agent_id")
-                        if agent_id and decision is not None:
-                            if state.current_task and state.current_task.agent_id == agent_id:
-                                state.current_task.branching_decision = decision
-                            self._update_agent_record(agent_id, branching_decision=decision)
+                        payload = {k: v for k, v in message.items() if k != "type"}
+                        branching_msg = BranchingDecisionMessage(**payload)
+                        if state.current_task and state.current_task.agent_id == branching_msg.agent_id:
+                            state.current_task.branching_decision = branching_msg.decision
+                        self._update_agent_record(branching_msg.agent_id, branching_decision=branching_msg.decision)
                     elif msg_type == "progress":
-                        agent_id = message.get("agent_id")
-                        if agent_id:
-                            generation = _safe_int(message.get("generation"), default=0)
-                            self._on_generation_progress(
-                                agent_id,
-                                generation,
-                                message.get("favorite"),
-                                message.get("archive"),
-                            )
+                        payload = {k: v for k, v in message.items() if k != "type"}
+                        progress = ProgressMessage(**payload)
+                        self._on_generation_progress(
+                            progress.agent_id,
+                            progress.generation,
+                            progress.favorite,
+                            progress.archive,
+                        )
                     elif msg_type == "rating_result":
                         self._apply_rating_results_from_worker(message)
                     elif msg_type == "rating_failed":
@@ -872,7 +936,9 @@ class CollaborativeMultiAgentOrchestrator:
                         if trigger_entry_count:
                             self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
                     elif msg_type == "job_complete":
-                        self._handle_job_complete(state, message)
+                        payload = {k: v for k, v in message.items() if k != "type"}
+                        job_complete = JobCompleteMessage(**payload)
+                        self._handle_job_complete(state, job_complete)
                         state.current_task = None
                     elif msg_type == "task_failed":
                         agent_id = message.get("agent_id")
@@ -1039,14 +1105,14 @@ class CollaborativeMultiAgentOrchestrator:
         else:
             self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
 
-    def _handle_job_complete(self, state: WorkerState, payload: Dict[str, Any]) -> None:
-        agent_id = payload.get("agent_id")
+    def _handle_job_complete(self, state: WorkerState, payload: JobCompleteMessage) -> None:
+        agent_id = payload.agent_id
         if not agent_id:
             return
         task = state.current_task
         agent_dir = self._agent_dir(agent_id)
-        favorite_payload = payload.get("favorite")
-        archive_entry_data = payload.get("archive_entry")
+        favorite_payload = payload.favorite
+        archive_entry_data = payload.archive_entry
         archive_entry: Optional[ArchiveEntry]
         if isinstance(archive_entry_data, ArchiveEntry):
             archive_entry = archive_entry_data
@@ -1057,19 +1123,19 @@ class CollaborativeMultiAgentOrchestrator:
                 archive_entry = None
         else:
             archive_entry = None
-        extinct = bool(payload.get("extinct"))
-        final_generation = _safe_int(payload.get("final_generation"), default=0)
-        quit_requested = bool(payload.get("quit_requested"))
-        quit_reason = payload.get("quit_reason")
+        extinct = payload.extinct
+        final_generation = payload.final_generation
+        quit_requested = payload.quit_requested
+        quit_reason = payload.quit_reason
         branching_decision = None
-        if payload.get("branching_decision") is not None:
-            branching_decision = payload.get("branching_decision")
+        if payload.branching_decision is not None:
+            branching_decision = payload.branching_decision
         elif task is not None:
             branching_decision = task.branching_decision
         else:
             record = self._find_agent_record(agent_id)
             if record is not None:
-                branching_decision = record.get("branching_decision")
+                branching_decision = record.branching_decision
         self._finalize_agent(
             agent_id,
             agent_dir,
@@ -1083,11 +1149,12 @@ class CollaborativeMultiAgentOrchestrator:
         )
 
     def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
-        self._ensure_agent_number_progress(agent_id)
+        print(f"[{agent_id}] Starting new agent...")
+        self._ensure_agent_number_progress(agent_id, write=False)
         agent_dir = self._agent_dir(agent_id)
-        record = self._register_agent(agent_id)
-        if record.get("status") != "in_progress":
-            self._update_agent_record(agent_id, status="in_progress", last_generation=0)
+        record = self._register_agent(agent_id, write=False)
+        if record.status != "in_progress":
+            self._update_agent_record(agent_id, status="in_progress", last_generation=0, write=False)
         warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
         return AgentTask(
@@ -1098,29 +1165,30 @@ class CollaborativeMultiAgentOrchestrator:
             personality_prompt=personality_prompt,
         )
 
-    def _build_resume_agent_task(self, record: Dict[str, Any]) -> AgentTask:
+    def _build_resume_agent_task(self, record: AgentRecord) -> AgentTask:
+        print(f"[{record.agent_id}] Resuming agent from previous state...")
         self._hydrate_agent_record_from_disk(record)
-        agent_id = record["agent_id"]
-        agent_dir = self._agent_dir(agent_id)
+        agent_id = record.agent_id
+        # agent_dir = self._agent_dir(agent_id)
         agent_index = self._parse_agent_index(agent_id) or 0
         warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
-        last_generation = _safe_int(record.get("last_generation"), default=0)
-        self._update_agent_record(
-            agent_id,
-            status="in_progress",
-            resumed_at=datetime.now().isoformat(),
-            last_generation=last_generation,
-        )
+        # last_generation = record.last_generation
+        # self._update_agent_record(
+        #     agent_id,
+        #     status="in_progress",
+        #     resumed_at=datetime.now().isoformat(),
+        #     last_generation=last_generation,
+        # )
         return AgentTask(
             agent_id=agent_id,
             agent_index=agent_index,
             resume=True,
             warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
-            branching_decision=record.get("branching_decision"),
-            favorite_selection=record.get("favorite_selection"),
-            archive_entry=record.get("archive_entry"),
+            branching_decision=record.branching_decision,
+            favorite_selection=record.favorite_selection,
+            archive_entry=record.archive_entry,
         )
 
     def _prepare_parallel_tasks(
@@ -1137,7 +1205,7 @@ class CollaborativeMultiAgentOrchestrator:
         scheduled: Set[str] = set()
         if resume and resume_agent_id and resume_agent_id in target_ids:
             record = self._find_agent_record(resume_agent_id)
-            if record and record.get("status") not in {"complete", "extinct", "stopped"}:
+            if record and record.status not in {"complete", "extinct", "stopped"}:
                 pending.append(self._build_resume_agent_task(record))
                 scheduled.add(resume_agent_id)
         for index in target_indices:
@@ -1145,7 +1213,7 @@ class CollaborativeMultiAgentOrchestrator:
             if agent_id in scheduled:
                 continue
             record = self._find_agent_record(agent_id)
-            if record is not None and record.get("status") in {"complete", "extinct", "stopped"}:
+            if record is not None and record.status in {"complete", "extinct", "stopped"}:
                 continue
             if record is not None:
                 task = self._build_resume_agent_task(record)
@@ -1153,6 +1221,7 @@ class CollaborativeMultiAgentOrchestrator:
                 task = self._build_new_agent_task(agent_id, index)
             pending.append(task)
             scheduled.add(agent_id)
+        self._write_metadata_file(self._metadata)
         return pending
 
     def _run_new_agent(self, agent_id: Optional[str] = None) -> None:
@@ -1191,7 +1260,7 @@ class CollaborativeMultiAgentOrchestrator:
         if record is None:
             return False
         self._hydrate_agent_record_from_disk(record)
-        agent_id = record["agent_id"]
+        agent_id = record.agent_id
         agent_dir = self._agent_dir(agent_id)
         population, checkpoint_path = self._load_population_for_agent(agent_dir)
         if population is not None and checkpoint_path is not None:
@@ -1201,7 +1270,7 @@ class CollaborativeMultiAgentOrchestrator:
             print(f"[{agent_id}] Resume requested without checkpoint; restarting agent workflow.")
             config = self._build_config()
         runner = self._build_runner(agent_id, agent_dir, config, population, resume=True)
-        decision = record.get("branching_decision")
+        decision = record.branching_decision
         if decision is None:
             decision = runner.select_starting_point()
             runner.initialise_population(decision)
@@ -1211,10 +1280,10 @@ class CollaborativeMultiAgentOrchestrator:
             runner.branching_decision = decision
             if population is None:
                 runner.initialise_population(decision)
-        favorite_selection = record.get("favorite_selection")
+        favorite_selection = record.favorite_selection
         if favorite_selection is not None:
             runner.favorite_decision = favorite_selection
-        archive_entry_dict = record.get("archive_entry")
+        archive_entry_dict = record.archive_entry
         if archive_entry_dict is not None:
             try:
                 entry = ArchiveEntry.from_dict(archive_entry_dict)
@@ -1475,14 +1544,7 @@ def _execute_runner_in_worker(
         except AgentRestartRequested:
             decision = runner.apply_pending_restart()
             if decision is not None:
-                task_conn.send(
-                    {
-                        "type": "branching_decision",
-                        "agent_id": agent_id,
-                        "decision": decision,
-                        "restart": True,
-                    }
-                )
+                task_conn.send(asdict(BranchingDecisionMessage(agent_id=agent_id, decision=decision, restart=True)))
             remaining = max(0, runner.generations - runner.population.generation)
             continue
     archive_entry = runner.favorite_archive_entry
@@ -1683,13 +1745,14 @@ def _execute_agent_task(
     ) -> None:
         nonlocal last_archive_entry_id
         task_conn.send(
-            {
-                "type": "progress",
-                "agent_id": task.agent_id,
-                "generation": generation,
-                "favorite": favorite_payload,
-                "archive": archive_payload,
-            }
+            asdict(
+                ProgressMessage(
+                    agent_id=task.agent_id,
+                    generation=generation,
+                    favorite=favorite_payload,
+                    archive=archive_payload,
+                )
+            )
         )
         entry_id: Optional[str] = None
         if archive_payload and isinstance(archive_payload, dict):
@@ -1751,13 +1814,7 @@ def _execute_agent_task(
         decision = runner.select_starting_point()
         runner.initialise_population(decision)
         runner.branching_decision = decision
-        task_conn.send(
-            {
-                "type": "branching_decision",
-                "agent_id": task.agent_id,
-                "decision": decision,
-            }
-        )
+        task_conn.send(asdict(BranchingDecisionMessage(agent_id=task.agent_id, decision=decision)))
 
     favorite, archive_entry, extinct, final_generation, quit_requested, quit_reason = _execute_runner_in_worker(
         task.agent_id,
@@ -1767,20 +1824,18 @@ def _execute_agent_task(
 
     archive_payload = archive_entry.as_dict() if isinstance(archive_entry, ArchiveEntry) else None
 
-    # if archive_entry is not None:
-    #     _maybe_trigger_auto_rating_after_publish(cfg, archive_client, task_conn)
-
-    return {
-        "type": "job_complete",
-        "agent_id": task.agent_id,
-        "favorite": favorite,
-        "archive_entry": archive_payload,
-        "extinct": extinct,
-        "final_generation": final_generation,
-        "branching_decision": runner.branching_decision,
-        "quit_requested": quit_requested,
-        "quit_reason": quit_reason,
-    }
+    return asdict(
+        JobCompleteMessage(
+            agent_id=task.agent_id,
+            favorite=favorite,
+            archive_entry=archive_payload,
+            extinct=extinct,
+            final_generation=final_generation,
+            branching_decision=runner.branching_decision,
+            quit_requested=quit_requested,
+            quit_reason=quit_reason,
+        )
+    )
 
 
 def _continual_agent_worker(

@@ -87,6 +87,7 @@ class ArchiveEntry:
     source_entry_ids: List[str] = field(default_factory=list)
     ancestor_genome_keys: List[int] = field(default_factory=list)
     color_enabled: bool = False
+    n_published_children: int = 0
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -109,6 +110,7 @@ class ArchiveEntry:
             "source_entry_ids": list(self.source_entry_ids),
             "ancestor_genome_keys": list(self.ancestor_genome_keys),
             "color_enabled": bool(self.color_enabled),
+            "n_published_children": int(self.n_published_children),
         }
 
     @classmethod
@@ -133,6 +135,8 @@ class ArchiveEntry:
             color_enabled = lowered in {"1", "true", "yes", "on"}
         else:
             color_enabled = bool(color_raw)
+        children_raw = payload.get("n_published_children", 0)
+        n_published_children = int(children_raw)
 
         return cls(
             entry_id=payload["id"],
@@ -154,6 +158,7 @@ class ArchiveEntry:
             ],
             ancestor_genome_keys=_ensure_int_list(payload.get("ancestor_genome_keys", [])),
             color_enabled=color_enabled,
+            n_published_children=n_published_children,
         )
 
 
@@ -183,8 +188,6 @@ class ArchiveManager:
         if self.metadata_file.exists():
             with self.metadata_file.open("r", encoding="utf-8") as fp:
                 self._metadata = json.load(fp)
-            for entry in self._metadata.get("entries", []):
-                entry.setdefault("title", "")
         else:
             self._metadata = {
                 "created_at": datetime.now().isoformat(),
@@ -193,9 +196,32 @@ class ArchiveManager:
                 "goal_prompt": self.goal_prompt,
             }
             self._persist()
+            return
 
     def _persist(self) -> None:
         atomic_write_json(self.metadata_file, self._metadata)
+
+    def _increment_parent_child_counts(self, parent_entry_ids: Sequence[str]) -> bool:
+        """Increment child counters for the given parent entry IDs."""
+        if not parent_entry_ids:
+            return False
+        parent_ids = {str(value or "").strip() for value in parent_entry_ids if str(value or "").strip()}
+        if not parent_ids:
+            return False
+
+        changed = False
+        for entry in self._metadata.get("entries", []):
+            entry_id = str(entry.get("id") or "")
+            if entry_id not in parent_ids:
+                continue
+            current_raw = entry.get("n_published_children", 0)
+            try:
+                current_value = int(current_raw)
+            except (TypeError, ValueError):
+                current_value = 0
+            entry["n_published_children"] = current_value + 1
+            changed = True
+        return changed
 
     def refresh(self) -> None:
         """Reload metadata from disk to incorporate external updates."""
@@ -223,23 +249,26 @@ class ArchiveManager:
         *,
         best_new_count: int = 25,
         best_new_window_multiplier: int = 10,
+        most_branched_count: int = 25,
         newest_count: Optional[int] = None,
     ) -> Tuple[
         List[Dict[str, Any]],
         List[Dict[str, Any]],
         List[Dict[str, Any]],
         List[Dict[str, Any]],
+        List[Dict[str, Any]],
     ]:
-        """Return top-rated, best-new, newest, and random subsets for branching."""
+        """Return top-rated, best-new, most-branched, newest, and random subsets for branching."""
         self.refresh()
         entries = list(self._metadata.get("entries", []))
         if not entries:
-            return [], [], [], []
+            return [], [], [], [], []
 
         newest_limit = best_new_count if newest_count is None else newest_count
         top_limit = max(0, int(top_count))
         random_limit = max(0, int(random_count))
         best_new_limit = max(0, int(best_new_count))
+        most_branched_limit = max(0, int(most_branched_count))
         newest_limit = max(0, int(newest_limit))
         window_multiplier = max(1, int(best_new_window_multiplier))
 
@@ -273,6 +302,12 @@ class ArchiveManager:
             else:
                 added_at = datetime.min
 
+            children_raw = entry.get("n_published_children", 0)
+            try:
+                published_children = int(children_raw)
+            except (TypeError, ValueError):
+                published_children = 0
+
             entry_id_raw = entry.get("id")
             entry_key = str(entry_id_raw) if entry_id_raw not in (None, "") else f"__idx_{idx}"
 
@@ -284,11 +319,12 @@ class ArchiveManager:
                     "count": rating_count,
                     "added_at": added_at,
                     "key": entry_key,
+                    "children": published_children,
                 }
             )
 
         if not entry_infos:
-            return [], [], [], []
+            return [], [], [], [], []
 
         def _decorate(info: Dict[str, Any]) -> Dict[str, Any]:
             payload = copy.deepcopy(info["entry"])
@@ -296,6 +332,7 @@ class ArchiveManager:
             payload["_average_rating"] = info["avg"] if math.isfinite(info["avg"]) else None
             payload["_rating_count"] = info["count"]
             payload["_added_at"] = info["added_at"].isoformat()
+            payload["_published_children"] = info["children"]
             return payload
 
         used_keys: Set[str] = set()
@@ -325,6 +362,21 @@ class ArchiveManager:
                 best_new_infos = window[:best_new_limit]
                 used_keys.update(info["key"] for info in best_new_infos)
 
+        # Most branched subset: highest child counts among remaining entries
+        most_branched_infos: List[Dict[str, Any]] = []
+        if most_branched_limit > 0:
+            remaining_infos = _remaining_infos()
+            if remaining_infos:
+                branched_pool = [info for info in remaining_infos if info["children"] > 0]
+                if branched_pool:
+                    random.shuffle(branched_pool)
+                    branched_pool.sort(
+                        key=lambda info: (info["children"], info["avg"], info["count"]),
+                        reverse=True,
+                    )
+                    most_branched_infos = branched_pool[:most_branched_limit]
+                    used_keys.update(info["key"] for info in most_branched_infos)
+
         # Newest subset: newest remaining entries regardless of rating
         newest_infos: List[Dict[str, Any]] = []
         if newest_limit > 0:
@@ -346,10 +398,11 @@ class ArchiveManager:
 
         top_subset = [_decorate(info) for info in top_infos]
         best_new_subset = [_decorate(info) for info in best_new_infos]
+        most_branched_subset = [_decorate(info) for info in most_branched_infos]
         newest_subset = [_decorate(info) for info in newest_infos]
         random_subset = [_decorate(info) for info in random_infos]
 
-        return top_subset, best_new_subset, newest_subset, random_subset
+        return top_subset, best_new_subset, most_branched_subset, newest_subset, random_subset
 
     def prepare_rating_batch(self, limit: int) -> List[Dict[str, str]]:
         if limit <= 0:
@@ -567,6 +620,7 @@ class ArchiveManager:
         entries_list = self._metadata.setdefault("entries", [])
         entries_list.append(archive_entry.as_dict())
 
+        self._increment_parent_child_counts(archive_entry.source_entry_ids)
         self._persist()
         self.create_archive_grid(self.thumb_size)
         # self._write_checkpoint(archive_entry)

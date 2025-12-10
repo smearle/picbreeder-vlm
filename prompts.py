@@ -2,8 +2,11 @@ from typing import Optional
 
 
 GOAL_PROMPTS = {
+    "none": "",
+    "debug": "You are debugging the system. If you are the first agent (and see no initial archive), just publish something random then quit. If you see an archive, run for one generation (either branching from the archive or starting fresh), then restart, branching from something (preferrably different) from the archive. ",
+    "explore": "Your goal is to gain an intuitive understanding of the system's expressive capabilities and explore the space of possible images as broadly as possible. ",
     "familiar_objects": "Your goal is to evolve images that resemble familiar real-world objects.",
-    "familiar_objects_realistic": "Your goal is to evolve images that resemble familiar real-world objects, as vividly and photorealistically as possible.",
+    "familiar_objects_realistic": "Your goal is to evolve images that resemble realistic, familiar real-world objects.",
     "fun": "Your goal is to have fun.",
     "unfamiliar_objects": "Your goal is to evolve images that resemble unfamiliar objects that may or may not exist.",
     "lizards": "Your goal is to evolve images that resemble lizards.",
@@ -14,10 +17,10 @@ GOAL_PROMPTS = {
     "flowers": "Your goal is to evolve images that resemble flowers.",
 }
 
-DEBUG_PROMPT = (
-    "(Also, for debugging, please tell me how many previous grids/populations you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
-    "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
-)
+# DEBUG_PROMPT = (
+#     "(Also, for debugging, please tell me how many previous grids/populations you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
+#     "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
+# )
 
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You are playing with a collaborative online platform which allows users to interactively evolve small neural networks called Compositional Pattern Producing Networks (CPPNs) for generating images. "
@@ -32,7 +35,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "Your session can last up to {n_generations} generations, but you may end early whenever you feel finished. "
     "You should publish no more than once every 20 generations or so. "
     "You do not *need* to publish. This is an open-ended, exploratory process that may or may not lead to publishable results. "
-    "It's better to contribute nothing than to contribute garbage. "
+    # "It's better to contribute nothing than to contribute garbage. "
     "If you ever want to abandon the current evolutionary trajectory, include a `\"restart\"` object in your JSON. "
     '{{"restart": {{"mode": "fresh"}}}} seeds a brand-new random population, while {{"restart": {{"mode": "branch", "selected": [archive_indices]}}}} branches directly from the archive images (omit \"selected\" to re-open the archive and pick at the next step). '
     "Respond with JSON only: {{\"selected\": [indices]{selection_json_suffix}}}. "

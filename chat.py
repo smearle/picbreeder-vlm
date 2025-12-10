@@ -185,18 +185,23 @@ def select_parents_from_grid(
     view_index: Optional[int] = None,
     metadata_subdir: Optional[str] = None,
     image_path_map: Optional[Dict[int, Union[str, Path]]] = None,
+    log_raw_response: bool = False,
+    raw_response_dir: Optional[Path] = None,
+    run_label: str = "",
 ) -> Dict[str, Any]:
 
     query_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_view_{view_index:02d}" if view_index is not None else ""
+    name_prefix = f"{run_label}_" if run_label else ""
 
     metadata_dir = query_dir / "metadata"
     if metadata_subdir:
         metadata_dir = metadata_dir / metadata_subdir
     metadata_dir.mkdir(parents=True, exist_ok=True)
+    raw_response_output_dir = raw_response_dir or (metadata_dir / "raw_responses")
     parts_dir: Optional[Path] = None
     if image_path_map is None:
-        parts_dir = metadata_dir / "parts" / f"gen_{generation:03d}{suffix}"
+        parts_dir = metadata_dir / "parts" / f"{name_prefix}gen_{generation:03d}{suffix}"
         parts_dir.mkdir(parents=True, exist_ok=True)
 
     image_caption_pairs: List[im_query.ImageCaptionInput] = []
@@ -270,6 +275,14 @@ def select_parents_from_grid(
         prompt_feedback_details = response_diagnostics.get("prompt_feedback") if isinstance(response_diagnostics.get("prompt_feedback"), dict) else None
         block_reason = prompt_feedback_details.get("block_reason") if prompt_feedback_details else None
         response_text = getattr(response, "text", "") or ""
+        if log_raw_response:
+            raw_response_output_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            raw_filename = raw_response_output_dir / f"{name_prefix}gen_{generation:03d}_attempt_{attempt:02d}_{timestamp}.txt"
+            try:
+                raw_filename.write_text(response_text, encoding="utf-8")
+            except OSError:
+                pass
         parse_result = extract_json_object(response_text)
 
         error_reason: Optional[str] = None
@@ -319,6 +332,7 @@ def select_parents_from_grid(
                 or parsed.get("quit_rationale")
                 or parsed.get("quit_message")
             )
+            restart_requested = parsed.get("restart") is not None
             if color_toggle_requested:
                 cleaned = []
             if (
@@ -327,6 +341,7 @@ def select_parents_from_grid(
                 and not cleaned
                 and not color_toggle_requested
                 and not quit_requested_candidate
+                and not restart_requested
             ):
                 error_reason = "Response did not contain any valid selection indices."
             color_toggle_only = error_reason is None and color_toggle_requested
@@ -358,7 +373,7 @@ def select_parents_from_grid(
         if response_diagnostics:
             error_payload["response_diagnostics"] = response_diagnostics
 
-        error_path = errors_dir / f"gen_{generation:03d}_attempt_{attempt:02d}.json"
+        error_path = errors_dir / f"{name_prefix}gen_{generation:03d}_attempt_{attempt:02d}.json"
         error_path.write_text(json.dumps(error_payload, indent=2), encoding="utf-8")
 
         last_error_reason = error_reason
@@ -402,6 +417,13 @@ def select_parents_from_grid(
                     "It is safe to provide the requested JSON response describing which indices to explore next.",
                 ]
             )
+            if block_reason == "OTHER" and not response_text.strip():
+                correction_instructions.extend(
+                    [
+                        "Your last reply came back empty because the model reported it was blocked for an OTHER reason.",
+                        "If this happens again, it may be best to ask to quit the session so we can stop here.",
+                    ]
+                )
 
         if block_reason:
             time.sleep(min(2.0 * attempt, 6.0))
@@ -457,13 +479,15 @@ def select_parents_from_grid(
         "response_latencies_sec": attempt_latencies,
         "quit": quit_requested,
         "quit_reason": (str(quit_reason_value).strip() if quit_reason_value else None),
+        "restart": parsed.get("restart"),
+        "run_label": run_label or None,
     }
 
     return metadata
 
 
 _METADATA_FILENAME_PATTERN = re.compile(
-    r"gen_(\d+)(?:_view_(\d+))?_selection\.json$",
+    r"(?:branch_\d+_)?gen_(\d+)(?:_view_(\d+))?_selection\.json$",
     re.IGNORECASE,
 )
 
@@ -511,7 +535,7 @@ def _iter_query_metadata(query_dir: Path) -> List[Tuple[int, Dict[str, Any], Pat
 
     interim: List[Tuple[int, Optional[int], Dict[str, Any], Path]] = []
     for directory in candidate_dirs:
-        for meta_path in sorted(directory.glob("gen_*_selection.json")):
+        for meta_path in sorted(directory.glob("*gen_*_selection.json")):
             match = _METADATA_FILENAME_PATTERN.match(meta_path.name)
             generation_value: Optional[int]
             view_index: Optional[int]

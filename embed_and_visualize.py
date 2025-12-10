@@ -374,7 +374,8 @@ def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path):
 
     grid_positions = np.rint(np.asarray(grid_points, dtype=float)).astype(int)
 
-    fig, axes = plt.subplots(rows, cols, figsize=(rows, cols))
+    # Use width=cols and height=rows so each subplot is approximately square.
+    fig, axes = plt.subplots(rows, cols, figsize=(cols, rows))
 
     if rows == 1 and cols == 1:
         axes = np.array([[axes]])
@@ -399,7 +400,8 @@ def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path):
         try:
             with Image.open(image_paths[idx]) as img:
                 img_rgb = img.convert("RGB")
-            ax.imshow(img_rgb, aspect="auto")
+            ax.imshow(img_rgb)
+            ax.set_aspect("equal")
         except Exception:
             continue
 
@@ -555,16 +557,16 @@ def main(cfg: EmbedVisualizeConfig) -> None:
     print(f"Reducing to 2D using {validated_cfg.method}...")
     coords = reduce_embeddings(embeddings, method=validated_cfg.method)
 
-    viz_out = exp_dir / f"embed_viz_{validated_cfg.method}.png"
+    viz_out = exp_dir / f"embed_viz_{validated_cfg.method}.pdf"
     print(f"Creating visualization (thumbnails limit={validated_cfg.thumbs_limit}) -> {viz_out}")
     plot_coords(coords, list(image_paths), viz_out, thumbs_limit=validated_cfg.thumbs_limit)
 
     grid_assignments, grid_bounds = layout_embeddings_to_grid(coords)
-    grid_out = exp_dir / f"embed_grid_{validated_cfg.method}.png"
+    grid_out = exp_dir / f"embed_grid_{validated_cfg.method}.pdf"
     print(f"Rendering grid approximation -> {grid_out}")
     render_grid(grid_assignments, grid_bounds, image_paths, grid_out)
 
-    rect_grid_out = exp_dir / f"embed_grid_rect_{validated_cfg.method}.png"
+    rect_grid_out = exp_dir / f"embed_grid_rect_{validated_cfg.method}.pdf"
     print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
     render_rectangular_grid(coords, image_paths, rect_grid_out)
 
