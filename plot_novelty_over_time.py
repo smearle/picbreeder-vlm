@@ -234,7 +234,6 @@ def plot_mpd_trajectory(results, outpath: Path):
 
     sum_axis = axes[1].twinx()
     sum_axis.plot(sum_steps, sum_vals, color="#ff7f0e", linewidth=1.5, linestyle="--", label="Cumulative min distance")
-    breakpoint()
     sum_axis.set_ylabel("Cumulative min distance")
 
     handles, labels = axes[1].get_legend_handles_labels()

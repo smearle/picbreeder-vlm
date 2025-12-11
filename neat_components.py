@@ -1,7 +1,9 @@
 import gzip
 import math
+import os
 import pickle
 import random
+import tempfile
 from itertools import count
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -11,6 +13,7 @@ from neat.graphs import creates_cycle
 from neat.reporting import BaseReporter
 
 CHECKPOINT_SUFFIX = "_checkpoint.pkl.gz"
+LATEST_POPULATION_FILENAME = "latest.pkl.gz"
 
 
 def _identity(z: float) -> float:
@@ -88,6 +91,8 @@ def apply_picbreeder_config_defaults(
         "sin",
         "sigmoid",
         "gaussian",
+        "cos",
+        "identity",
     ]
     genome_config.activation_default = "random"
     genome_config.aggregation_default = "sum"
@@ -828,10 +833,11 @@ class InteractiveStagnation:
 
 
 class GenerationCheckpointer(BaseReporter):
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, latest_filename: str = LATEST_POPULATION_FILENAME):
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.current_generation: Optional[int] = None
+        self.latest_path = self.output_dir / latest_filename
 
     def start_generation(self, generation: int) -> None:
         self.current_generation = generation
@@ -840,10 +846,20 @@ class GenerationCheckpointer(BaseReporter):
         if self.current_generation is None:
             return
         next_generation = self.current_generation + 1
-        filename = self.output_dir / f"gen_{next_generation:03d}{CHECKPOINT_SUFFIX}"
-        with gzip.open(filename, "wb", compresslevel=5) as handle:
-            data = (next_generation, config, population, species_set, random.getstate())
-            pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            prefix="latest_population_",
+            suffix=".tmp",
+            dir=str(self.output_dir),
+        )
+        os.close(tmp_fd)
+        tmp_path = Path(tmp_name)
+        try:
+            with gzip.open(tmp_path, "wb", compresslevel=5) as handle:
+                data = (next_generation, config, population, species_set, random.getstate())
+                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp_path.replace(self.latest_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
 
 def seed_initial_population(population, genome_config) -> None:

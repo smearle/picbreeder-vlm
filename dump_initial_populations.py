@@ -1,10 +1,12 @@
-
+import os
 from pathlib import Path
+import time
 
 import hydra
 import neat
 
 from artifacts import render_genome_images, save_neat_genome_diagrams
+import config
 from neat_components import InteractiveStagnation, PicbreederGenome, apply_picbreeder_config_defaults, seed_initial_population, sync_population_output_activations
 from picbreeder_reproduction import PicbreederReproduction
 from rendering import create_numbered_grid
@@ -52,29 +54,32 @@ def dump_initial_populations(
         population_dir = output_dir / f"population_{index:03d}"
         # save_neat_population(state, population_dir, 0, png_cache)
 
-        states, _ = render_genome_images(
+        gray_images, color_images = render_genome_images(
             genomes,
             config,
-            0,
-            rows,
-            cols,
             thumb_size,
-            variant="both",
         )
-        for k, state in states.items():
-            grid_image = create_numbered_grid(state)
-            grid_path = output_dir / f"pop-{index:03d}_{k}.png"
-            grid_image.save(grid_path, format="PNG")
+        for scheme, images in ("gray", gray_images), ("color", color_images):
+            grid_image = create_numbered_grid(
+                images,
+                rows,
+                cols,
+                thumb_size,
+            )
+            grid_path = Path(f"{population_dir}_pop-{index:03d}_{scheme}.png")
+            grid_path.parent.mkdir(parents=True, exist_ok=True)
+            grid_image.save(grid_path, format="PNG")                        
 
         save_neat_genome_diagrams(genomes, config, population_dir, 0)
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="collaborative_base")
-def main():
+def main(cfg):
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
     dump_initial_populations(
         count=10,
-        output_dir=Path("initial_populations"),
-        config_path=Path("configs/interactive_config_color.ini"),
+        output_dir=Path(os.path.join("initial_populations", timestamp)),
+        config_path=Path("picture2d/interactive_config_color"),
         rows=3,
         cols=5,
         thumb_size=200,

@@ -22,7 +22,7 @@ from artifacts import render_genome_images, save_neat_genome_diagrams
 from chat import GeminiPromptBlockedError, extract_json_object, query_with_history, reset_chat_session, restore_chat_history_from_metadata, select_parents_from_grid, summarize_genome_structure
 from config import CollaborativeConfig
 from constants import DEFAULT_BASELINE_SELECTION_LIMIT
-from neat_components import CHECKPOINT_SUFFIX, GenerationCheckpointer, seed_initial_population, sync_population_node_indexer, sync_population_output_activations
+from neat_components import GenerationCheckpointer, LATEST_POPULATION_FILENAME, seed_initial_population, sync_population_node_indexer, sync_population_output_activations
 from prompts import ARCHIVE_BRANCHING_PROMPT, ARCHIVE_NOVELTY_PROMPT, COLOR_PROMPT, GOAL_PROMPTS, MUTATION_STRENGTH_PROMPT, PARENT_SELECTION_PROMPT, DEFAULT_SYSTEM_INSTRUCTION, gen_selection_prompt
 from rendering import _draw_dotted_rectangle, create_numbered_grid
 from utils import _ensure_int_list, relative_suffix_after_dir
@@ -462,9 +462,9 @@ class AgentRunner:
 
     def _write_generation_checkpoint(self, next_generation: int) -> Path:
         self.population_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_path = self.population_dir / f"gen_{next_generation:03d}{CHECKPOINT_SUFFIX}"
+        checkpoint_path = self.population_dir / LATEST_POPULATION_FILENAME
         fd, tmp_name = tempfile.mkstemp(
-            prefix=checkpoint_path.name,
+            prefix="latest_population_",
             suffix=".tmp",
             dir=str(self.population_dir),
         )
@@ -484,6 +484,54 @@ class AgentRunner:
         finally:
             tmp_path.unlink(missing_ok=True)
         return checkpoint_path
+
+    def _save_selected_genomes(
+        self,
+        generation: int,
+        genomes: List[Tuple[int, neat.DefaultGenome]],
+        selected_indices: Sequence[int],
+    ) -> None:
+        if not selected_indices:
+            return
+
+        selected_payload: List[Dict[str, Any]] = []
+        for idx in selected_indices:
+            if not (0 <= idx < len(genomes)):
+                continue
+            genome_key, genome = genomes[idx]
+            lineage_record = self._genome_lineage.get(genome_key, {})
+            selected_payload.append(
+                {
+                    "grid_index": idx,
+                    "genome_key": genome_key,
+                    "genome": copy.deepcopy(genome),
+                    "parents": lineage_record.get("parents"),
+                    "source_entry_ids": lineage_record.get("source_entries"),
+                    "ancestor_genome_keys": lineage_record.get("ancestor_keys"),
+                }
+            )
+
+        if not selected_payload:
+            return
+
+        snapshot = {
+            "generation": generation,
+            "selected": selected_payload,
+        }
+        target_path = self.population_dir / f"selected_gen_{generation:03d}.pkl.gz"
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=target_path.name,
+            suffix=".tmp",
+            dir=str(self.population_dir),
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        try:
+            with gzip.open(tmp_path, "wb", compresslevel=5) as handle:
+                pickle.dump(snapshot, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp_path.replace(target_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
     # Population initialisation and branching
@@ -1249,6 +1297,7 @@ class AgentRunner:
         print(f"Saved selection grid to {selection_path}")
         self._generation_records[generation_i] = record
         self._log_generation_lineage(generation_i, genomes)
+        self._save_selected_genomes(generation_i, genomes, selected_indices)
 
         publish_payload = None
         if self.selection_baseline == "none":

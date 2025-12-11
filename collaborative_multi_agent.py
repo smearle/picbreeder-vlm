@@ -57,6 +57,7 @@ from archive_manager import (
 )
 from neat_components import (
     CHECKPOINT_SUFFIX,
+    LATEST_POPULATION_FILENAME,
     InteractiveStagnation,
     PicbreederGenome,
     apply_picbreeder_config_defaults,
@@ -85,6 +86,10 @@ from im_query import query_images_with_captions
 
 
 def find_latest_checkpoint(population_dir: Path) -> Optional[Path]:
+    latest_path = population_dir / LATEST_POPULATION_FILENAME
+    if latest_path.exists():
+        return latest_path
+    # TODO: Remove this. For backward compatibility only.
     pattern = f"gen_*{CHECKPOINT_SUFFIX}"
     candidates = sorted(population_dir.glob(pattern))
     if not candidates:
@@ -347,30 +352,6 @@ class CollaborativeMultiAgentOrchestrator:
         serializable["agents"] = {agent_id: asdict(entry) if isinstance(entry, AgentRecord) else entry for agent_id, entry in agents.items()}
         atomic_write_json(self.metadata_path, serializable)
 
-    # def _ensure_metadata_defaults(self, metadata: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
-    #     changed = False
-    #     metadata.setdefault("agents", [])
-    #     metadata.setdefault("next_agent_number", 0)
-    #     metadata.setdefault("run_config", None)
-    #     if self.seed is not None and metadata.get("seed") != self.seed:
-    #         metadata["seed"] = self.seed
-    #         changed = True
-    #     elif self.seed is None and metadata.get("seed") is not None:
-    #         self.seed = metadata.get("seed")
-    #     agents: List[AgentRecord] = []
-    #     for entry in metadata["agents"]:
-    #         if isinstance(entry, AgentRecord):
-    #             agent_record = entry
-    #         else:
-    #             agent_record = AgentRecord(**entry)
-    #             changed = True
-    #         if agent_record.status == "in_progress" and agent_record.completed_at:
-    #             agent_record.status = "complete"
-    #             changed = True
-    #         agents.append(agent_record)
-    #     metadata["agents"] = agents
-    #     return metadata, changed
-
     def _reload_metadata(self) -> Dict[str, Any]:
         if self.metadata_path.exists():
             metadata = self._read_metadata_file()
@@ -380,16 +361,20 @@ class CollaborativeMultiAgentOrchestrator:
         self._metadata = metadata
         return metadata
 
-    def _mutate_metadata(self, mutator: Callable[[Dict[str, Any]], Any], write: bool = True) -> Any:
-        if self.metadata_path.exists():
-            metadata = self._read_metadata_file()
+    def _mutate_metadata(self, mutator: Callable[[Dict[str, Any]], Any], read_write: bool = True) -> Any:
+        if read_write:
+            if self.metadata_path.exists():
+                metadata = self._read_metadata_file()
+            else:
+                metadata = self._default_metadata()
         else:
-            metadata = self._default_metadata()
+            metadata = self._metadata
         # metadata, _ = self._ensure_metadata_defaults(metadata)
         result = mutator(metadata)
-        if write:
+        if read_write:
             self._write_metadata_file(metadata)
         self._metadata = metadata
+        # print(self._metadata['agents'])
         return result
 
     def _ensure_run_config(self) -> None:
@@ -440,7 +425,7 @@ class CollaborativeMultiAgentOrchestrator:
                 for key, value in missing:
                     details.setdefault(key, value)
 
-            self._mutate_metadata(mutator)
+            self._mutate_metadata(mutator, read_write=True)
             existing = self._metadata.get("run_config")
         mismatches = {
             key: (existing.get(key), value) for key, value in run_config.items() if existing.get(key) != value
@@ -557,7 +542,7 @@ class CollaborativeMultiAgentOrchestrator:
     def _agent_dir(self, agent_id: str) -> Path:
         return self.agents_dir / agent_id
 
-    def _ensure_agent_number_progress(self, agent_id: str, write: bool) -> None:
+    def _ensure_agent_number_progress(self, agent_id: str, read_write: bool) -> None:
         index = self._parse_agent_index(agent_id)
         if index is None:
             raise ValueError(f"Invalid agent identifier '{agent_id}'.")
@@ -565,7 +550,7 @@ class CollaborativeMultiAgentOrchestrator:
         def mutator(metadata: Dict[str, Any]) -> None:
             metadata["next_agent_number"] = max(metadata.get("next_agent_number", 0), index + 1)
 
-        self._mutate_metadata(mutator, write=write)
+        self._mutate_metadata(mutator, read_write=read_write)
 
     def _is_warm_start_agent(self, agent_id: str) -> bool:
         if self.warm_start_structure <= 0:
@@ -578,7 +563,7 @@ class CollaborativeMultiAgentOrchestrator:
         record: AgentRecord = agents.get(agent_id, None)
         return record
 
-    def _register_agent(self, agent_id: str, write: bool) -> AgentRecord:
+    def _register_agent(self, agent_id: str, read_write: bool) -> AgentRecord:
         def mutator(metadata: Dict[str, Any]) -> AgentRecord:
             agents = metadata.setdefault("agents", {})
             for record in agents:
@@ -593,9 +578,9 @@ class CollaborativeMultiAgentOrchestrator:
             agents[agent_id] = record
             return record
 
-        return self._mutate_metadata(mutator, write=write)
+        return self._mutate_metadata(mutator, read_write=read_write)
 
-    def _update_agent_record(self, agent_id: str, write: bool = True, **updates: Any) -> None:
+    def _update_agent_record(self, agent_id: str, read_write: bool = True, **updates: Any) -> None:
         def mutator(metadata: Dict[str, Any]) -> None:
             record = metadata["agents"][agent_id]
             if isinstance(record, AgentRecord):
@@ -604,7 +589,7 @@ class CollaborativeMultiAgentOrchestrator:
             elif isinstance(record, dict):
                 record.update(updates)
 
-        self._mutate_metadata(mutator, write=write)
+        self._mutate_metadata(mutator, read_write=read_write)
 
     def _find_agent_to_resume(
         self,
@@ -1149,12 +1134,12 @@ class CollaborativeMultiAgentOrchestrator:
         )
 
     def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
-        print(f"[{agent_id}] Starting new agent...")
-        self._ensure_agent_number_progress(agent_id, write=False)
+        # print(f"[{agent_id}] Starting new agent...")
+        self._ensure_agent_number_progress(agent_id, read_write=False)
         agent_dir = self._agent_dir(agent_id)
-        record = self._register_agent(agent_id, write=False)
+        record = self._register_agent(agent_id, read_write=False)
         if record.status != "in_progress":
-            self._update_agent_record(agent_id, status="in_progress", last_generation=0, write=False)
+            self._update_agent_record(agent_id, status="in_progress", last_generation=0, read_write=False)
         warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
         return AgentTask(
@@ -1166,7 +1151,7 @@ class CollaborativeMultiAgentOrchestrator:
         )
 
     def _build_resume_agent_task(self, record: AgentRecord) -> AgentTask:
-        print(f"[{record.agent_id}] Resuming agent from previous state...")
+        # print(f"[{record.agent_id}] Resuming agent from previous state...")
         self._hydrate_agent_record_from_disk(record)
         agent_id = record.agent_id
         # agent_dir = self._agent_dir(agent_id)
@@ -1321,6 +1306,11 @@ class CollaborativeMultiAgentOrchestrator:
         queries_dir = agent_dir / "queries"
         if queries_dir.exists():
             shutil.rmtree(queries_dir, ignore_errors=True)
+        latest_checkpoint = agent_dir / "populations" / LATEST_POPULATION_FILENAME
+        try:
+            latest_checkpoint.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _finalize_agent(
         self,
