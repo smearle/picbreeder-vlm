@@ -31,12 +31,12 @@ try:
 except Exception as exc:  # pragma: no cover - import guard
     raise RuntimeError("open_clip import failed. Is `open_clip_torch` installed?") from exc
 
-from config import CollaborativeConfig, ensure_valid_config
+from config import PicbreederConfig, ensure_valid_config
 from utils import _ensure_absolute
 
 
 @dataclass
-class NounSimilarityConfig(CollaborativeConfig):
+class NounSimilarityConfig(PicbreederConfig):
     noun_file: Path = Path("nounlist.txt")
     model: str = "ViT-H-14"
     pretrained: str = "laion2b_s32b_b79k"

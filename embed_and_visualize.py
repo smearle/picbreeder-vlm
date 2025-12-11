@@ -43,7 +43,7 @@ import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import rasterfairy
 
-from config import CollaborativeConfig, ensure_valid_config
+from config import PicbreederConfig, ensure_valid_config
 
 
 
@@ -65,7 +65,7 @@ _RASTERFAIRY_READY = False
 
 
 @dataclass
-class EmbedVisualizeConfig(CollaborativeConfig):
+class EmbedVisualizeConfig(PicbreederConfig):
     embedding_model: str = "ViT-B-32"
     pretrained: str = "openai"
     method: str = "umap"

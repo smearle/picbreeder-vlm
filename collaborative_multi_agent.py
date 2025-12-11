@@ -41,7 +41,7 @@ import hydra
 from hydra.utils import get_original_cwd
 
 from agent_runner import AgentRunner, AgentQuitRequested, AgentRestartRequested
-from config import CollaborativeConfig, _deserialize_config_for_worker, _serialize_config_for_worker, ensure_valid_config
+from config import PicbreederConfig, _deserialize_config_for_worker, _serialize_config_for_worker, ensure_valid_config
 import personalities
 
 import neat
@@ -249,7 +249,7 @@ class CollaborativeMultiAgentOrchestrator:
 
     def __init__(
         self,
-        config: CollaborativeConfig,
+        config: PicbreederConfig,
         experiment_dir: Path,
         rows: int,
         cols: int,
@@ -1350,7 +1350,7 @@ class CollaborativeMultiAgentOrchestrator:
 
 
 def _build_orchestrator(
-    cfg: CollaborativeConfig,
+    cfg: PicbreederConfig,
     process_index: Optional[int] = None,
 ) -> CollaborativeMultiAgentOrchestrator:
     return CollaborativeMultiAgentOrchestrator(
@@ -1373,7 +1373,7 @@ def _build_orchestrator(
     )
 
 
-def _generate_personalities_for_run(cfg: CollaborativeConfig) -> None:
+def _generate_personalities_for_run(cfg: PicbreederConfig) -> None:
     if cfg.personality_path is None:
         raise ValueError(
             "Personality generation is enabled but no personality path was computed."
@@ -1399,7 +1399,7 @@ def _generate_personalities_for_run(cfg: CollaborativeConfig) -> None:
         )
 
 
-def run(cfg: CollaborativeConfig) -> None:
+def run(cfg: PicbreederConfig) -> None:
     if cfg.generate_personalities and not cfg.resume:
         _generate_personalities_for_run(cfg)
     apply_random_seed(cfg.seed)
@@ -1659,7 +1659,7 @@ def _run_auto_rating_job(
 
 
 def _maybe_trigger_auto_rating_after_publish(
-    cfg: CollaborativeConfig,
+    cfg: PicbreederConfig,
     archive_client: RemoteArchiveClient,
     task_conn: Connection,
 ) -> None:
@@ -1687,7 +1687,7 @@ def _maybe_trigger_auto_rating_after_publish(
 
 def _execute_agent_task(
     task: AgentTask,
-    cfg: CollaborativeConfig,
+    cfg: PicbreederConfig,
     archive_client: RemoteArchiveClient,
     worker_index: int,
     task_conn: Connection,
@@ -1895,7 +1895,7 @@ def _continual_agent_worker(
             pass
 
 @hydra.main(version_base="1.3", config_path=None, config_name="collaborative_base")
-def main(cfg: CollaborativeConfig) -> None:
+def main(cfg: PicbreederConfig) -> None:
     original_cwd = Path(get_original_cwd())
     cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
     os.makedirs(cfg.experiment_dir, exist_ok=True)

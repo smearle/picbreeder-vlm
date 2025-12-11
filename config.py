@@ -12,7 +12,7 @@ from utils import _ensure_absolute
 
 
 @dataclass
-class CollaborativeConfig:
+class PicbreederConfig:
     goal: str = "familiar_objects"
     rows: int = 3  # Rows in the CPPN grid (legacy Picbreeder default)
     cols: int = 5  # Columns in the CPPN grid
@@ -34,6 +34,7 @@ class CollaborativeConfig:
     input_activations: bool = False
     enable_crossover: bool = True  # Toggle Picbreeder-style crossover (CrossoverCombiner)
     selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes
+    rand_select_prob: float = 0.0  # Probability of short-circuiting VLM selection with a random pick
     generate_personalities: bool = False  # Generate persona prompts before agent runs
     personality_path: Optional[Path] = None  # Destination for generated personality JSON
     resume: bool = False  # Resume a previously interrupted experiment
@@ -65,7 +66,7 @@ class CollaborativeConfig:
     )
 
 
-def resolve_neat_config_path(cfg: CollaborativeConfig) -> Path:
+def resolve_neat_config_path(cfg: PicbreederConfig) -> Path:
     if cfg.neat_config_path is not None:
         return Path(cfg.neat_config_path)
     base = REPO_ROOT / "picture2d"
@@ -73,9 +74,13 @@ def resolve_neat_config_path(cfg: CollaborativeConfig) -> Path:
     return base / config_name
 
 
-def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> CollaborativeConfig:
+def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> PicbreederConfig:
     cfg = copy.copy(cfg)
     cfg.selection_baseline = str(cfg.selection_baseline).lower()
+    try:
+        cfg.rand_select_prob = float(cfg.rand_select_prob)
+    except (TypeError, ValueError):
+        raise ValueError("rand-select-prob must be a number") from None
     if cfg.resume_agent_id and not cfg.resume:
         raise ValueError("--resume-agent-id requires --resume")
     if cfg.rows < 1 or cfg.cols < 1:
@@ -94,6 +99,8 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
         raise ValueError("warm-start-structure must be non-negative")
     if cfg.selection_baseline not in SELECTION_BASELINES:
         raise ValueError(f"selection-baseline must be one of {sorted(SELECTION_BASELINES)}")
+    if cfg.rand_select_prob < 0 or cfg.rand_select_prob > 1:
+        raise ValueError("rand-select-prob must be between 0 and 1")
 
     config_path = resolve_neat_config_path(cfg)
     cfg.neat_config_path = config_path
@@ -113,6 +120,8 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
             experiment_name += f"_warmstart{cfg.warm_start_structure}"
         if cfg.selection_baseline != "none":
             experiment_name += f"_baseline-{cfg.selection_baseline}"
+        if cfg.rand_select_prob > 0:
+            experiment_name += f"_randp{cfg.rand_select_prob:g}"
         experiment_name += "_personalities" if cfg.generate_personalities else "_nopersonalities"
         experiment_name += "_norationale" if not cfg.request_rationale else ""
         # experiment_name += f"_{timestamp}"
@@ -150,9 +159,9 @@ def ensure_valid_config(cfg: CollaborativeConfig, *, original_cwd: Path) -> Coll
 
 PATH_FIELDS = {"config_path", "experiment_dir", "personality_path"}
 
-def _serialize_config_for_worker(cfg: CollaborativeConfig) -> Dict[str, Any]:
+def _serialize_config_for_worker(cfg: PicbreederConfig) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
-    for field_def in fields(CollaborativeConfig):
+    for field_def in fields(PicbreederConfig):
         if field_def.name == "hydra":
             continue
         value = getattr(cfg, field_def.name)
@@ -163,17 +172,17 @@ def _serialize_config_for_worker(cfg: CollaborativeConfig) -> Dict[str, Any]:
     return payload
 
 
-def _deserialize_config_for_worker(payload: Dict[str, Any]) -> CollaborativeConfig:
+def _deserialize_config_for_worker(payload: Dict[str, Any]) -> PicbreederConfig:
     kwargs: Dict[str, Any] = {}
-    for field_def in fields(CollaborativeConfig):
+    for field_def in fields(PicbreederConfig):
         if field_def.name == "hydra":
             continue
         value = payload.get(field_def.name)
         if field_def.name in PATH_FIELDS and value is not None:
             value = Path(value)
         kwargs[field_def.name] = value
-    return CollaborativeConfig(**kwargs)
+    return PicbreederConfig(**kwargs)
 
 
 cs = ConfigStore.instance()
-cs.store(name="collaborative_base", node=CollaborativeConfig)
+cs.store(name="collaborative_base", node=PicbreederConfig)

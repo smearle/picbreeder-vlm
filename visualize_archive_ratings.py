@@ -13,13 +13,13 @@ from hydra.conf import HelpConf, HydraConf
 from hydra.core.config_store import ConfigStore
 from hydra.utils import get_original_cwd
 
-from config import CollaborativeConfig, ensure_valid_config
+from config import PicbreederConfig, ensure_valid_config
 from utils import _ensure_absolute
 from rate_archive_with_vlm import load_archive_entries, render_ranked_figure, summarize_scores
 
 
 @dataclass
-class ArchiveRatingsConfig(CollaborativeConfig):
+class ArchiveRatingsConfig(PicbreederConfig):
     output: Optional[Path] = None
     summary_json: Optional[Path] = None
     hydra: HydraConf = field(

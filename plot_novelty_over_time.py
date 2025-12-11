@@ -19,12 +19,12 @@ import numpy as np
 import open_clip
 import torch
 
-from config import CollaborativeConfig, ensure_valid_config
+from config import PicbreederConfig, ensure_valid_config
 from embed_and_visualize import embed_images
 
 
 @dataclass
-class PairwiseDistanceConfig(CollaborativeConfig):
+class PairwiseDistanceConfig(PicbreederConfig):
     embedding_model: str = "ViT-B-32"
     pretrained: str = "openai"
     batch_size: int = 64

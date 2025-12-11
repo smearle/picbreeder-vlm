@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 from archive_manager import ARCHIVE_GRID_MARGIN, ArchiveEntry, ArchiveManager
 from artifacts import render_genome_images, save_neat_genome_diagrams
 from chat import GeminiPromptBlockedError, extract_json_object, query_with_history, reset_chat_session, restore_chat_history_from_metadata, select_parents_from_grid, summarize_genome_structure
-from config import CollaborativeConfig
+from config import PicbreederConfig
 from constants import DEFAULT_BASELINE_SELECTION_LIMIT
 from neat_components import GenerationCheckpointer, LATEST_POPULATION_FILENAME, seed_initial_population, sync_population_node_indexer, sync_population_output_activations
 from prompts import ARCHIVE_BRANCHING_PROMPT, ARCHIVE_NOVELTY_PROMPT, COLOR_PROMPT, GOAL_PROMPTS, MUTATION_STRENGTH_PROMPT, PARENT_SELECTION_PROMPT, DEFAULT_SYSTEM_INSTRUCTION, gen_selection_prompt
@@ -72,7 +72,7 @@ class AgentRunner:
         self,
         agent_id: str,
         agent_dir: Path,
-        config: CollaborativeConfig,
+        config: PicbreederConfig,
         neat_config: neat.Config,
         archive_manager: ArchiveManager,
         generations: int,
@@ -117,6 +117,9 @@ class AgentRunner:
         self.personality_prompt = personality_prompt.strip() if personality_prompt else None
         self.request_rationale = bool(getattr(self.config, "request_rationale", True))
         self.log_raw_responses = bool(getattr(self.config, "log_raw_responses", False))
+        self.rand_select_prob = max(
+            0.0, min(1.0, float(getattr(self.config, "rand_select_prob", 0.0) or 0.0))
+        )
 
         # Start each agent with a fresh conversation history before any VLM calls.
         reset_chat_session()
@@ -1177,68 +1180,87 @@ class AgentRunner:
                 " You are the first agent. This is an initial random population, and you may select one or more parents for the next step of evolution. "
             )
 
+        population_images = color_images if self._color_enabled else gray_images
         grid_path: Optional[Path] = None
         view_index = 0
 
         if self.selection_baseline == "none":
             selection_meta_raw: Dict[str, Any]
-            while True:
-                prompt_with_settings = self._prompt_with_settings(prompt_template)
-                variant_key = "color" if self._color_enabled else "gray"
-                population_images = color_images if self._color_enabled else gray_images
-                variant_image_map = {
-                    idx: paths.color if variant_key == "color" else paths.gray
-                    for idx, paths in image_paths.items()
+            if self.rand_select_prob > 0 and random.random() < self.rand_select_prob:
+                grid_image = create_numbered_grid(population_images, self.rows, self.cols, self.thumb_size)
+                grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
+                grid_image.save(grid_path, format="PNG")
+                self._update_latest_image(grid_path)
+                selected_idx = random.randrange(len(population_images))
+                selection_meta_raw = {
+                    "selected": [selected_idx],
+                    "grid_path": str(grid_path),
+                    "short_circuit": "random_selection",
                 }
-                try:
-                    selection_meta_candidate = select_parents_from_grid(
-                        self.config.model,
-                        population_images,
-                        self.config.thinking_budget,
-                        generation_i,
-                        prompt_with_settings,
-                        self.query_dir,
-                        self.select_k,
-                        system_instruction,
-                        self.chat_history_turns,
-                        require_selection=require_selection,
-                        request_rationale=self.request_rationale,
-                        allow_color_toggle=True,
-                        current_color=self._color_enabled,
-                        view_index=view_index,
-                        image_path_map=variant_image_map,
-                        log_raw_response=self.log_raw_responses,
-                        run_label=run_label,
-                    )
-                    fallback_invoked = False
-                except GeminiPromptBlockedError as exc:
-                    reason = exc.block_reason or "unspecified"
-                    print(
-                        f"[{self.agent_id}] Gemini blocked generation {generation_i} prompt (reason: {reason}). Using fallback selection."
-                    )
-                    selection_meta_candidate = self._fallback_selection_after_block(
-                        population_images,
-                        generation_i,
-                        exc,
-                    )
-                    fallback_invoked = True
+                if self.request_rationale:
+                    selection_meta_raw["rationale"] = f"Random selection triggered (p={self.rand_select_prob:.3f})."
+                print(
+                    f"[{self.agent_id}] Gen {generation_i}: random short-circuit selection -> {selected_idx} "
+                    f"(p={self.rand_select_prob:.3f})"
+                )
+            else:
+                while True:
+                    prompt_with_settings = self._prompt_with_settings(prompt_template)
+                    variant_key = "color" if self._color_enabled else "gray"
+                    population_images = color_images if self._color_enabled else gray_images
+                    variant_image_map = {
+                        idx: paths.color if variant_key == "color" else paths.gray
+                        for idx, paths in image_paths.items()
+                    }
+                    try:
+                        selection_meta_candidate = select_parents_from_grid(
+                            self.config.model,
+                            population_images,
+                            self.config.thinking_budget,
+                            generation_i,
+                            prompt_with_settings,
+                            self.query_dir,
+                            self.select_k,
+                            system_instruction,
+                            self.chat_history_turns,
+                            require_selection=require_selection,
+                            request_rationale=self.request_rationale,
+                            allow_color_toggle=True,
+                            current_color=self._color_enabled,
+                            view_index=view_index,
+                            image_path_map=variant_image_map,
+                            log_raw_response=self.log_raw_responses,
+                            run_label=run_label,
+                        )
+                        fallback_invoked = False
+                    except GeminiPromptBlockedError as exc:
+                        reason = exc.block_reason or "unspecified"
+                        print(
+                            f"[{self.agent_id}] Gemini blocked generation {generation_i} prompt (reason: {reason}). Using fallback selection."
+                        )
+                        selection_meta_candidate = self._fallback_selection_after_block(
+                            population_images,
+                            generation_i,
+                            exc,
+                        )
+                        fallback_invoked = True
 
-                grid_path_candidate = self._resolve_query_path(selection_meta_candidate.get("grid_path"))
-                if grid_path_candidate is not None and grid_path_candidate.exists():
-                    self._update_latest_image(grid_path_candidate)
-                if fallback_invoked:
+                    grid_path_candidate = self._resolve_query_path(selection_meta_candidate.get("grid_path"))
+                    if grid_path_candidate is not None and grid_path_candidate.exists():
+                        self._update_latest_image(grid_path_candidate)
+                    if fallback_invoked:
+                        selection_meta_raw = selection_meta_candidate
+                        grid_path = grid_path_candidate
+                        break
+                    requested_color = self._coerce_bool(selection_meta_candidate.get("color"))
+                    if requested_color is not None and requested_color != self._color_enabled:
+                        self._color_enabled = requested_color
+                        self._update_mutation_mode(self._mutation_mode)
+                        view_index += 1
+                        continue
                     selection_meta_raw = selection_meta_candidate
                     grid_path = grid_path_candidate
                     break
-                requested_color = self._coerce_bool(selection_meta_candidate.get("color"))
-                if requested_color is not None and requested_color != self._color_enabled:
-                    self._color_enabled = requested_color
-                    self._update_mutation_mode(self._mutation_mode)
-                    view_index += 1
-                    continue
-                selection_meta_raw = selection_meta_candidate
-                grid_path = grid_path_candidate
-                break
         else:
             grid_image = create_numbered_grid(population_images, self.rows, self.cols, self.thumb_size)
             grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"

@@ -21,7 +21,7 @@ from neat_components import (
 )
 from picbreeder_reproduction import PicbreederReproduction
 from rendering import render_genome_image
-from config import CollaborativeConfig, ensure_valid_config
+from config import PicbreederConfig, ensure_valid_config
 from utils import _ensure_absolute
 import hydra
 from hydra.conf import HelpConf, HydraConf
@@ -40,7 +40,7 @@ VALID_VARIANTS = ("auto", "color", "gray")
 
 
 @dataclass
-class ArchiveHighresConfig(CollaborativeConfig):
+class ArchiveHighresConfig(PicbreederConfig):
     output_dir: Optional[Path] = None
     grid_output: Optional[Path] = None
     image_size: int = 200

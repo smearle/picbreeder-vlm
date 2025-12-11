@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace, fields
+from itertools import product
 from pathlib import Path
 from typing import List, Sequence, Optional
 
@@ -15,58 +17,29 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from hydra.utils import get_original_cwd
 from hydra.conf import HelpConf, HydraConf
+import omegaconf
 import submitit  # Do not remove this.
 
-from collaborative_multi_agent import CollaborativeConfig
+from collaborative_multi_agent import run as run_collaborative
+from config import PicbreederConfig, ensure_valid_config
 
 
-REPO_ROOT = Path(__file__).resolve().parent
-
-
-@dataclass
-class SweepCommand:
-    """Container storing the command to execute and its working directory."""
-
-    argv: Sequence[str]
-    workdir: Path
-    seed: int
-    chat_history_turns: int
-    experiment_dir: Path
-    goal: str
-    scheme: str
+SCRIPT_ROOT = Path(__file__).resolve().parent
 
 
 class CollaborativeRun:
-    """Simple Submitit-compatible callable that executes a shell command."""
+    """Submitit-compatible callable that executes a configured run."""
 
-    def __init__(self, command: SweepCommand):
-        self.command = list(command.argv)
-        self.workdir = Path(command.workdir)
-        self.seed = command.seed
-        self.chat_history_turns = command.chat_history_turns
-        self.experiment_dir = Path(command.experiment_dir)
-        self.goal = command.goal
-        self.scheme = command.scheme
+    def __init__(self, cfg: PicbreederConfig):
+        self.cfg = cfg
 
     def __call__(self) -> int:
-        pretty_cmd = " ".join(self.command)
-        print(
-            f"[submitit] seed={self.seed} chat={self.chat_history_turns} goal={self.goal} scheme={self.scheme} -> {pretty_cmd} (cwd={self.workdir})"
-        )
-        subprocess.run(self.command, check=True, cwd=self.workdir)
+        print(_format_run_prefix(self.cfg, "[submitit]"))
+        run_collaborative(self.cfg)
         return 0
 
     def checkpoint(self) -> "submitit.helpers.DelayedSubmission":
-
-        refreshed = SweepCommand(
-            argv=list(self.command),
-            workdir=self.workdir,
-            seed=self.seed,
-            chat_history_turns=self.chat_history_turns,
-            experiment_dir=self.experiment_dir,
-            goal=self.goal,
-            scheme=self.scheme,
-        )
+        refreshed = replace(self.cfg)
         return submitit.helpers.DelayedSubmission(self.__class__(refreshed))
 
 
@@ -75,11 +48,12 @@ def _execute_job(job: CollaborativeRun) -> int:
 
 
 @dataclass
-class SweepConfig(CollaborativeConfig):
-    seeds: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
+class SweepConfig(PicbreederConfig):
+    seed: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
     # chat_history_turns: List[int] = field(default_factory=lambda: [-1, 15, 10, 5, 0])  # Chat history lengths to evaluate
-    chat_history_turns: List[int] = field(default_factory=lambda: [-1, 10, 0])  # Chat history lengths to evaluate
-    goals: List[str] = field(default_factory=lambda: [  # Goals to sweep over
+    chat_history_turns: List[int] = field(default_factory=lambda: [-1])  # Chat history lengths to evaluate
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])  # Probability of random parent selection
+    goal: List[str] = field(default_factory=lambda: [  # Goals to sweep over
         "familiar_objects",
         # "fun",
         # "lizards", 
@@ -87,10 +61,14 @@ class SweepConfig(CollaborativeConfig):
         # "skulls", 
         # "butterflies"
     ])
-    scheme: str = "gray"
-    extra_args: str = ""  # Additional Hydra overrides forwarded to collaborative_multi_agent
-    experiment_prefix: Path = Path("logs_collaborative")  # Base directory for experiment outputs
-    log_dir: Path = Path("submitit_logs")  # Submitit log directory
+    model: List[str] = field(default_factory=lambda: [  # VLM models to evaluate
+        "gemini-3-pro-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ])
+    sweep_name: str = "sweep"  # Base directory for experiment outputs
+    log_dir: str = "sweep_logs"
     slurm: bool = True  # Enable SLURM submission via Submitit
     partition: str = "cpu"  # SLURM partition name
     account: Optional[str] = None  # Optional SLURM account override
@@ -111,10 +89,9 @@ class SweepConfig(CollaborativeConfig):
                     "Common overrides:\n"
                     "  seeds                 List of random seeds to evaluate.\n"
                     "  chat_history_turns    Values swept for chat context length (-1 keeps all turns).\n"
-                    "  experiment_prefix     Root directory for generated experiment logs.\n"
+                    "  sweep_name            Root directory for generated experiment logs.\n"
                     "  slurm                 true to submit jobs to a SLURM cluster.\n"
                     "  partition / account   SLURM resource parameters appended to submissions.\n"
-                    "  extra_args            Additional per-run overrides (e.g. \"+scheme=color\").\n"
                     "  cross_eval            true to summarize embedding metrics for the configured runs.\n"
                 ),
                 footer="Hydra overrides (e.g. +option=value) are supported. Use --cfg=job to inspect merged configs.",
@@ -130,86 +107,71 @@ def _ensure_absolute(path: Path, base: Path) -> Path:
     return (base / expanded).resolve()
 
 
-def _experiment_directory(cfg: "SweepConfig", seed: int, chat_turns: int, goal: str, experiment_prefix: Path) -> Path:
-    exp_dir = experiment_prefix / f"seed_{seed}_chat{chat_turns}"
-    if goal != "familiar_objects":
-        exp_dir = Path(f"{exp_dir}_goal-{goal}")
-    if cfg.scheme != "gray":
-        exp_dir = Path(f"{exp_dir}_scheme-{cfg.scheme}")
-    if getattr(cfg, "warm_start_structure", 0) > 0:
-        exp_dir = Path(f"{exp_dir}_warmstart{cfg.warm_start_structure}")
-    return exp_dir
+def _build_eval_command(
+    cfg: PicbreederConfig, script: str, archive_limit: Optional[int],
+) -> List[str]:
+    cmd: List[str] = [
+        sys.executable,
+        str(SCRIPT_ROOT / script),
+        f"--experiment-dir={cfg.experiment_dir}",
+    ]
+    if archive_limit is not None:
+        cmd.append(f"--archive-limit={archive_limit}")
+    return cmd
 
 
-def build_command(cfg: SweepConfig, seed: int, chat_turns: int, goal: str, experiment_prefix: Path) -> SweepCommand:
-    exp_dir = _experiment_directory(cfg, seed, chat_turns, goal, experiment_prefix)
+def _expand_sweep_configs(cfg: SweepConfig) -> List[SweepConfig]:
+    """Produce one config per cartesian product of list-valued fields."""
+    sweep_axes = []
+    for field_def in fields(SweepConfig):
+        name = field_def.name
+        if name == "hydra":
+            continue
+        value = getattr(cfg, name)
+        print(f"Sweeping over {name} with value {value} type {type(value)}")
+        if isinstance(value, omegaconf.listconfig.ListConfig) and isinstance(value[0], type(getattr(PicbreederConfig, name))):
+            sweep_axes.append((name, value))
 
-    # If the experiment directory already exists, set to resume from it
-    if os.path.exists(exp_dir):
-        resume = "True"
-    else:
-        resume = "False"
-        exp_dir.mkdir(parents=True, exist_ok=True)
+    if not sweep_axes:
+        return [cfg]
+    if any(len(values) == 0 for _, values in sweep_axes):
+        return []
 
-    exp_dir_str = str(exp_dir)
+    configs: List[SweepConfig] = []
+    cfg = {k: v for k, v in cfg.items() if hasattr(PicbreederConfig, k)}
+    for combo in product(*(values for _, values in sweep_axes)):
+        updates = {name: value for (name, _), value in zip(sweep_axes, combo)}
+        configs.append(replace(SweepConfig(**cfg), **updates))
+    return configs
 
-    if cfg.evaluate or cfg.visualize:
-        experiment_override = f'--experiment-dir="{exp_dir_str}"' if " " in exp_dir_str else f"--experiment-dir={exp_dir_str}"
-        overrides: List[str] = [
-            experiment_override,
-        ]
-        if cfg.archive_limit is not None:
-            overrides.append(f"--archive-limit={cfg.archive_limit}")
-        if cfg.evaluate:
-            main_script = "embed_and_visualize.py"
-        if cfg.visualize:
-            main_script = "visualize_archive_phylogeny.py"
-    else:
-        main_script = "collaborative_multi_agent.py"
-        experiment_override = f'experiment_dir="{exp_dir_str}"' if " " in exp_dir_str else f"experiment_dir={exp_dir_str}"
-        overrides: List[str] = [
-            f"seed={seed}",
-            f"rows={cfg.rows}",
-            f"cols={cfg.cols}",
-            f"agent_generations={cfg.agent_generations}",
-            f"num_agents={cfg.num_agents}",
-            f"scheme={cfg.scheme}",
-            f"chat_history_turns={chat_turns}",
-            f"resume={resume}",
-            f"goal={goal}",
-            f"num_proc={cfg.num_proc}",
-            f"personality_path={cfg.personality_path}",
-            experiment_override,
-        ]
-        if getattr(cfg, "selection_baseline", "none") != "none":
-            overrides.append(f"selection_baseline={cfg.selection_baseline}")
-        if cfg.output_activations:
-            overrides.append("output_activations=true")
-    if cfg.extra_args:
-        overrides.extend(shlex.split(cfg.extra_args))
 
-    cmd: List[str] = [sys.executable, str(REPO_ROOT / main_script), *overrides]
-    return SweepCommand(
-        argv=cmd,
-        workdir=REPO_ROOT,
-        seed=seed,
-        chat_history_turns=chat_turns,
-        experiment_dir=exp_dir,
-        goal=goal,
-        scheme=cfg.scheme,
+def _build_run_config(cfg: SweepConfig, original_cwd: Path) -> PicbreederConfig:
+    """Create a per-run config, letting collaborative_multi_agent name directories."""
+    base_kwargs = {field_def.name: getattr(cfg, field_def.name) for field_def in fields(PicbreederConfig) if field_def.name != "hydra"}
+    base_cfg = PicbreederConfig(**base_kwargs)
+    per_run_cfg = replace(base_cfg, experiment_dir=None, resume=False)
+    validated_cfg = ensure_valid_config(per_run_cfg, original_cwd=original_cwd)
+    exp_name = Path(validated_cfg.experiment_dir).name
+    exp_dir = _ensure_absolute(os.path.join(cfg.log_dir, cfg.sweep_name), original_cwd) / exp_name
+    validated_cfg = replace(validated_cfg, experiment_dir=exp_dir)
+    resume = exp_dir.exists()
+    if resume != validated_cfg.resume:
+        validated_cfg = replace(validated_cfg, resume=resume)
+    return validated_cfg
+
+
+def _format_run_prefix(cfg: PicbreederConfig, prefix: str) -> str:
+    return (
+        f"{prefix} seed={cfg.seed} chat={cfg.chat_history_turns} "
+        f"goal={cfg.goal} scheme={cfg.scheme} resume={cfg.resume} -> {cfg.experiment_dir}"
     )
 
+def launch_locally(configs: Sequence[PicbreederConfig]) -> None:
+    for run_cfg in configs:
+        print(_format_run_prefix(run_cfg, "[local]"))
+        run_collaborative(run_cfg)
 
-def launch_locally(commands: Sequence[SweepCommand]) -> None:
-    for command in commands:
-        pretty_cmd = " ".join(command.argv)
-        print(
-            f"[local] seed={command.seed} chat={command.chat_history_turns} goal={command.goal} scheme={command.scheme} -> {pretty_cmd} (cwd={command.workdir})"
-        )
-        subprocess.run(command.argv, check=True, cwd=command.workdir)
-
-
-def launch_slurm(cfg: SweepConfig, log_dir: Path, commands: Sequence[SweepCommand]) -> None:
+def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederConfig]) -> None:
     try:
         import submitit
     except ImportError as exc:
@@ -224,12 +186,10 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, commands: Sequence[SweepComman
         slurm_account=cfg.account,
         name="picbreeder-vlm",
     )
-    jobs = [CollaborativeRun(command) for command in commands]
+    jobs = [CollaborativeRun(run_cfg) for run_cfg in configs]
     futures = executor.map_array(_execute_job, jobs)
-    for command, future in zip(commands, futures):
-        print(
-            f"[slurm] seed={command.seed} chat={command.chat_history_turns} goal={command.goal} scheme={command.scheme} submitted as job {future.job_id}"
-        )
+    for run_cfg, future in zip(configs, futures):
+        print(_format_run_prefix(run_cfg, "[slurm]") + f" submitted as job {future.job_id}")
 
 
 cs = ConfigStore.instance()
@@ -239,21 +199,18 @@ cs.store(name="sweep_base", node=SweepConfig)
 @hydra.main(version_base=None, config_path=None, config_name="sweep_base")
 def main(cfg: SweepConfig) -> None:
     original_cwd = Path(get_original_cwd())
-    experiment_prefix = _ensure_absolute(cfg.experiment_prefix, original_cwd)
-    experiment_prefix.mkdir(parents=True, exist_ok=True)
     log_dir = _ensure_absolute(cfg.log_dir, original_cwd)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    sweep_entries = [
-        (seed, chat_turns, goal, _experiment_directory(cfg, seed, chat_turns, goal, experiment_prefix))
-        for seed in cfg.seeds
-        for chat_turns in cfg.chat_history_turns
-        for goal in cfg.goals
-    ]
+    base_configs = _expand_sweep_configs(cfg)
+    run_configs = [_build_run_config(run_cfg, original_cwd) for run_cfg in base_configs]
 
-    if not sweep_entries:
-        print("No runs scheduled (empty seeds or chat_history_turns).")
+    if not run_configs:
+        print("No runs scheduled (empty sweep axes).")
         return
+
+    experiment_prefix = Path(run_configs[0].experiment_dir).parent
+    experiment_prefix.mkdir(parents=True, exist_ok=True)
 
     if cfg.cross_eval:
         from render_embedding_metrics_table import DEFAULT_METRICS_FILENAME, render_tables
@@ -262,12 +219,14 @@ def main(cfg: SweepConfig) -> None:
         existing_dirs = []
         missing_metrics = []
 
-        for seed, chat_turns, goal, exp_dir in sweep_entries:
-            metrics_path = exp_dir / metrics_name
+        for run_cfg in run_configs:
+            metrics_path = Path(run_cfg.experiment_dir) / metrics_name
             if metrics_path.exists():
-                existing_dirs.append(exp_dir)
+                existing_dirs.append(Path(run_cfg.experiment_dir))
             else:
-                missing_metrics.append((seed, chat_turns, goal, metrics_path))
+                missing_metrics.append(
+                    (run_cfg.seed, run_cfg.chat_history_turns, run_cfg.goal, metrics_path)
+                )
 
         if not existing_dirs:
             print("Cross evaluation aborted: no embedding metrics found for the configured runs.")
@@ -302,15 +261,21 @@ def main(cfg: SweepConfig) -> None:
                 print(f"  seed={seed} chat={chat_turns} goal={goal} -> {missing_path}")
         return
 
-    commands = [
-        build_command(cfg, seed, chat_turns, goal, experiment_prefix)
-        for seed, chat_turns, goal, _ in sweep_entries
-    ]
-
-    if cfg.slurm:
-        launch_slurm(cfg, log_dir, commands)
+    if cfg.evaluate or cfg.visualize:
+        script = "embed_and_visualize.py" if cfg.evaluate else "visualize_archive_phylogeny.py"
+        commands = [
+            _build_eval_command(run_cfg, script, cfg.archive_limit)
+            for run_cfg in run_configs
+        ]
+        for cmd, run_cfg in zip(commands, run_configs):
+            desc = _format_run_prefix(run_cfg, "[local-eval]")
+            pretty_cmd = " ".join(cmd)
+            print(f"{desc} -> {pretty_cmd}")
+            subprocess.run(cmd, check=True, cwd=original_cwd)
+    elif cfg.slurm:
+        launch_slurm(cfg, log_dir, run_configs)
     else:
-        launch_locally(commands)
+        launch_locally(run_configs)
 
 
 if __name__ == "__main__":

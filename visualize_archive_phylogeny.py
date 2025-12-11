@@ -15,7 +15,7 @@ from hydra.conf import HelpConf, HydraConf
 from hydra.core.config_store import ConfigStore
 from hydra.utils import get_original_cwd
 
-from config import CollaborativeConfig, ensure_valid_config
+from config import PicbreederConfig, ensure_valid_config
 from utils import _ensure_absolute, _resolve_image_path, _resolve_source_experiment_dir
 
 
@@ -25,7 +25,7 @@ VALID_SCOPES: Tuple[str, ...] = ("archive", "full")
 
 
 @dataclass
-class ArchivePhylogenyConfig(CollaborativeConfig):
+class ArchivePhylogenyConfig(PicbreederConfig):
     output: Optional[Path] = None
     format: str = "pdf"
     mode: str = "annotated"

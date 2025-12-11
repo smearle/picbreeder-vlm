@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import hydra
 from hydra.utils import get_original_cwd
 
-from config import CollaborativeConfig, ensure_valid_config
+from config import PicbreederConfig, ensure_valid_config
 
 LOG_DIR_CANDIDATES: List[str] = ["logs", "logs_collaborative"]
 
@@ -138,7 +138,7 @@ def _iter_agent_dirs(experiment_dir: Path) -> Iterable[Path]:
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="collaborative_base")
-def main(cfg: CollaborativeConfig) -> None:
+def main(cfg: PicbreederConfig) -> None:
     original_cwd = Path(get_original_cwd())
     cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
     experiment_dir = Path(cfg.experiment_dir)
