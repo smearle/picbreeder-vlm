@@ -137,6 +137,7 @@ class ImageChatSession:
         history_turns: Optional[int] = 0,
         mime_type: str = "image/png",
         system_instruction: Optional[str] = None,
+        temperature: Optional[float] = None,
     ):
         requested_turns = self._resolve_requested_turns(history_turns)
         if requested_turns is None:
@@ -145,9 +146,14 @@ class ImageChatSession:
             start_index = max(len(self._turn_history) - requested_turns, 0)
 
         config = None
+        config_kwargs = {}
         if system_instruction:
+            config_kwargs["system_instruction"] = system_instruction
+        if temperature is not None:
+            config_kwargs["temperature"] = float(temperature)
+        if config_kwargs:
             config = types.GenerateContentConfig(
-                system_instruction=system_instruction,
+                **config_kwargs,
                 # thinking_config=types.ThinkingConfig(
                 #     thinking_budget=thinking_budget
                 # ),

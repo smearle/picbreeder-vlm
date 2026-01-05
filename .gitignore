@@ -1,5 +1,7 @@
 __pycache__/
 .DS_Store
+.pycache
+multirun
 
 initial_populations/*
 interactive_runs/*

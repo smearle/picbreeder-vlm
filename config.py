@@ -2,7 +2,7 @@ import copy
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 from hydra.conf import HelpConf, HydraConf
 from hydra.core.config_store import ConfigStore
@@ -13,12 +13,14 @@ from utils import _ensure_absolute
 
 @dataclass
 class PicbreederConfig:
+    log_dir: str = "logs_collaborative"  # Base directory for experiment logs
     goal: str = "familiar_objects"
     rows: int = 3  # Rows in the CPPN grid (legacy Picbreeder default)
     cols: int = 5  # Columns in the CPPN grid
     thumb_size: int = 128  # Pixel size for rendered genome thumbnails
     chat_history_turns: int = -1  # How many prior turns each agent sees (-1 keeps all)
     model: str = "gemini-2.5-pro"
+    temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
     thinking_budget: int = -1
     request_rationale: bool = True  # Request natural-language reasoning in agent selections
     keep_query_images: bool = False  # Preserve query images/logs for post-run inspection
@@ -33,7 +35,7 @@ class PicbreederConfig:
     output_activations: bool = True  # Enable CPPN output activation mutations
     input_activations: bool = False
     enable_crossover: bool = True  # Toggle Picbreeder-style crossover (CrossoverCombiner)
-    selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes
+    selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes/clip-nouns
     rand_select_prob: float = 0.0  # Probability of short-circuiting VLM selection with a random pick
     generate_personalities: bool = False  # Generate persona prompts before agent runs
     personality_path: Optional[Path] = None  # Destination for generated personality JSON
@@ -43,6 +45,7 @@ class PicbreederConfig:
     seed: int = 0  # Random seed for deterministic behaviour
     render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
     log_raw_responses: bool = False  # When true, dump raw VLM responses to timestamped text files
+    fixed_session_lengths: bool = True  # When true, agents run for exactly 20 generations and must publish at the 20th generation
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -56,8 +59,9 @@ class PicbreederConfig:
                     "  agent_generations       Generations executed by each agent.\n"
                     "  num_agents              Sequential agents to schedule for this run.\n"
                     "  num_proc                Parallel worker processes to launch.\n"
+                    "  temperature             Sampling temperature for Gemini responses (or 'random').\n"
                     "  experiment_dir          Destination for logs, grids, and archives.\n"
-                    "  selection_baseline      Automated parent selection (none/random/max-depth/max-nodes).\n"
+                    "  selection_baseline      Automated parent selection (none/random/max-depth/max-nodes/clip-nouns).\n"
                     "  resume / resume_agent_id Resume an interrupted run from disk records.\n"
                 ),
                 footer="Override with +option=value (e.g. +scheme=color) or pass --cfg=job to inspect the full config.",
@@ -81,6 +85,22 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         cfg.rand_select_prob = float(cfg.rand_select_prob)
     except (TypeError, ValueError):
         raise ValueError("rand-select-prob must be a number") from None
+    if isinstance(cfg.temperature, str):
+        temp_value = cfg.temperature.strip().lower()
+        if temp_value == "random":
+            cfg.temperature = "random"
+        else:
+            try:
+                cfg.temperature = float(cfg.temperature)
+            except (TypeError, ValueError):
+                raise ValueError("temperature must be a number or 'random'") from None
+    else:
+        try:
+            cfg.temperature = float(cfg.temperature)
+        except (TypeError, ValueError):
+            raise ValueError("temperature must be a number or 'random'") from None
+    if cfg.temperature != "random" and (cfg.temperature < 0 or cfg.temperature > 2):
+        raise ValueError("temperature must be between 0 and 2")
     if cfg.resume_agent_id and not cfg.resume:
         raise ValueError("--resume-agent-id requires --resume")
     if cfg.rows < 1 or cfg.cols < 1:
@@ -102,6 +122,10 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
     if cfg.rand_select_prob < 0 or cfg.rand_select_prob > 1:
         raise ValueError("rand-select-prob must be between 0 and 1")
 
+    # Enforce 20 generations when fixed_session_lengths is enabled
+    if cfg.fixed_session_lengths:
+        cfg.agent_generations = 20
+
     config_path = resolve_neat_config_path(cfg)
     cfg.neat_config_path = config_path
     config_path = _ensure_absolute(Path(config_path), original_cwd)
@@ -122,11 +146,18 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
             experiment_name += f"_baseline-{cfg.selection_baseline}"
         if cfg.rand_select_prob > 0:
             experiment_name += f"_randp{cfg.rand_select_prob:g}"
+        if cfg.temperature != 1.0:
+            if cfg.temperature == "random":
+                experiment_name += "_temp-random"
+            else:
+                experiment_name += f"_temp{cfg.temperature:g}"
         experiment_name += "_personalities" if cfg.generate_personalities else "_nopersonalities"
         experiment_name += "_norationale" if not cfg.request_rationale else ""
+        if cfg.fixed_session_lengths:
+            experiment_name += "_fixed-sesh"
         # experiment_name += f"_{timestamp}"
         experiment_name += f"_s{cfg.seed}"
-        relative = Path("logs_collaborative") / experiment_name
+        relative = Path(cfg.log_dir) / experiment_name
         exp_dir = _ensure_absolute(relative, original_cwd)
     else:
         exp_dir = _ensure_absolute(Path(cfg.experiment_dir), original_cwd)

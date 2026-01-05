@@ -492,10 +492,10 @@ class ArchiveManager:
         entries = self._metadata.get("entries", [])
         total_entries = len(entries)
         if total_entries < RATING_BATCH_SIZE:
-            print("Not enough entries in archive to trigger auto-rating.")
+            # print("Not enough entries in archive to trigger auto-rating.")
             return [], 0
         if total_entries % RATE_EVERY != 0:
-            print("Not the right time to trigger auto-rating based on RATE_EVERY setting.")
+            # print("Not the right time to trigger auto-rating based on RATE_EVERY setting.")
             return [], 0
 
         auto_meta = self._metadata.setdefault("auto_rating", {})

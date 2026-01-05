@@ -12,18 +12,23 @@ import shutil
 import tempfile
 from typing import Optional, Callable, Dict, Any, List, Sequence, Set, Tuple, Iterable
 
+import numpy as np
+
 import PIL
 import graphviz
 import neat
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
 
 from archive_manager import ARCHIVE_GRID_MARGIN, ArchiveEntry, ArchiveManager
 from artifacts import render_genome_images, save_neat_genome_diagrams
 from chat import GeminiPromptBlockedError, extract_json_object, query_with_history, reset_chat_session, restore_chat_history_from_metadata, select_parents_from_grid, summarize_genome_structure
 from config import PicbreederConfig
-from constants import DEFAULT_BASELINE_SELECTION_LIMIT
+from constants import DEFAULT_BASELINE_SELECTION_LIMIT, REPO_ROOT
+
+# Module-level cache so CLIP noun embeddings are computed once per process
+_CLIP_NOUN_CACHE: Dict[str, Any] = {}
 from neat_components import GenerationCheckpointer, LATEST_POPULATION_FILENAME, seed_initial_population, sync_population_node_indexer, sync_population_output_activations
-from prompts import ARCHIVE_BRANCHING_PROMPT, ARCHIVE_NOVELTY_PROMPT, COLOR_PROMPT, GOAL_PROMPTS, MUTATION_STRENGTH_PROMPT, PARENT_SELECTION_PROMPT, DEFAULT_SYSTEM_INSTRUCTION, gen_selection_prompt
+from prompts import ARCHIVE_BRANCHING_PROMPT, ARCHIVE_NOVELTY_PROMPT, COLOR_PROMPT, GOAL_PROMPTS, MUTATION_STRENGTH_PROMPT, PARENT_SELECTION_PROMPT, DEFAULT_SYSTEM_INSTRUCTION, FIXED_SESSION_SYSTEM_INSTRUCTION, gen_selection_prompt
 from rendering import _draw_dotted_rectangle, create_numbered_grid
 from utils import _ensure_int_list, relative_suffix_after_dir
 
@@ -34,6 +39,7 @@ BRANCH_BEST_NEW_LIMIT = 20
 BRANCH_BEST_NEW_WINDOW_MULTIPLIER = 10
 BRANCH_MOST_BRANCHED_LIMIT = 20
 BRANCH_NEWEST_LIMIT = 20
+DUPLICATE_PIXEL_EPSILON = 1e-3
 
 
 class AgentQuitRequested(RuntimeError):
@@ -98,7 +104,7 @@ class AgentRunner:
         self.config = config
         agents_dir = agent_dir.parent
         # Save running latest images (global + per-process)
-        self.latest_img_paths: List[Path] = [agents_dir / "latest_image.png"]
+        self.latest_img_paths: List[Path] = [agents_dir.parent / "latest_image.png"]
         if process_index is not None:
             self.latest_img_paths.append(agents_dir / f"latest_image_proc_{process_index}.png")
         self.archive_manager = archive_manager
@@ -117,6 +123,7 @@ class AgentRunner:
         self.personality_prompt = personality_prompt.strip() if personality_prompt else None
         self.request_rationale = bool(getattr(self.config, "request_rationale", True))
         self.log_raw_responses = bool(getattr(self.config, "log_raw_responses", False))
+        self.fixed_session_lengths = bool(getattr(self.config, "fixed_session_lengths", True))
         self.rand_select_prob = max(
             0.0, min(1.0, float(getattr(self.config, "rand_select_prob", 0.0) or 0.0))
         )
@@ -191,17 +198,35 @@ class AgentRunner:
         mutation_strength_prompt = MUTATION_STRENGTH_PROMPT
         selection_json_suffix = ', "rationale": "brief explanation"' if self.request_rationale else ""
         publish_reason_suffix = ', "reason": "Brief publication note."' if self.request_rationale else ""
-        instruction_body = DEFAULT_SYSTEM_INSTRUCTION.format(
-            goal_prompt=GOAL_PROMPTS[self.config.goal],
-            selection_prompt=gen_selection_prompt(self.select_k, self.config.enable_crossover),
-            n_generations=self.generations,
-            color_prompt=color_prompt,
-            archive_novelty_prompt=archive_novelty_prompt,
-            mutation_strength_prompt=mutation_strength_prompt,
-            mutation_mode_prompt=mutation_mode_prompt,
-            selection_json_suffix=selection_json_suffix,
-            publish_reason_suffix=publish_reason_suffix,
-        )
+
+        # Choose the appropriate system instruction template based on fixed session mode
+        if self.fixed_session_lengths:
+            instruction_template = FIXED_SESSION_SYSTEM_INSTRUCTION
+            final_generation = self.generations - 1  # 0-indexed, so gen 19 for 20 generations
+            instruction_body = instruction_template.format(
+                goal_prompt=GOAL_PROMPTS[self.config.goal],
+                selection_prompt=gen_selection_prompt(self.select_k, self.config.enable_crossover),
+                n_generations=self.generations,
+                final_generation=final_generation,
+                color_prompt=color_prompt,
+                archive_novelty_prompt=archive_novelty_prompt,
+                mutation_strength_prompt=mutation_strength_prompt,
+                mutation_mode_prompt=mutation_mode_prompt,
+                selection_json_suffix=selection_json_suffix,
+                publish_reason_suffix=publish_reason_suffix,
+            )
+        else:
+            instruction_body = DEFAULT_SYSTEM_INSTRUCTION.format(
+                goal_prompt=GOAL_PROMPTS[self.config.goal],
+                selection_prompt=gen_selection_prompt(self.select_k, self.config.enable_crossover),
+                n_generations=self.generations,
+                color_prompt=color_prompt,
+                archive_novelty_prompt=archive_novelty_prompt,
+                mutation_strength_prompt=mutation_strength_prompt,
+                mutation_mode_prompt=mutation_mode_prompt,
+                selection_json_suffix=selection_json_suffix,
+                publish_reason_suffix=publish_reason_suffix,
+            )
         if self.personality_prompt:
             self.system_instruction = f"{self.personality_prompt}\n\n{instruction_body}"
         else:
@@ -244,6 +269,15 @@ class AgentRunner:
         self._pending_restart_request: Optional[Dict[str, Any]] = None
         self._restart_history: List[Dict[str, Any]] = []
         self._restart_counter = 0
+        self._pending_prompt_notes: List[str] = []
+        self._last_publish_rejection: Optional[Dict[str, Any]] = None
+        self._duplicate_publish_epsilon = max(
+            0.0,
+            float(
+                getattr(self.config, "duplicate_publish_epsilon", DUPLICATE_PIXEL_EPSILON)
+                or DUPLICATE_PIXEL_EPSILON
+            ),
+        )
         self._archive_seed_map: Dict[int, Dict[str, Any]] = {}
         self._genome_lineage: Dict[int, Dict[str, Any]] = {}
         self.render_genome_diagrams = render_genome_diagrams
@@ -255,6 +289,15 @@ class AgentRunner:
         if self.resume_mode:
             self._load_existing_publication_state()
             self._restore_selection_settings()
+
+        # Lazily populated state for CLIP noun baseline (selection_baseline == "clip-nouns")
+        self._clip_model = None
+        self._clip_preprocess = None
+        self._clip_tokenizer = None
+        self._clip_device = None
+        self._clip_text_embeddings: Optional[np.ndarray] = None
+        self._clip_noun_labels: List[str] = []
+        self._clip_torch = None
 
     def _update_latest_image(self, source_path: Path) -> None:
         for target in self.latest_img_paths:
@@ -386,6 +429,79 @@ class AgentRunner:
             f"mutation_strength={self._mutation_strength:.2f}."
         )
         return f"{base_template}\n{status}"
+
+    def _queue_prompt_note(self, note: str) -> None:
+        cleaned = str(note or "").strip()
+        if not cleaned:
+            return
+        self._pending_prompt_notes.append(cleaned)
+
+    def _apply_pending_prompt_notes(self, base_template: str) -> str:
+        if not self._pending_prompt_notes:
+            return base_template
+        notes = " ".join(self._pending_prompt_notes)
+        self._pending_prompt_notes.clear()
+        return f"{base_template} {notes}"
+
+    def _resolve_archive_image_path(self, path_value: Any) -> Optional[Path]:
+        if not path_value:
+            return None
+        archive_root = Path(getattr(self.archive_manager, "archive_dir", self.agent_dir))
+        raw_path = Path(path_value)
+        candidates: List[Path] = [raw_path]
+        if not raw_path.is_absolute():
+            candidates.append((archive_root / raw_path).resolve())
+        relative_suffix = relative_suffix_after_dir(raw_path, "archive")
+        if relative_suffix is not None:
+            candidates.append((archive_root / relative_suffix).resolve())
+        seen: Set[Path] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _normalized_pixel_distance(self, img_a: Image.Image, img_b: Image.Image) -> float:
+        base = img_a.convert("RGB")
+        other = img_b.convert("RGB")
+        if base.size != other.size:
+            other = other.resize(base.size, Image.Resampling.LANCZOS)
+        diff = ImageChops.difference(base, other)
+        stats = ImageStat.Stat(diff)
+        if not stats.mean:
+            return 0.0
+        return sum(stats.mean) / len(stats.mean) / 255.0
+
+    def _find_duplicate_archive_entry(
+        self,
+        candidate_path: Optional[Path],
+    ) -> Tuple[Optional[ArchiveEntry], Optional[float]]:
+        if candidate_path is None or not candidate_path.exists():
+            return None, None
+        try:
+            with Image.open(candidate_path) as candidate_img:
+                candidate_rgb = candidate_img.convert("RGB")
+        except OSError:
+            return None, None
+
+        for raw_entry in self.archive_manager.entries:
+            try:
+                entry = ArchiveEntry.from_dict(raw_entry)
+            except Exception:
+                continue
+            archive_path = self._resolve_archive_image_path(entry.image_path)
+            if archive_path is None or not archive_path.exists():
+                continue
+            try:
+                with Image.open(archive_path) as archived_img:
+                    distance = self._normalized_pixel_distance(candidate_rgb, archived_img)
+            except OSError:
+                continue
+            if distance <= self._duplicate_publish_epsilon:
+                return entry, distance
+        return None, None
 
     def _resolve_query_path(self, path_value: Optional[str]) -> Optional[Path]:
         if not path_value:
@@ -635,6 +751,15 @@ class AgentRunner:
                 "selected_entry_ids": [],
             }
 
+        if self.selection_baseline == "clip-nouns":
+            return self._decide_branching_clip_nouns(
+                archive_entries,
+                subset_ranges,
+                subset_counts,
+                elite_name_list,
+                timestamp=timestamp,
+            )
+
         if self.selection_baseline != "none":
             rationale = "Dry-run mode; random decision."
             if prompt_note:
@@ -688,6 +813,7 @@ class AgentRunner:
             prompt=archive_prompt,
             system_instruction=self.system_instruction,
             chat_history_turns=self.chat_history_turns,
+            temperature=self.config.temperature,
         )
 
         response_text = getattr(response, "text", "") or ""
@@ -728,6 +854,122 @@ class AgentRunner:
         if choice == "branch":
             preview_path = self._save_archive_branch_preview(decision, archive_entries)
             decision["branch_preview_path"] = str(preview_path)
+        return decision
+
+    def _decide_branching_clip_nouns(
+        self,
+        archive_entries: List[Dict[str, Any]],
+        subset_ranges: List[Dict[str, Any]],
+        subset_counts: Dict[str, int],
+        elite_name_list: Sequence[str],
+        *,
+        timestamp: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        decision_timestamp = timestamp or datetime.now().isoformat()
+        if not archive_entries:
+            return {
+                "choice": "fresh",
+                "selected_images": [],
+                "rationale": "Archive empty; defaulting to fresh population.",
+                "raw_response": None,
+                "timestamp": decision_timestamp,
+                "archive_elite_names": list(elite_name_list),
+                "archive_subset_counts": dict(subset_counts),
+                "selected_entry_ids": [],
+            }
+
+        branch_probability = 0.9
+        roll = random.random()
+        if roll >= branch_probability:
+            rationale = (
+                f"CLIP noun baseline prefers branching (p={branch_probability:.2f}); "
+                f"roll={roll:.3f} triggered a fresh start."
+            )
+            return {
+                "choice": "fresh",
+                "selected_images": [],
+                "rationale": rationale,
+                "raw_response": None,
+                "timestamp": decision_timestamp,
+                "archive_elite_names": list(elite_name_list),
+                "archive_subset_counts": dict(subset_counts),
+                "selected_entry_ids": [],
+                "branch_probability": branch_probability,
+                "branch_roll": roll,
+            }
+
+        valid_images: List[Image.Image] = []
+        valid_indices: List[int] = []
+        for idx, entry in enumerate(archive_entries):
+            image_path_value = entry.get("image_path")
+            if not image_path_value:
+                continue
+            image_path = Path(image_path_value)
+            try:
+                with Image.open(image_path) as img:
+                    valid_images.append(img.convert("RGB"))
+                    valid_indices.append(idx)
+            except OSError:
+                continue
+
+        if not valid_images:
+            rationale = (
+                "CLIP noun baseline could not load any archive images; defaulting to fresh population."
+            )
+            return {
+                "choice": "fresh",
+                "selected_images": [],
+                "rationale": rationale,
+                "raw_response": None,
+                "timestamp": decision_timestamp,
+                "archive_elite_names": list(elite_name_list),
+                "archive_subset_counts": dict(subset_counts),
+                "selected_entry_ids": [],
+                "branch_probability": branch_probability,
+                "branch_roll": roll,
+            }
+
+        scores = self._clip_max_similarity_scores(valid_images)
+        probabilities = self._normalize_similarity_scores(scores)
+        if not probabilities:
+            selected_local_idx = 0
+        else:
+            selected_local_idx = random.choices(range(len(valid_indices)), weights=probabilities, k=1)[0]
+
+        archive_selected_idx = valid_indices[selected_local_idx]
+        selected_entry_ids = [
+            archive_entries[archive_selected_idx].get("id")
+        ] if 0 <= archive_selected_idx < len(archive_entries) else []
+        branch_scores = {
+            valid_indices[i]: float(scores[i]) for i in range(len(scores))
+        }
+        branch_probabilities = {
+            valid_indices[i]: float(probabilities[i]) for i in range(len(probabilities))
+        }
+
+        selected_score = scores[selected_local_idx] if selected_local_idx < len(scores) else float("-inf")
+        selected_prob = probabilities[selected_local_idx] if selected_local_idx < len(probabilities) else 0.0
+        rationale = (
+            f"CLIP noun baseline branched with 90% preference (roll={roll:.3f}); "
+            f"sampled archive index {archive_selected_idx} (max similarity={selected_score:.3f}, p={selected_prob:.3f})."
+        )
+
+        decision = {
+            "choice": "branch",
+            "selected_images": [archive_selected_idx],
+            "rationale": rationale,
+            "raw_response": None,
+            "timestamp": decision_timestamp,
+            "archive_elite_names": list(elite_name_list),
+            "archive_subset_counts": dict(subset_counts),
+            "archive_display_order": list(range(len(archive_entries))),
+            "selected_entry_ids": [entry_id for entry_id in selected_entry_ids if entry_id],
+            "branch_probability": branch_probability,
+            "branch_roll": roll,
+            "branch_scores": branch_scores,
+            "branch_probabilities": branch_probabilities,
+            "branch_subset_ranges": subset_ranges,
+        }
         return decision
 
     def _store_branching_snapshot(
@@ -1180,6 +1422,8 @@ class AgentRunner:
                 " You are the first agent. This is an initial random population, and you may select one or more parents for the next step of evolution. "
             )
 
+        prompt_template = self._apply_pending_prompt_notes(prompt_template)
+
         population_images = color_images if self._color_enabled else gray_images
         grid_path: Optional[Path] = None
         view_index = 0
@@ -1217,6 +1461,7 @@ class AgentRunner:
                             self.config.model,
                             population_images,
                             self.config.thinking_budget,
+                            self.config.temperature,
                             generation_i,
                             prompt_with_settings,
                             self.query_dir,
@@ -1267,7 +1512,7 @@ class AgentRunner:
             grid_image.save(grid_path, format="PNG")
             self._update_latest_image(grid_path)
             selection_meta_raw = self._select_parents_baseline(
-                
+                population_images,
                 generation_i,
                 genomes,
                 config,
@@ -1282,17 +1527,28 @@ class AgentRunner:
                 grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
         selection_meta["grid_path"] = str(grid_path)
         selection_meta["color"] = self._color_enabled
-        restart_request = self._normalize_restart_request(selection_meta_raw.get("restart"), generation_i)
-        if restart_request:
-            self._pending_restart_request = restart_request
-        quit_requested = bool(selection_meta.get("quit"))
-        quit_reason = selection_meta.get("quit_reason")
-        if quit_requested:
-            reason_text = str(quit_reason).strip() if quit_reason else ""
-            if not self._quit_requested:
-                self._quit_reason = reason_text or None
-                self._quit_generation = generation_i
-            self._quit_requested = True
+        
+        # In fixed session mode, ignore restart and quit requests
+        if self.fixed_session_lengths:
+            restart_request = None
+            quit_requested = False
+            quit_reason = None
+            if selection_meta_raw.get("restart"):
+                print(f"[{self.agent_id}] Ignoring restart request in fixed session mode at generation {generation_i}")
+            if selection_meta.get("quit"):
+                print(f"[{self.agent_id}] Ignoring quit request in fixed session mode at generation {generation_i}")
+        else:
+            restart_request = self._normalize_restart_request(selection_meta_raw.get("restart"), generation_i)
+            if restart_request:
+                self._pending_restart_request = restart_request
+            quit_requested = bool(selection_meta.get("quit"))
+            quit_reason = selection_meta.get("quit_reason")
+            if quit_requested:
+                reason_text = str(quit_reason).strip() if quit_reason else ""
+                if not self._quit_requested:
+                    self._quit_reason = reason_text or None
+                    self._quit_generation = generation_i
+                self._quit_requested = True
         resolved_mode = self._update_mutation_mode(selection_meta.get("mutation_mode"))
         selection_meta["mutation_mode"] = resolved_mode
         resolved_strength = self._update_mutation_strength(selection_meta.get("mutation_strength"))
@@ -1325,11 +1581,13 @@ class AgentRunner:
         if self.selection_baseline == "none":
             publish_payload = self._parse_publish_payload(selection_meta.get("response_text", ""))
         else:
-            if random.random() < 0.25:
+            publish_interval = 20
+            should_publish = (generation_i + 1) % publish_interval == 0
+            if should_publish and selected_indices:
                 publish_payload = {
-                    "index": next(iter(record.image_paths.keys()), 0),
-                    "reason": "Dry-run random publication",
-                    "title": "Dry-run favorite",
+                    "index": selected_indices[0],
+                    "reason": f"Baseline publish every {publish_interval} generations.",
+                    "title": "Baseline favorite",
                     "raw": None,
                 }
 
@@ -1365,6 +1623,8 @@ class AgentRunner:
                 }
                 if scheduled:
                     publish_index_for_highlight = publish_index
+                elif self._last_publish_rejection:
+                    selection_meta["publish_error"] = dict(self._last_publish_rejection)
             else:
                 selection_meta["publish_error"] = {
                     "index": publish_payload.get("index"),
@@ -1411,6 +1671,8 @@ class AgentRunner:
                     "rationale": forced_rationale,
                     "forced": True,
                 }
+            elif self._last_publish_rejection and "publish_error" not in selection_meta:
+                selection_meta["publish_error"] = dict(self._last_publish_rejection)
 
         selection_path = Path(selection_meta.get("selection_path") or grid_path)
         self._render_selection_with_publication(
@@ -1755,6 +2017,7 @@ class AgentRunner:
         response_text: Optional[str],
         source: str,
     ) -> bool:
+        self._last_publish_rejection = None
         generation_raw = favorite.get("generation")
         index_raw = favorite.get("index")
         title = favorite.get("title", "")
@@ -1768,6 +2031,37 @@ class AgentRunner:
         record = self._generation_records.get(generation_int)
         if record is None or index_int not in record.image_paths:
             return None
+
+        # prefer_color = bool(self._color_enabled)
+        # image_variants = record.image_paths.get(index_int)
+        # if isinstance(image_variants, ImageVariantPaths):
+        #     image_path = image_variants.for_color_mode(prefer_color)
+        # else:
+        #     image_path = image_variants
+        # duplicate_entry, pixel_distance = self._find_duplicate_archive_entry(image_path)
+        # if duplicate_entry is not None:
+        #     rejection: Dict[str, Any] = {
+        #         "index": index_int,
+        #         "generation": generation_int,
+        #         "reason": "duplicate_archive_image",
+        #         "archive_entry_id": duplicate_entry.entry_id,
+        #     }
+        #     if pixel_distance is not None:
+        #         rejection["pixel_distance"] = pixel_distance
+        #         rejection["epsilon"] = self._duplicate_publish_epsilon
+        #     self._last_publish_rejection = rejection
+        #     distance_str = f"{pixel_distance:.6f}" if pixel_distance is not None else "unknown"
+        #     note = (
+        #         f"Publication rejected: image {index_int} is too similar to archived entry {duplicate_entry.entry_id} "
+        #         f"(distance {distance_str} <= {self._duplicate_publish_epsilon:.6f}). "
+        #         "Please publish something meaningfully different."
+        #     )
+        #     self._queue_prompt_note(note)
+        #     print(
+        #         f"[{self.agent_id}] Publication rejected as duplicate of {duplicate_entry.entry_id} "
+        #         f"(distance {distance_str}, epsilon {self._duplicate_publish_epsilon:.6f})."
+        #     )
+        #     return False
 
         payload = dict(favorite)
         payload["generation"] = generation_int
@@ -2053,6 +2347,152 @@ class AgentRunner:
             )
         print(log_str)
 
+    # ------------------------------------------------------------------
+    # CLIP noun baseline helpers
+    # ------------------------------------------------------------------
+    def _ensure_clip_noun_components(self) -> None:
+        # Reuse a per-process cache so we only embed nouns once.
+        cached = _CLIP_NOUN_CACHE.get("loaded", False)
+        if cached:
+            self._clip_model = _CLIP_NOUN_CACHE["model"]
+            self._clip_preprocess = _CLIP_NOUN_CACHE["preprocess"]
+            self._clip_tokenizer = _CLIP_NOUN_CACHE["tokenizer"]
+            self._clip_device = _CLIP_NOUN_CACHE["device"]
+            self._clip_text_embeddings = _CLIP_NOUN_CACHE["noun_embeddings"]
+            self._clip_noun_labels = _CLIP_NOUN_CACHE["nouns"]
+            self._clip_torch = _CLIP_NOUN_CACHE["torch"]
+            return
+
+        try:
+            import torch  # type: ignore
+            import open_clip  # type: ignore
+            from compute_noun_similarity import embed_texts, format_prompts, load_nouns
+        except Exception as exc:  # pragma: no cover - import guard
+            raise RuntimeError(
+                "CLIP noun baseline requires torch and open_clip (see compute_noun_similarity.py dependencies)."
+            ) from exc
+
+        noun_path = REPO_ROOT / "nounlist.txt"
+        nouns = load_nouns(noun_path)
+        prompts = format_prompts(nouns, "{label}")
+
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            "ViT-H-14", pretrained="laion2b_s32b_b79k"
+        )
+        model.eval()
+        model.to(device)
+        tokenizer = open_clip.get_tokenizer("ViT-H-14")
+        noun_embeddings = embed_texts(
+            model,
+            tokenizer,
+            prompts,
+            device,
+            batch_size=512,
+        )
+
+        self._clip_model = model
+        self._clip_preprocess = preprocess
+        self._clip_tokenizer = tokenizer
+        self._clip_device = device
+        self._clip_text_embeddings = noun_embeddings
+        self._clip_noun_labels = nouns
+        self._clip_torch = torch
+
+        _CLIP_NOUN_CACHE.update(
+            {
+                "loaded": True,
+                "model": model,
+                "preprocess": preprocess,
+                "tokenizer": tokenizer,
+                "device": device,
+                "noun_embeddings": noun_embeddings,
+                "nouns": nouns,
+                "torch": torch,
+            }
+        )
+        print(
+            f"[{self.agent_id}] Initialized CLIP noun baseline with {len(nouns)} nouns on device {device}."
+        )
+
+    def _clip_embed_images(self, images: Sequence[Image.Image]) -> np.ndarray:
+        self._ensure_clip_noun_components()
+        assert self._clip_model is not None
+        assert self._clip_preprocess is not None
+        assert self._clip_device is not None
+        assert self._clip_text_embeddings is not None
+        assert self._clip_torch is not None
+
+        if not images:
+            return np.zeros((0, self._clip_text_embeddings.shape[1]), dtype=float)
+
+        tensors = []
+        for img in images:
+            tensors.append(self._clip_preprocess(img.convert("RGB")))
+
+        batch = self._clip_torch.stack(tensors, dim=0).to(self._clip_device)
+        with self._clip_torch.no_grad():
+            emb = self._clip_model.encode_image(batch)
+        arr = emb.cpu().numpy()
+        norm = np.linalg.norm(arr, axis=1, keepdims=True)
+        norm[norm == 0] = 1.0
+        return arr / norm
+
+    def _clip_max_similarity_scores(self, images: Sequence[Image.Image]) -> List[float]:
+        embeddings = self._clip_embed_images(images)
+        assert self._clip_text_embeddings is not None
+        if embeddings.size == 0:
+            return []
+        sims = embeddings @ self._clip_text_embeddings.T
+        max_scores = np.max(sims, axis=1)
+        return max_scores.tolist()
+
+    @staticmethod
+    def _normalize_similarity_scores(scores: Sequence[float]) -> List[float]:
+        if not scores:
+            return []
+        weights = np.array(scores, dtype=float)
+        weights = np.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
+        weights = weights - weights.min()
+        weights = weights + 1e-6
+        total = float(weights.sum())
+        if total <= 0 or not math.isfinite(total):
+            return [1.0 / len(scores)] * len(scores)
+        return (weights / total).tolist()
+
+    def _select_parents_clip_nouns(
+        self,
+        population_images: List[Image.Image],
+        generation: int,
+    ) -> Dict[str, Any]:
+        scores = self._clip_max_similarity_scores(population_images)
+        min_distances = [1.0 - score for score in scores]
+        probabilities = self._normalize_similarity_scores(scores)
+        if not probabilities or not population_images:
+            selected_idx = 0 if population_images else -1
+            rationale = "CLIP noun baseline fell back to index 0 (no scores available)."
+        else:
+            selected_idx = random.choices(range(len(population_images)), weights=probabilities, k=1)[0]
+            prob_selected = probabilities[selected_idx] if selected_idx < len(probabilities) else 0.0
+            selected_score = scores[selected_idx] if selected_idx < len(scores) else float("-inf")
+            rationale = (
+                f"CLIP noun baseline sampled index {selected_idx} "
+                f"(max similarity={selected_score:.3f}, min distance={1.0 - selected_score:.3f}, p={prob_selected:.3f})."
+            )
+
+        metadata: Dict[str, Any] = {
+            "selected": [selected_idx] if selected_idx >= 0 else [],
+            "rationale": rationale,
+            "baseline": self.selection_baseline,
+            "max_similarities": scores,
+            "min_distances": min_distances,
+            "probabilities": probabilities,
+            "noun_count": len(self._clip_noun_labels),
+            "model": "ViT-H-14/laion2b_s32b_b79k",
+            "selection_count": 1,
+        }
+        return self._write_baseline_artifacts(generation, population_images, metadata)
+
     def _select_parents_baseline(
         self,
         population_images: List[Image.Image],
@@ -2060,6 +2500,9 @@ class AgentRunner:
         genomes: List[Tuple[int, neat.DefaultGenome]],
         config: neat.Config,
     ) -> Dict[str, Any]:
+        if self.selection_baseline == "clip-nouns":
+            return self._select_parents_clip_nouns(population_images, generation)
+
         genome_config = config.genome_config
         metrics: List[Dict[str, Any]] = []
         for idx, (genome_id, genome) in enumerate(genomes):

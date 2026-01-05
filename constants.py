@@ -12,4 +12,4 @@ RATING_BATCH_SIZE = 100
 REPO_ROOT = Path(__file__).resolve().parent
 # Get the repo name from the REPO_ROOT path
 REPO_NAME = REPO_ROOT.name
-SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes")
+SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes", "clip-nouns")

@@ -20,6 +20,7 @@ Key behaviours:
 
 from __future__ import annotations
 
+import copy
 import gzip
 import json
 import multiprocessing
@@ -137,6 +138,17 @@ def _clamp(value: int, lower: int, upper: int) -> int:
     return max(lower, min(upper, value))
 
 
+def _resolve_task_temperature(cfg: PicbreederConfig, task: AgentTask) -> float:
+    temperature = cfg.temperature
+    if isinstance(temperature, str) and temperature.lower() == "random":
+        if task.temperature is not None:
+            return float(task.temperature)
+        seed = cfg.seed if cfg.seed is not None else 0
+        rng = random.Random(f"{seed}:{task.agent_id}:{task.agent_index}")
+        return rng.uniform(0.0, 2.0)
+    return float(temperature)
+
+
 
 @dataclass
 class AgentTask:
@@ -145,6 +157,7 @@ class AgentTask:
     resume: bool
     warm_start_active: bool
     personality_prompt: Optional[str]
+    temperature: Optional[float] = None
     branching_decision: Optional[Dict[str, Any]] = None
     favorite_selection: Optional[Dict[str, Any]] = None
     archive_entry: Optional[Dict[str, Any]] = None
@@ -156,6 +169,7 @@ class AgentTask:
             "resume": self.resume,
             "warm_start_active": self.warm_start_active,
             "personality_prompt": self.personality_prompt,
+            "temperature": self.temperature,
             "branching_decision": self.branching_decision,
             "favorite_selection": self.favorite_selection,
             "archive_entry": self.archive_entry,
@@ -166,6 +180,7 @@ class AgentTask:
 class AgentRecord:
     agent_id: str
     status: str = "in_progress"
+    temperature: Optional[float] = None
     branching_decision: Optional[Dict[str, Any]] = None
     favorite_selection: Optional[Dict[str, Any]] = None
     archive_entry: Optional[Dict[str, Any]] = None
@@ -394,9 +409,11 @@ class CollaborativeMultiAgentOrchestrator:
             "enable_crossover": self.enable_crossover,
             "warm_start_structure": self.warm_start_structure,
             "selection_baseline": self.selection_baseline,
+            "temperature": self.config.temperature,
             "generate_personalities": self.config.generate_personalities,
             "personality_path": personality_path_str,
             "request_rationale": self.config.request_rationale,
+            "fixed_session_lengths": self.config.fixed_session_lengths,
         }
         existing = self._metadata.get("run_config")
         if existing is None:
@@ -409,6 +426,8 @@ class CollaborativeMultiAgentOrchestrator:
             missing.append(("warm_start_structure", 0))
         if "selection_baseline" not in existing:
             missing.append(("selection_baseline", "none"))
+        if "temperature" not in existing:
+            missing.append(("temperature", self.config.temperature))
         if "generate_personalities" not in existing:
             missing.append(("generate_personalities", self.config.generate_personalities))
         if "personality_path" not in existing:
@@ -419,6 +438,8 @@ class CollaborativeMultiAgentOrchestrator:
             missing.append(("enable_input_activations", self.enable_input_activations))
         if "enable_crossover" not in existing:
             missing.append(("enable_crossover", self.enable_crossover))
+        if "fixed_session_lengths" not in existing:
+            missing.append(("fixed_session_lengths", self.config.fixed_session_lengths))
         if missing:
             def mutator(data: Dict[str, Any]) -> None:
                 details = data.setdefault("run_config", {})
@@ -580,6 +601,25 @@ class CollaborativeMultiAgentOrchestrator:
 
         return self._mutate_metadata(mutator, read_write=read_write)
 
+    def _resolve_agent_temperature(
+        self,
+        agent_id: str,
+        agent_index: int,
+        record: Optional[AgentRecord],
+        read_write: bool,
+    ) -> float:
+        temperature = self.config.temperature
+        if isinstance(temperature, str) and temperature.lower() == "random":
+            if record is not None and record.temperature is not None:
+                return float(record.temperature)
+            seed = self.seed if self.seed is not None else 0
+            rng = random.Random(f"{seed}:{agent_id}:{agent_index}")
+            resolved = rng.uniform(0.0, 2.0)
+            if record is not None:
+                self._update_agent_record(agent_id, temperature=resolved, read_write=read_write)
+            return resolved
+        return float(temperature)
+
     def _update_agent_record(self, agent_id: str, read_write: bool = True, **updates: Any) -> None:
         def mutator(metadata: Dict[str, Any]) -> None:
             record = metadata["agents"][agent_id]
@@ -703,10 +743,20 @@ class CollaborativeMultiAgentOrchestrator:
             agent_id, generation, favorite, archive
         )
         personality_prompt = self._personality_prompt_for_agent(agent_id)
+        record = self._find_agent_record(agent_id)
+        agent_index = self._parse_agent_index(agent_id) or 0
+        temperature = self._resolve_agent_temperature(
+            agent_id,
+            agent_index,
+            record,
+            read_write=False,
+        )
+        config = copy.copy(self.config)
+        config.temperature = temperature
         return AgentRunner(
             agent_id,
             agent_dir,
-            config=self.config,
+            config=config,
             neat_config=neat_config,
             archive_manager=self.archive_manager,
             generations=self.agent_generations,
@@ -1142,12 +1192,19 @@ class CollaborativeMultiAgentOrchestrator:
             self._update_agent_record(agent_id, status="in_progress", last_generation=0, read_write=False)
         warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
+        temperature = self._resolve_agent_temperature(
+            agent_id,
+            agent_index,
+            record,
+            read_write=False,
+        )
         return AgentTask(
             agent_id=agent_id,
             agent_index=agent_index,
             resume=False,
             warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
+            temperature=temperature,
         )
 
     def _build_resume_agent_task(self, record: AgentRecord) -> AgentTask:
@@ -1158,6 +1215,12 @@ class CollaborativeMultiAgentOrchestrator:
         agent_index = self._parse_agent_index(agent_id) or 0
         warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
+        temperature = self._resolve_agent_temperature(
+            agent_id,
+            agent_index,
+            record,
+            read_write=True,
+        )
         # last_generation = record.last_generation
         # self._update_agent_record(
         #     agent_id,
@@ -1171,6 +1234,7 @@ class CollaborativeMultiAgentOrchestrator:
             resume=True,
             warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
+            temperature=temperature,
             branching_decision=record.branching_decision,
             favorite_selection=record.favorite_selection,
             archive_entry=record.archive_entry,
@@ -1213,9 +1277,9 @@ class CollaborativeMultiAgentOrchestrator:
         if agent_id is None:
             agent_id = self._allocate_agent_id()
         else:
-            self._ensure_agent_number_progress(agent_id)
+            self._ensure_agent_number_progress(agent_id, read_write=True)
         agent_dir = self._agent_dir(agent_id)
-        self._register_agent(agent_id)
+        self._register_agent(agent_id, read_write=True)
         config = self._build_config()
         runner = self._build_runner(agent_id, agent_dir, config, None, resume=False)
         decision = runner.select_starting_point()
@@ -1481,6 +1545,7 @@ def _deserialize_agent_task(payload: Dict[str, Any]) -> AgentTask:
         resume=bool(payload.get("resume")),
         warm_start_active=bool(payload.get("warm_start_active")),
         personality_prompt=payload.get("personality_prompt"),
+        temperature=payload.get("temperature"),
         branching_decision=payload.get("branching_decision"),
         favorite_selection=payload.get("favorite_selection"),
         archive_entry=payload.get("archive_entry"),
@@ -1693,6 +1758,9 @@ def _execute_agent_task(
     task_conn: Connection,
 ) -> Dict[str, Any]:
     agent_dir = Path(cfg.experiment_dir) / "agents" / task.agent_id
+    resolved_temperature = _resolve_task_temperature(cfg, task)
+    agent_cfg = copy.copy(cfg)
+    agent_cfg.temperature = resolved_temperature
 
     population: Optional[neat.Population]
     population = None
@@ -1754,22 +1822,22 @@ def _execute_agent_task(
     runner = AgentRunner(
         task.agent_id,
         agent_dir,
-        config=cfg,
+        config=agent_cfg,
         neat_config=config,
         archive_manager=archive_client,
-        generations=cfg.agent_generations,
-        rows=cfg.rows,
-        cols=cfg.cols,
-        thumb_size=cfg.thumb_size,
-        scheme=cfg.scheme,
-        select_k=cfg.select_k,
-        chat_history_turns=cfg.chat_history_turns,
-        selection_baseline=cfg.selection_baseline,
+        generations=agent_cfg.agent_generations,
+        rows=agent_cfg.rows,
+        cols=agent_cfg.cols,
+        thumb_size=agent_cfg.thumb_size,
+        scheme=agent_cfg.scheme,
+        select_k=agent_cfg.select_k,
+        chat_history_turns=agent_cfg.chat_history_turns,
+        selection_baseline=agent_cfg.selection_baseline,
         population=population,
         progress_callback=progress_callback,
         resume_mode=task.resume,
         warm_start_active=task.warm_start_active,
-        render_genome_diagrams=cfg.render_genome_diagrams,
+        render_genome_diagrams=agent_cfg.render_genome_diagrams,
         process_index=worker_index,
         personality_prompt=task.personality_prompt,
     )

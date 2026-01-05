@@ -30,12 +30,12 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 class CollaborativeRun:
     """Submitit-compatible callable that executes a configured run."""
 
-    def __init__(self, cfg: PicbreederConfig):
-        self.cfg = cfg
+    def __init__(self, sweep_cfg: SweepConfig, run_cfg: PicbreederConfig, mode='train'):
+        self.run_cfg = run_cfg
 
     def __call__(self) -> int:
-        print(_format_run_prefix(self.cfg, "[submitit]"))
-        run_collaborative(self.cfg)
+        print(_format_run_prefix(self.run_cfg, "[submitit]"))
+        run_collaborative(self.run_cfg)
         return 0
 
     def checkpoint(self) -> "submitit.helpers.DelayedSubmission":
@@ -52,7 +52,7 @@ class SweepConfig(PicbreederConfig):
     seed: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
     # chat_history_turns: List[int] = field(default_factory=lambda: [-1, 15, 10, 5, 0])  # Chat history lengths to evaluate
     chat_history_turns: List[int] = field(default_factory=lambda: [-1])  # Chat history lengths to evaluate
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])  # Probability of random parent selection
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.5])  # Probability of random parent selection
     goal: List[str] = field(default_factory=lambda: [  # Goals to sweep over
         "familiar_objects",
         # "fun",
@@ -62,13 +62,14 @@ class SweepConfig(PicbreederConfig):
         # "butterflies"
     ])
     model: List[str] = field(default_factory=lambda: [  # VLM models to evaluate
-        "gemini-3-pro-preview",
+        # "gemini-3-pro-preview",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
     ])
     sweep_name: str = "sweep"  # Base directory for experiment outputs
     log_dir: str = "sweep_logs"
+    submitit_log_dir: str = "submitit_logs"
     slurm: bool = True  # Enable SLURM submission via Submitit
     partition: str = "cpu"  # SLURM partition name
     account: Optional[str] = None  # Optional SLURM account override
@@ -113,10 +114,10 @@ def _build_eval_command(
     cmd: List[str] = [
         sys.executable,
         str(SCRIPT_ROOT / script),
-        f"--experiment-dir={cfg.experiment_dir}",
+        f"experiment_dir={cfg.experiment_dir}",
     ]
     if archive_limit is not None:
-        cmd.append(f"--archive-limit={archive_limit}")
+        cmd.append(f"archive_limit={archive_limit}")
     return cmd
 
 
@@ -177,7 +178,7 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
     except ImportError as exc:
         raise RuntimeError("submitit is required when using --slurm") from exc
 
-    executor = submitit.AutoExecutor(folder=log_dir)
+    executor = submitit.AutoExecutor(folder=cfg.submitit_log_dir)
     executor.update_parameters(
         timeout_min=cfg.timeout_hours * 60,
         mem_gb=cfg.mem_gb,
@@ -186,7 +187,7 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         slurm_account=cfg.account,
         name="picbreeder-vlm",
     )
-    jobs = [CollaborativeRun(run_cfg) for run_cfg in configs]
+    jobs = [CollaborativeRun(cfg, run_cfg) for run_cfg in configs]
     futures = executor.map_array(_execute_job, jobs)
     for run_cfg, future in zip(configs, futures):
         print(_format_run_prefix(run_cfg, "[slurm]") + f" submitted as job {future.job_id}")

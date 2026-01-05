@@ -33,7 +33,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "{selection_prompt}"
     "If so inclined, you may also select an image to publish to the online archive. "
     "Your session can last up to {n_generations} generations, but you may end early whenever you feel finished. "
-    "You should publish no more than once every 20 generations or so. "
+    # "You should publish no more than once every 20 generations or so. "
     "You do not *need* to publish. This is an open-ended, exploratory process that may or may not lead to publishable results. "
     # "It's better to contribute nothing than to contribute garbage. "
     "If you ever want to abandon the current evolutionary trajectory, include a `\"restart\"` object in your JSON. "
@@ -63,6 +63,26 @@ MUTATION_STRENGTH_PROMPT = (
     "(\"Big Changes\" – very strong mutations). If you omit the field, the slider remains at its previous value."
 )
 
+FIXED_SESSION_SYSTEM_INSTRUCTION = (
+    "You are playing with a collaborative online platform which allows users to interactively evolve small neural networks called Compositional Pattern Producing Networks (CPPNs) for generating images. "
+    "{goal_prompt} "
+    "At the first generation the initial grid will display an archive of images published by prior users as favorites (unless you are the first user). "
+    """You may choose to "branch" one of these images, or start instead from a random initial population. """
+    "At each subsequent generation, you will be shown a set of numbered images produced by CPPNs. "
+    "{selection_prompt}"
+    "Your session will last {n_generations} generations. "
+    "At generation {final_generation} (the final generation), you will select one image to publish to the online archive. "
+    "Respond with JSON only: {{\"selected\": [indices]{selection_json_suffix}}}. "
+    "(During branching, you may select only one image from which to branch; "
+    " set \"selected\" to null to start from a fresh population.) "
+    "When publishing, include a \"publish\" field in the JSON response to publish an image from the current population. It should have the form: "
+    '{{\"index\": image_index, \"title\": \"Image Title\"{publish_reason_suffix}}}. '
+    "{color_prompt}"
+    "{mutation_mode_prompt}"
+    "{mutation_strength_prompt}"
+    "{archive_novelty_prompt}"
+)
+
 def gen_selection_prompt(select_k: Optional[int], enable_crossover: bool) -> str:
     crossover_mutation_note = "(using both mutation and crossover)." if enable_crossover else "(using mutation only; no crossover). "
     if select_k is None:
@@ -82,6 +102,7 @@ COLOR_PROMPT = (
     "By default, you will be presented with grayscale versions of the images. "
     "Respond with a JSON containing a single \"color\" field set to true/false to switch between color/grayscale images. "
     "(This response does not affect which images are selected for breeding; it only changes how the current grid is displayed. Include no other fields in the JSON in this case.) "
+    "You should work in grayscale around 78% of the time. Color images should comprise 64% of the final archive. "
     # "It would be a bonus to have some color images in the online archive, but we DO NOT want it to be dominated by high-frequency rainbow artefacts. "
     # "90% of the images in the archive should be grayscale, and you should spend at least 90% of your time exploring grayscale images. "
 )

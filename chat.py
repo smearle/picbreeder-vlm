@@ -156,6 +156,7 @@ def query_with_history(
     prompt: str,
     system_instruction: Optional[str],
     chat_history_turns: Optional[int],
+    temperature: float,
 ) -> Any:
     session: im_query.ImageChatSession = _ensure_chat_session(model, chat_history_turns)
     return session.send(
@@ -165,6 +166,7 @@ def query_with_history(
         history_turns=chat_history_turns,
         mime_type="image/png",
         system_instruction=system_instruction,
+        temperature=temperature,
     )
 
 
@@ -172,6 +174,7 @@ def select_parents_from_grid(
     model: str,
     population_images: List[PIL.Image.Image],
     thinking_budget: int,
+    temperature: float,
     generation: int,
     prompt_template: str,
     query_dir: Path,
@@ -269,6 +272,7 @@ def select_parents_from_grid(
             prompt=prompt,
             system_instruction=system_instruction,
             chat_history_turns=chat_history_turns,
+            temperature=temperature,
         )
         attempt_latencies.append(time.perf_counter() - start_time)
         response_diagnostics = _extract_response_diagnostics(response)

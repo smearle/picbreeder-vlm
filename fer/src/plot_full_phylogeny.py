@@ -302,7 +302,8 @@ def _load_genomes_single_pass(
                 .get("storage", {})
                 .get("generation")
             )
-            genomes = recursive_parse_all_genomes(generation)
+            # genomes = recursive_parse_all_genomes(generation)
+            genomes = get_lineage_genomes(pb_dir, pid)
             for genome in genomes:
                 key = _extract_genome_key(genome)
                 if key is None or key in indexed:
@@ -318,6 +319,49 @@ def _load_genomes_single_pass(
     return indexed
 
 
+def _normalize_limit(limit: Optional[int]) -> Optional[int]:
+    if limit is None or limit < 0:
+        return None
+    return limit
+
+
+def _parse_checkpoint_limit(raw: str) -> Optional[int]:
+    if raw == "None":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _find_best_checkpoint(
+    output_base: Path, requested_limit: Optional[int]
+) -> Tuple[Optional[Path], Optional[int]]:
+    prefix = f"{output_base.name}.limit-"
+    suffix = "_indexed_genomes.npz"
+    best_path: Optional[Path] = None
+    best_limit: Optional[int] = None
+
+    def _score(limit_val: Optional[int]) -> float:
+        return float("inf") if limit_val is None else float(limit_val)
+
+    for path in output_base.parent.glob(f"{output_base.name}.limit-*{suffix}"):
+        name = path.name
+        if not (name.startswith(prefix) and name.endswith(suffix)):
+            continue
+        raw_limit = name[len(prefix) : -len(suffix)]
+        limit_val = _parse_checkpoint_limit(raw_limit)
+        if limit_val is None and raw_limit != "None":
+            continue
+        if requested_limit is not None:
+            if limit_val is None or limit_val > requested_limit:
+                continue
+        if best_path is None or _score(limit_val) > _score(best_limit):
+            best_path = path
+            best_limit = limit_val
+    return best_path, best_limit
+
+
 def _build_parent_maps(
     genomes: Mapping[GenomeKey, IndexedGenome]
 ) -> Tuple[
@@ -325,17 +369,22 @@ def _build_parent_maps(
     Dict[GenomeKey, Set[GenomeKey]],
     Dict[Tuple[GenomeKey, GenomeKey], int],
 ]:
+    pid_age_index: Dict[str, Dict[int, List[GenomeKey]]] = defaultdict(lambda: defaultdict(list))
+    for key, record in genomes.items():
+        pid_age_index[record.pid][record.age].append(key)
+
     parent_for: Dict[GenomeKey, GenomeKey] = {}
     children_for: Dict[GenomeKey, Set[GenomeKey]] = defaultdict(set)
     edge_counts: Dict[Tuple[GenomeKey, GenomeKey], int] = defaultdict(int)
     for key, record in genomes.items():
         parent_keys = _extract_parent_keys(record.genome)
-        if len(parent_keys) == 0 and record.age > 1:
-            pass
+        if len(parent_keys) == 0 and record.age > 0:
+            # Fill missing parent by assuming previous-age genome from same lineage.
+            fallback_parents = pid_age_index.get(record.pid, {}).get(record.age - 1, [])
+            if fallback_parents:
+                parent_keys = sorted(fallback_parents)
         for parent in parent_keys:
             if parent not in genomes:
-                if record.age > 1:
-                    pass
                 continue
             children_for[parent].add(key)
             edge_counts[(parent, key)] += 1
@@ -521,10 +570,37 @@ def main() -> None:
         thumb_dir = None
 
     pids = _discover_pids(pb_dir)
-    if args.limit is not None:
-        pids = pids[: args.limit]
 
-    indexed_genomes = _load_genomes_single_pass(pb_dir, pids)
+    requested_limit = _normalize_limit(args.limit)
+    target_pids = pids if requested_limit is None else pids[: requested_limit]
+
+    checkpoint_path, checkpoint_limit = _find_best_checkpoint(output_base, requested_limit)
+    indexed_genomes: Dict[GenomeKey, IndexedGenome]
+    if checkpoint_path is not None:
+        print(f"Loading previously indexed genomes from {checkpoint_path}")
+        indexed_genomes = np.load(checkpoint_path, allow_pickle=True)["indexed_genomes"].item()
+    else:
+        indexed_genomes = {}
+        checkpoint_limit = 0
+
+    start_idx = len(target_pids) if checkpoint_limit is None else checkpoint_limit or 0
+    start_idx = min(start_idx, len(target_pids))
+    remaining_pids = target_pids[start_idx:]
+
+    if remaining_pids:
+        print("Indexing genomes from Picbreeder lineages (this may take a while)...")
+        new_genomes = _load_genomes_single_pass(pb_dir, remaining_pids)
+        for key, record in new_genomes.items():
+            if key not in indexed_genomes:
+                indexed_genomes[key] = record
+
+    limit_label = str(requested_limit)
+    index_genomes_pickle_path = output_base.with_suffix(f".limit-{limit_label}_indexed_genomes.npz")
+    if remaining_pids or not index_genomes_pickle_path.exists():
+        np.savez_compressed(
+            index_genomes_pickle_path,
+            indexed_genomes=indexed_genomes,
+        )
 
     graph = build_phylogeny_graph(
         genomes=indexed_genomes,

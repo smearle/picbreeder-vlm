@@ -99,9 +99,9 @@ def main():
         if args.per_lineage:
             grayscale_intermediate = sum(1 for label in intermediate_classes if label == "grayscale")
             color_intermediate = len(intermediate_classes) - grayscale_intermediate
-            per_lineage_rows.append(
-                f"{pid},{len(genomes)},{final_class},{grayscale_intermediate},{color_intermediate}"
-            )
+            row = f"{pid},{len(genomes)},{final_class},{grayscale_intermediate},{color_intermediate}"
+            print(row)
+            per_lineage_rows.append(row)
 
     print("=== Intermediary genomes ===")
     print(summarize_counts(stats["intermediate"]))
@@ -112,6 +112,14 @@ def main():
         print("\npid,total_genomes,final_class,intermediate_grayscale,intermediate_color")
         for row in per_lineage_rows:
             print(row)
+
+    # Save this data
+    output_path = pb_dir / "lineage_color_mode_counts.csv"
+    with output_path.open("w", encoding="utf-8") as f:
+        f.write("pid,total_genomes,final_class,intermediate_grayscale,intermediate_color\n")
+        for row in per_lineage_rows:
+            f.write(f"{row}\n")
+    print(f"\nSaved detailed per-lineage data to: {output_path}")
 
 
 if __name__ == "__main__":
