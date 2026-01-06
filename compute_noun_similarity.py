@@ -14,12 +14,17 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image
 import torch
 from tqdm import tqdm
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 import hydra
 from hydra.conf import HelpConf, HydraConf
@@ -38,7 +43,7 @@ from utils import _ensure_absolute
 @dataclass
 class NounSimilarityConfig(PicbreederConfig):
     noun_file: Path = Path("nounlist.txt")
-    model: str = "ViT-H-14"
+    clip_model: str = "ViT-H-14"
     pretrained: str = "laion2b_s32b_b79k"
     batch_size: int = 64
     noun_batch_size: int = 512
@@ -46,6 +51,8 @@ class NounSimilarityConfig(PicbreederConfig):
     archive_limit: Optional[int] = None
     label_template: str = "{label}"
     output_json: Optional[Path] = None
+    output_trajectory_json: Optional[Path] = None
+    output_trajectory_plot: Optional[Path] = None
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -84,6 +91,67 @@ def load_image_paths(experiment_dir: Path) -> List[Path]:
     if not images_dir.exists():
         raise FileNotFoundError(f"Images directory not found: {images_dir}")
     return sorted(images_dir.glob("*.png"))
+
+
+def _numeric_suffix(path: Path) -> int:
+    stem = path.stem
+    parts = stem.split("_")
+    try:
+        return int(parts[-1])
+    except ValueError:
+        return 0
+
+
+def infer_archive_order(experiment_dir: Path) -> List[Path]:
+    """Infer archive insertion order, mirroring plot_novelty_over_time.py behavior.
+
+    Priority:
+      1) <experiment_dir>/archive/archive_metadata.json if present
+      2) Otherwise, fall back to filename ordering (numeric suffix if present)
+    """
+    archive_dir = experiment_dir / "archive"
+    images_dir = archive_dir / "images"
+    if not images_dir.exists():
+        raise FileNotFoundError(f"Images directory not found: {images_dir}")
+
+    ordered: List[Path] = []
+    seen = set()
+    metadata_path = archive_dir / "archive_metadata.json"
+
+    if metadata_path.exists():
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+            for entry in data.get("entries", []):
+                raw_path = entry.get("image_path")
+                img_id = str(entry.get("id", "")).strip()
+
+                candidate = None
+                if raw_path:
+                    candidate = Path(raw_path)
+                    if not candidate.is_absolute():
+                        candidate = images_dir / candidate
+                if candidate is None or not candidate.exists():
+                    if img_id:
+                        filename = f"{img_id}.png" if not img_id.endswith(".png") else img_id
+                        candidate = images_dir / filename
+
+                if candidate and candidate.exists() and candidate.name not in seen:
+                    ordered.append(candidate)
+                    seen.add(candidate.name)
+        except Exception as exc:
+            print(f"Warning: failed to parse archive metadata ({exc}); falling back to filename ordering.")
+
+    remaining = sorted(images_dir.glob("*.png"), key=_numeric_suffix)
+    for path in remaining:
+        if path.name in seen:
+            continue
+        ordered.append(path)
+        seen.add(path.name)
+
+    if not ordered:
+        raise RuntimeError(f"No PNG images found under {images_dir}")
+
+    return ordered
 
 
 def load_nouns(noun_file: Path) -> List[str]:
@@ -185,6 +253,66 @@ def compute_max_similarities(
     return max_per_noun, float(max_per_noun.mean())
 
 
+def compute_mean_max_similarity_trajectory(
+    image_embeddings: np.ndarray,
+    noun_embeddings: np.ndarray,
+    image_paths: Sequence[Path],
+) -> List[Dict[str, object]]:
+    """Compute running mean of per-noun max cosine similarity as images are added."""
+    if image_embeddings.size == 0:
+        raise ValueError("No image embeddings available for trajectory calculation.")
+    if noun_embeddings.size == 0:
+        raise ValueError("No noun embeddings available for trajectory calculation.")
+    if len(image_paths) != image_embeddings.shape[0]:
+        raise ValueError("image_paths length must match number of image embeddings")
+
+    max_per_noun = np.full((noun_embeddings.shape[0],), -np.inf, dtype=np.float32)
+    results: List[Dict[str, object]] = []
+
+    for idx in range(image_embeddings.shape[0]):
+        sims = image_embeddings[idx] @ noun_embeddings.T
+        max_per_noun = np.maximum(max_per_noun, sims)
+        results.append(
+            {
+                "index": int(idx + 1),
+                "image": image_paths[idx].name,
+                "mean_max_similarity": float(max_per_noun.mean()),
+            }
+        )
+
+    return results
+
+
+def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], outpath: Path) -> None:
+    steps = [int(row["index"]) for row in results]
+    vals = [float(row["mean_max_similarity"]) for row in results]
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 5))
+    ax.plot(steps, vals, color="#1f77b4", linewidth=2)
+    ax.set_title("Noun coverage (mean per-noun max similarity) over archive growth")
+    ax.set_xlabel("Archive insertion order")
+    ax.set_ylabel("Mean of per-noun max cosine similarity")
+    ax.grid(True, which="major", alpha=0.3)
+
+    fig.tight_layout()
+    outpath.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+
+
+def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) -> None:
+    serializable = [
+        {
+            "index": int(row["index"]),
+            "image": str(row["image"]),
+            "mean_max_similarity": float(row["mean_max_similarity"]),
+        }
+        for row in results
+    ]
+    outpath.parent.mkdir(parents=True, exist_ok=True)
+    outpath.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+
+
 def _resolve_optional_path(value: Optional[Path], base: Path) -> Optional[Path]:
     if value is None:
         return None
@@ -201,7 +329,7 @@ def main(cfg: NounSimilarityConfig) -> None:
     if not exp_dir.exists():
         raise FileNotFoundError(f"Experiment directory does not exist: {exp_dir}")
 
-    image_paths = load_image_paths(exp_dir)
+    image_paths = infer_archive_order(exp_dir)
     if validated_cfg.archive_limit is not None:
         image_paths = image_paths[: validated_cfg.archive_limit]
     if not image_paths:
@@ -217,10 +345,10 @@ def main(cfg: NounSimilarityConfig) -> None:
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
 
-    print(f"Loading OpenCLIP model {validated_cfg.model} ({validated_cfg.pretrained})...")
-    model, _, preprocess = open_clip.create_model_and_transforms(validated_cfg.model, pretrained=validated_cfg.pretrained)
+    print(f"Loading OpenCLIP model {validated_cfg.clip_model} ({validated_cfg.pretrained})...")
+    model, _, preprocess = open_clip.create_model_and_transforms(validated_cfg.clip_model, pretrained=validated_cfg.pretrained)
     model.to(device)
-    tokenizer = open_clip.get_tokenizer(validated_cfg.model)
+    tokenizer = open_clip.get_tokenizer(validated_cfg.clip_model)
 
     print(f"Embedding {len(image_paths)} images...")
     image_embeddings = embed_images(
@@ -242,11 +370,13 @@ def main(cfg: NounSimilarityConfig) -> None:
 
     max_per_noun, mean_similarity = compute_max_similarities(image_embeddings, noun_embeddings)
 
+    trajectory = compute_mean_max_similarity_trajectory(image_embeddings, noun_embeddings, image_paths)
+
     metrics = {
         "experiment_dir": str(exp_dir),
         "num_images": len(image_paths),
         "num_nouns": len(nouns),
-        "model": validated_cfg.model,
+        "model": validated_cfg.clip_model,
         "pretrained": validated_cfg.pretrained,
         "label_template": validated_cfg.label_template,
         "mean_max_similarity": mean_similarity,
@@ -263,6 +393,18 @@ def main(cfg: NounSimilarityConfig) -> None:
         json.dump(metrics, f, indent=2)
     print(f"Saved noun similarity metrics to {output_path}")
     print(f"Mean of per-noun max cosine similarity: {mean_similarity:.4f}")
+
+    trajectory_json = _resolve_optional_path(validated_cfg.output_trajectory_json, original_cwd)
+    if trajectory_json is None:
+        trajectory_json = exp_dir / "noun_similarity_over_time.json"
+    trajectory_plot = _resolve_optional_path(validated_cfg.output_trajectory_plot, original_cwd)
+    if trajectory_plot is None:
+        trajectory_plot = exp_dir / "noun_similarity_over_time.png"
+
+    save_trajectory_json(trajectory, trajectory_json)
+    plot_mean_max_similarity_trajectory(trajectory, trajectory_plot)
+    print(f"Saved noun similarity trajectory JSON to {trajectory_json}")
+    print(f"Saved noun similarity trajectory plot to {trajectory_plot}")
 
 
 if __name__ == "__main__":

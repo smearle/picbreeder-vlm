@@ -84,7 +84,7 @@ FIXED_SESSION_SYSTEM_INSTRUCTION = (
 )
 
 def gen_selection_prompt(select_k: Optional[int], enable_crossover: bool) -> str:
-    crossover_mutation_note = "(using both mutation and crossover)." if enable_crossover else "(using mutation only; no crossover). "
+    crossover_mutation_note = "(using both mutation and crossover). " if enable_crossover else "(using mutation only; no crossover). "
     if select_k is None:
         return f"Pick one or several images by their numeric labels--the corresponding CPPNs will be used as the parents of the next generation {crossover_mutation_note}"
     if select_k == 1:
