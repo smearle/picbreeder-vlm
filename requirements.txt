@@ -14,7 +14,7 @@ submitit
 open_clip_torch
 torchvision
 torch
-umap-learn
+# umap-learn
 scikit-learn
 seaborn
 tqdm

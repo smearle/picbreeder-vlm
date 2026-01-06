@@ -206,11 +206,12 @@ def compute_mpd_trajectory(embeddings: np.ndarray, image_paths: Sequence[Path]):
 
 
 def plot_mpd_trajectory(results, outpath: Path):
-    steps = [item["index"] for item in results]
-    mpd_vals = [item["mean_pairwise_distance"] for item in results]
-    min_dists = [item["nearest_neighbor_distance"] for item in results]
-    mean_min_vals = [item["mean_min_distance"] for item in results]
-    sum_min_vals = [item["sum_min_distance"] for item in results]
+    n_init_skip = 2
+    steps = [item["index"] for item in results][n_init_skip:]
+    mpd_vals = [item["mean_pairwise_distance"] for item in results][n_init_skip:]
+    min_dists = [item["nearest_neighbor_distance"] for item in results][n_init_skip:]
+    mean_min_vals = [item["mean_min_distance"] for item in results][n_init_skip:]
+    sum_min_vals = [item["sum_min_distance"] for item in results][n_init_skip:]
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
 

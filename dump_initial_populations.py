@@ -22,6 +22,7 @@ def dump_initial_populations(
     thumb_size: int,
     enable_output_activations: bool,
     enable_input_activations: bool,
+    render_genome_diagrams: bool,
 ) -> None:
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -70,11 +71,12 @@ def dump_initial_populations(
             grid_path.parent.mkdir(parents=True, exist_ok=True)
             grid_image.save(grid_path, format="PNG")                        
 
-        save_neat_genome_diagrams(genomes, config, population_dir, 0)
+        if render_genome_diagrams:
+            save_neat_genome_diagrams(genomes, config, population_dir, 0)
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="collaborative_base")
-def main(cfg):
+def main(cfg: config.PicbreederConfig):
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     dump_initial_populations(
         count=10,
@@ -85,6 +87,7 @@ def main(cfg):
         thumb_size=200,
         enable_output_activations=True,
         enable_input_activations=False,
+        render_genome_diagrams=cfg.render_genome_diagrams,
     )
 
 if __name__ == "__main__":

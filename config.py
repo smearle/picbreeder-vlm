@@ -27,7 +27,7 @@ class PicbreederConfig:
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = 200  # Generations executed for each agent
-    num_agents: int = 1_000  # How many agents run sequentially in this session
+    num_agents: int = 200  # How many agents run sequentially in this session
     neat_config_path: Optional[Path] = None  # Path to NEAT config file (uses default if None)
     num_proc: int = 1  # Number of parallel agent processes
     warm_start_structure: int = 0  # Number of initial agents restricted to structure-only mutation
@@ -85,20 +85,16 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         cfg.rand_select_prob = float(cfg.rand_select_prob)
     except (TypeError, ValueError):
         raise ValueError("rand-select-prob must be a number") from None
-    if isinstance(cfg.temperature, str):
-        temp_value = cfg.temperature.strip().lower()
-        if temp_value == "random":
-            cfg.temperature = "random"
-        else:
-            try:
-                cfg.temperature = float(cfg.temperature)
-            except (TypeError, ValueError):
-                raise ValueError("temperature must be a number or 'random'") from None
-    else:
-        try:
-            cfg.temperature = float(cfg.temperature)
-        except (TypeError, ValueError):
-            raise ValueError("temperature must be a number or 'random'") from None
+    # Resolve OmegaConf UnionNode to primitive type
+    temp_raw = cfg.temperature
+    if hasattr(temp_raw, '_value'):
+        temp_raw = temp_raw._value()
+    # Need to do this twice because it's nested (Union)
+    if hasattr(temp_raw, '_value'):
+        temp_raw = temp_raw._value()
+    cfg.temperature = temp_raw
+    if not (isinstance(cfg.temperature, (int, float)) or cfg.temperature == "random"):
+        raise ValueError("temperature must be a number or 'random'") from None
     if cfg.temperature != "random" and (cfg.temperature < 0 or cfg.temperature > 2):
         raise ValueError("temperature must be between 0 and 2")
     if cfg.resume_agent_id and not cfg.resume:

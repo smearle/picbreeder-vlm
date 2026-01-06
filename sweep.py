@@ -18,6 +18,7 @@ from hydra.core.config_store import ConfigStore
 from hydra.utils import get_original_cwd
 from hydra.conf import HelpConf, HydraConf
 import omegaconf
+from pyparsing import Union
 import submitit  # Do not remove this.
 
 from collaborative_multi_agent import run as run_collaborative
@@ -50,9 +51,10 @@ def _execute_job(job: CollaborativeRun) -> int:
 @dataclass
 class SweepConfig(PicbreederConfig):
     seed: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
-    # chat_history_turns: List[int] = field(default_factory=lambda: [-1, 15, 10, 5, 0])  # Chat history lengths to evaluate
-    chat_history_turns: List[int] = field(default_factory=lambda: [-1])  # Chat history lengths to evaluate
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.5])  # Probability of random parent selection
+    # chat_history_turns: List[int] = field(default_factory=lambda: [-1, 10, 2, 1, 0])  # Chat history lengths to evaluate
+    chat_history_turns: List[int] = field(default_factory=lambda: [1])  # Chat history lengths to evaluate
+    # rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5])  # Probability of random parent selection
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [0.0, 2.0, "random"])  # Sampling temperature values to evaluate
     goal: List[str] = field(default_factory=lambda: [  # Goals to sweep over
         "familiar_objects",
         # "fun",
@@ -64,15 +66,16 @@ class SweepConfig(PicbreederConfig):
     model: List[str] = field(default_factory=lambda: [  # VLM models to evaluate
         # "gemini-3-pro-preview",
         "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
+        # "gemini-2.5-flash",
+        # "gemini-2.5-flash-lite",
     ])
     sweep_name: str = "sweep"  # Base directory for experiment outputs
     log_dir: str = "sweep_logs"
     submitit_log_dir: str = "submitit_logs"
     slurm: bool = True  # Enable SLURM submission via Submitit
     partition: str = "cpu"  # SLURM partition name
-    account: Optional[str] = None  # Optional SLURM account override
+    # account: Optional[str] = None  # Optional SLURM account override
+    account: Optional[str] = "pr_174_tandon_advanced"  # Optional SLURM account override
     timeout_hours: int = 24  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
     num_proc: int = 10  # Number of parallel processes per task
@@ -183,7 +186,7 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         timeout_min=cfg.timeout_hours * 60,
         mem_gb=cfg.mem_gb,
         cpus_per_task=cfg.num_proc,
-        slurm_partition=cfg.partition,
+        # slurm_partition=cfg.partition,
         slurm_account=cfg.account,
         name="picbreeder-vlm",
     )
