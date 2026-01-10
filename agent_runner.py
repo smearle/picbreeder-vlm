@@ -1430,7 +1430,11 @@ class AgentRunner:
 
         if self.selection_baseline == "none":
             selection_meta_raw: Dict[str, Any]
-            if self.rand_select_prob > 0 and random.random() < self.rand_select_prob:
+            if (
+                self.rand_select_prob > 0
+                and not (self.fixed_session_lengths and generation_i == self.generations - 1)
+                and random.random() < self.rand_select_prob
+            ):
                 grid_image = create_numbered_grid(population_images, self.rows, self.cols, self.thumb_size)
                 grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
                 grid_image.save(grid_path, format="PNG")
@@ -1578,7 +1582,7 @@ class AgentRunner:
         self._save_selected_genomes(generation_i, genomes, selected_indices)
 
         publish_payload = None
-        if self.selection_baseline == "none":
+        if self.selection_baseline == "none" and (not self.config.fixed_session_lengths or generation_i == self.generations - 1):
             publish_payload = self._parse_publish_payload(selection_meta.get("response_text", ""))
         else:
             publish_interval = 20

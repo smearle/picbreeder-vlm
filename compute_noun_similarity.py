@@ -85,6 +85,69 @@ def _validate_noun_similarity_options(cfg: NounSimilarityConfig) -> None:
         raise ValueError("label_template must contain '{label}' placeholder")
 
 
+def prepare_openclip_components(
+    cfg: NounSimilarityConfig,
+    device: torch.device,
+):
+    """Create the OpenCLIP model + preprocess + tokenizer for this config."""
+
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        cfg.clip_model,
+        pretrained=cfg.pretrained,
+    )
+    model.to(device)
+    model.eval()
+    tokenizer = open_clip.get_tokenizer(cfg.clip_model)
+    return model, preprocess, tokenizer
+
+
+def prepare_noun_text_embeddings(
+    cfg: NounSimilarityConfig,
+    *,
+    original_cwd: Path,
+    device: torch.device,
+    model=None,
+    tokenizer=None,
+    nouns: Optional[Sequence[str]] = None,
+    prompts: Optional[Sequence[str]] = None,
+) -> tuple[list[str], list[str], np.ndarray]:
+    """Load/format nouns and embed them once.
+
+    Intended for sweep callers to compute noun embeddings once and pass them into main.
+    If model/tokenizer are not provided, they will be created.
+    """
+
+    validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
+    _validate_noun_similarity_options(validated_cfg)
+
+    if nouns is None:
+        noun_file = _ensure_absolute(Path(validated_cfg.noun_file), original_cwd)
+        nouns_list = load_nouns(noun_file)
+    else:
+        nouns_list = [str(noun) for noun in nouns]
+        if not nouns_list:
+            raise ValueError("Provided nouns list is empty")
+
+    if prompts is None:
+        prompts_list = format_prompts(nouns_list, validated_cfg.label_template)
+    else:
+        prompts_list = [str(prompt) for prompt in prompts]
+        if len(prompts_list) != len(nouns_list):
+            raise ValueError("prompts must have the same length as nouns")
+
+    if tokenizer is None or model is None:
+        model, _, tokenizer = prepare_openclip_components(validated_cfg, device)
+
+    noun_embeddings = embed_texts(
+        model,
+        tokenizer,
+        prompts_list,
+        device,
+        batch_size=validated_cfg.noun_batch_size,
+    )
+    return nouns_list, prompts_list, noun_embeddings
+
+
 def load_image_paths(experiment_dir: Path) -> List[Path]:
     """Return sorted PNG image paths from <experiment_dir>/archive/images."""
     images_dir = experiment_dir / "archive" / "images"
@@ -320,7 +383,16 @@ def _resolve_optional_path(value: Optional[Path], base: Path) -> Optional[Path]:
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="noun_similarity_base")
-def main(cfg: NounSimilarityConfig) -> None:
+def main(
+    cfg: NounSimilarityConfig,
+    *,
+    model=None,
+    preprocess=None,
+    tokenizer=None,
+    nouns: Optional[Sequence[str]] = None,
+    prompts: Optional[Sequence[str]] = None,
+    noun_embeddings: Optional[np.ndarray] = None,
+) -> None:
     original_cwd = Path(get_original_cwd())
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
     _validate_noun_similarity_options(validated_cfg)
@@ -335,9 +407,20 @@ def main(cfg: NounSimilarityConfig) -> None:
     if not image_paths:
         raise RuntimeError("No PNG images found in archive/images.")
 
-    noun_file = _ensure_absolute(Path(validated_cfg.noun_file), original_cwd)
-    nouns = load_nouns(noun_file)
-    prompts = format_prompts(nouns, validated_cfg.label_template)
+    if nouns is None:
+        noun_file = _ensure_absolute(Path(validated_cfg.noun_file), original_cwd)
+        nouns_list = load_nouns(noun_file)
+    else:
+        nouns_list = [str(noun) for noun in nouns]
+        if not nouns_list:
+            raise ValueError("Provided nouns list is empty")
+
+    if prompts is None:
+        prompts_list = format_prompts(nouns_list, validated_cfg.label_template)
+    else:
+        prompts_list = [str(prompt) for prompt in prompts]
+        if len(prompts_list) != len(nouns_list):
+            raise ValueError("prompts must have the same length as nouns")
 
     if validated_cfg.device:
         device = torch.device(validated_cfg.device)
@@ -345,10 +428,21 @@ def main(cfg: NounSimilarityConfig) -> None:
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
 
-    print(f"Loading OpenCLIP model {validated_cfg.clip_model} ({validated_cfg.pretrained})...")
-    model, _, preprocess = open_clip.create_model_and_transforms(validated_cfg.clip_model, pretrained=validated_cfg.pretrained)
-    model.to(device)
-    tokenizer = open_clip.get_tokenizer(validated_cfg.clip_model)
+    if (model is None) ^ (preprocess is None):
+        raise ValueError("Provide both model and preprocess, or neither.")
+    if (tokenizer is None) and (model is not None):
+        raise ValueError("Provide tokenizer when providing a pre-built model.")
+
+    if noun_embeddings is not None and nouns is None:
+        # We need the base noun labels to write per-noun metrics.
+        raise ValueError("Provide nouns when providing noun_embeddings")
+
+    if model is None:
+        print(f"Loading OpenCLIP model {validated_cfg.clip_model} ({validated_cfg.pretrained})...")
+        model, preprocess, tokenizer = prepare_openclip_components(validated_cfg, device)
+    else:
+        model.to(device)
+        model.eval()
 
     print(f"Embedding {len(image_paths)} images...")
     image_embeddings = embed_images(
@@ -359,14 +453,21 @@ def main(cfg: NounSimilarityConfig) -> None:
         batch_size=validated_cfg.batch_size,
     )
 
-    print(f"Embedding {len(prompts)} noun prompts...")
-    noun_embeddings = embed_texts(
-        model,
-        tokenizer,
-        prompts,
-        device,
-        batch_size=validated_cfg.noun_batch_size,
-    )
+    if noun_embeddings is None:
+        print(f"Embedding {len(prompts_list)} noun prompts...")
+        noun_embeddings = embed_texts(
+            model,
+            tokenizer,
+            prompts_list,
+            device,
+            batch_size=validated_cfg.noun_batch_size,
+        )
+    else:
+        noun_embeddings = np.asarray(noun_embeddings)
+        if noun_embeddings.ndim != 2 or noun_embeddings.shape[0] != len(prompts_list):
+            raise ValueError(
+                "noun_embeddings must be a 2D array with shape (num_nouns, embed_dim) matching prompts"
+            )
 
     max_per_noun, mean_similarity = compute_max_similarities(image_embeddings, noun_embeddings)
 
@@ -375,12 +476,12 @@ def main(cfg: NounSimilarityConfig) -> None:
     metrics = {
         "experiment_dir": str(exp_dir),
         "num_images": len(image_paths),
-        "num_nouns": len(nouns),
+        "num_nouns": len(nouns_list),
         "model": validated_cfg.clip_model,
         "pretrained": validated_cfg.pretrained,
         "label_template": validated_cfg.label_template,
         "mean_max_similarity": mean_similarity,
-        "max_similarity_per_noun": {noun: float(score) for noun, score in zip(nouns, max_per_noun)},
+        "max_similarity_per_noun": {noun: float(score) for noun, score in zip(nouns_list, max_per_noun)},
     }
 
     output_path = _resolve_optional_path(validated_cfg.output_json, original_cwd)

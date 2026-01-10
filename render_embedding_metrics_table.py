@@ -20,12 +20,34 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import re
 
-__all__ = ["render_tables", "DEFAULT_METRICS_FILENAME"]
+__all__ = [
+    "render_tables",
+    "DEFAULT_METRICS_FILENAME",
+    "aggregate_by_group_key",
+    "format_latex_table",
+]
 
 
 DEFAULT_METRICS_FILENAME = "embedding_metrics.json"
 PER_EXPERIMENT_CSV = "embedding_metrics_table.csv"
 BY_SEED_CSV = "embedding_metrics_by_seed.csv"
+BY_SEED_LATEX = "embedding_metrics_by_seed.tex"
+
+
+TAG_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_tag(tag: str) -> str:
+    cleaned = TAG_SANITIZE_PATTERN.sub("_", str(tag)).strip("_")
+    return cleaned or "tag"
+
+
+def _with_tag(filename: str, tag: Optional[str]) -> str:
+    if not tag:
+        return filename
+    safe = _sanitize_tag(tag)
+    path = Path(filename)
+    return f"{path.stem}_{safe}{path.suffix}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -237,10 +259,82 @@ def format_table(
     return "\n".join(lines)
 
 
+def _escape_latex(text: str) -> str:
+    """Escape special LaTeX characters."""
+    replacements = [
+        ("\\", r"\textbackslash{}"),
+        ("&", r"\&"),
+        ("%", r"\%"),
+        ("$", r"\$"),
+        ("#", r"\#"),
+        ("_", r"\_"),
+        ("{", r"\{"),
+        ("}", r"\}"),
+        ("~", r"\textasciitilde{}"),
+        ("^", r"\textasciicircum{}"),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
+def format_latex_table(
+    columns: Sequence[str],
+    rows: Sequence[Dict[str, Any]],
+    *,
+    precision: int,
+    caption: str = "Embedding metrics aggregated across seeds",
+    label: str = "tab:embedding_metrics",
+) -> str:
+    """Format a table as a LaTeX tabular environment."""
+    if not rows:
+        return "% No data"
+
+    def _format(value: Any) -> str:
+        if isinstance(value, float):
+            return f"{value:.{precision}f}"
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        if value is None:
+            return ""
+        return _escape_latex(str(value))
+
+    # Build column specification
+    col_spec = "l" * len(columns)
+    
+    lines = [
+        r"\begin{table}[htbp]",
+        r"\centering",
+        f"\\caption{{{_escape_latex(caption)}}}",
+        f"\\label{{{label}}}",
+        f"\\begin{{tabular}}{{{col_spec}}}",
+        r"\toprule",
+    ]
+
+    # Header row
+    header_cells = [_escape_latex(col) for col in columns]
+    lines.append(" & ".join(header_cells) + r" \\")
+    lines.append(r"\midrule")
+
+    # Data rows
+    for row in rows:
+        cells = [_format(row.get(col, "")) for col in columns]
+        lines.append(" & ".join(cells) + r" \\")
+
+    lines.extend([
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+    ])
+
+    return "\n".join(lines)
+
+
 def aggregate_by_seed(
     records: Sequence[Dict[str, Any]],
     numeric_columns: Sequence[str],
 ) -> List[Dict[str, Any]]:
+    """Aggregate records by group_id, computing mean/std for numeric columns."""
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(record["group_id"], []).append(record)
@@ -277,6 +371,58 @@ def aggregate_by_seed(
     return summaries
 
 
+def aggregate_by_group_key(
+    records: Sequence[Dict[str, Any]],
+    numeric_columns: Sequence[str],
+    *,
+    group_key_field: str = "group_key",
+) -> List[Dict[str, Any]]:
+    """Aggregate records by an explicit group key (e.g., from config fields).
+
+    This is the preferred aggregation method when group keys are derived from
+    configuration fields rather than directory names.
+    """
+    grouped: Dict[Any, List[Dict[str, Any]]] = {}
+    for record in records:
+        key = record.get(group_key_field)
+        if key is None:
+            key = record.get("group_id", "default")
+        # Convert tuple keys to string for consistent handling
+        key_str = str(key) if not isinstance(key, str) else key
+        grouped.setdefault(key_str, []).append(record)
+
+    summaries: List[Dict[str, Any]] = []
+
+    for group_key_str, group_records in grouped.items():
+        summary: Dict[str, Any] = {
+            "experiment_group": group_key_str,
+            "seed_count": len(group_records),
+        }
+
+        seeds = sorted(
+            str(record["seed"]) for record in group_records if record.get("seed") is not None
+        )
+        summary["seeds"] = ",".join(seeds) if seeds else ""
+
+        for column in numeric_columns:
+            values = [
+                record[column]
+                for record in group_records
+                if column in record and _is_number(record[column])
+            ]
+            if not values:
+                continue
+            mean_value = statistics.mean(values)
+            std_value = statistics.stdev(values) if len(values) > 1 else 0.0
+            summary[f"{column}_mean"] = mean_value
+            summary[f"{column}_std"] = std_value
+
+        summaries.append(summary)
+
+    summaries.sort(key=lambda item: item["experiment_group"])
+    return summaries
+
+
 def render_tables(
     root: Path,
     *,
@@ -284,7 +430,24 @@ def render_tables(
     metrics_name: str = DEFAULT_METRICS_FILENAME,
     precision: int = 4,
     experiment_dirs: Optional[Sequence[Path]] = None,
-) -> Tuple[str, str, Path, Path]:
+    filename_tag: Optional[str] = None,
+    group_labels: Optional[Dict[str, str]] = None,
+) -> Tuple[str, str, Path, Path, Path]:
+    """Render per-experiment and aggregated metrics tables.
+
+    Args:
+        root: Base directory for experiment search.
+        output_dir: Destination for output files (defaults to root).
+        metrics_name: Filename to search for within experiments.
+        precision: Decimal precision for float formatting.
+        experiment_dirs: Explicit list of experiment directories to include.
+        filename_tag: Tag appended to output filenames.
+        group_labels: Mapping from experiment paths to group labels for aggregation.
+            If provided, experiments with the same label are aggregated together.
+
+    Returns:
+        Tuple of (per_experiment_table, aggregated_table, per_csv_path, agg_csv_path, latex_path).
+    """
     records = collect_metrics(
         root,
         metrics_name,
@@ -292,6 +455,15 @@ def render_tables(
     )
     if not records:
         raise ValueError("No embedding metrics found.")
+
+    # Apply explicit group labels if provided
+    if group_labels:
+        for record in records:
+            exp_path = record.get("relative_path", "")
+            # Try to match by experiment name or full path
+            label = group_labels.get(record["experiment"]) or group_labels.get(exp_path)
+            if label:
+                record["group_id"] = label
 
     columns = determine_columns(records)
 
@@ -305,7 +477,7 @@ def render_tables(
     destination = output_dir.expanduser().resolve() if output_dir else root
     destination.mkdir(parents=True, exist_ok=True)
 
-    per_experiment_csv_path = destination / PER_EXPERIMENT_CSV
+    per_experiment_csv_path = destination / _with_tag(PER_EXPERIMENT_CSV, filename_tag)
     write_csv(per_experiment_csv_path, columns, records)
     per_experiment_table = format_table(columns, records, precision=precision)
 
@@ -316,11 +488,22 @@ def render_tables(
     )
     agg_columns.extend(extra_metric_keys)
 
-    by_seed_csv_path = destination / BY_SEED_CSV
+    by_seed_csv_path = destination / _with_tag(BY_SEED_CSV, filename_tag)
     write_csv(by_seed_csv_path, agg_columns, aggregated_records)
     aggregated_table = format_table(agg_columns, aggregated_records, precision=precision)
 
-    return per_experiment_table, aggregated_table, per_experiment_csv_path, by_seed_csv_path
+    # Write LaTeX version
+    latex_path = destination / _with_tag(BY_SEED_LATEX, filename_tag)
+    latex_table = format_latex_table(
+        agg_columns,
+        aggregated_records,
+        precision=precision,
+        caption=f"Embedding metrics aggregated across seeds ({filename_tag or 'sweep'})",
+        label=f"tab:embedding_metrics_{_sanitize_tag(filename_tag or 'sweep')}",
+    )
+    latex_path.write_text(latex_table, encoding="utf-8")
+
+    return per_experiment_table, aggregated_table, per_experiment_csv_path, by_seed_csv_path, latex_path
 
 
 def main() -> int:
@@ -333,7 +516,7 @@ def main() -> int:
     output_dir = args.output_dir.expanduser().resolve() if args.output_dir else None
 
     try:
-        per_table, agg_table, per_csv, agg_csv = render_tables(
+        per_table, agg_table, per_csv, agg_csv, latex_path = render_tables(
             root,
             output_dir=output_dir,
             metrics_name=args.metrics_name,
@@ -344,12 +527,13 @@ def main() -> int:
         return 1
 
     print("Per-experiment metrics:\n")
-    print(per_table)
+    # print(per_table)
     print(f"\nWrote CSV: {per_csv}")
 
     print("\nAggregated across seeds:\n")
-    print(agg_table)
+    # print(agg_table)
     print(f"\nWrote CSV: {agg_csv}")
+    print(f"Wrote LaTeX: {latex_path}")
 
     return 0
 

@@ -97,6 +97,18 @@ class EmbedVisualizeConfig(PicbreederConfig):
 ConfigStore.instance().store(name="embed_visualize_base", node=EmbedVisualizeConfig)
 
 
+def prepare_openclip_components(cfg: EmbedVisualizeConfig, device: torch.device):
+    """Create the OpenCLIP model + preprocess transform for this config."""
+
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        cfg.embedding_model,
+        pretrained=cfg.pretrained,
+    )
+    model.to(device)
+    model.eval()
+    return model, preprocess
+
+
 def load_image_paths(experiment_dir: Path):
     images_dir = experiment_dir / "archive" / "images"
     if not images_dir.exists():
@@ -185,147 +197,147 @@ def plot_coords(coords, image_paths, outpath: Path, thumbs_limit=200):
     plt.close(fig)
 
 
-def _direction_priority(vec):
-    """Return the cardinal direction order that best aligns with the embedding offset."""
-    direction_vectors = {
-        (0, 1): np.array([1.0, 0.0]),
-        (0, -1): np.array([-1.0, 0.0]),
-        (-1, 0): np.array([0.0, 1.0]),
-        (1, 0): np.array([0.0, -1.0]),
-    }
-    base_order = [(0, 1), (0, -1), (-1, 0), (1, 0)]
-    norm = np.linalg.norm(vec)
-    if norm < 1e-9:
-        return base_order
-    vec_unit = vec / norm
-    return sorted(base_order, key=lambda d: -float(np.dot(vec_unit, direction_vectors[d])))
+# def _direction_priority(vec):
+#     """Return the cardinal direction order that best aligns with the embedding offset."""
+#     direction_vectors = {
+#         (0, 1): np.array([1.0, 0.0]),
+#         (0, -1): np.array([-1.0, 0.0]),
+#         (-1, 0): np.array([0.0, 1.0]),
+#         (1, 0): np.array([0.0, -1.0]),
+#     }
+#     base_order = [(0, 1), (0, -1), (-1, 0), (1, 0)]
+#     norm = np.linalg.norm(vec)
+#     if norm < 1e-9:
+#         return base_order
+#     vec_unit = vec / norm
+#     return sorted(base_order, key=lambda d: -float(np.dot(vec_unit, direction_vectors[d])))
 
 
-def _find_grid_position(neighbor_pos, direction_order, occupied):
-    """Breadth-first search for the nearest free grid cell, honoring a direction priority."""
-    visited = set()
-    queue = deque()
-    visited.add(neighbor_pos)
-    for direction in direction_order:
-        target = (neighbor_pos[0] + direction[0], neighbor_pos[1] + direction[1])
-        queue.append(target)
+# def _find_grid_position(neighbor_pos, direction_order, occupied):
+#     """Breadth-first search for the nearest free grid cell, honoring a direction priority."""
+#     visited = set()
+#     queue = deque()
+#     visited.add(neighbor_pos)
+#     for direction in direction_order:
+#         target = (neighbor_pos[0] + direction[0], neighbor_pos[1] + direction[1])
+#         queue.append(target)
 
-    default_dirs = direction_order
-    safety_cap = 100000  # guard against unexpected infinite loops
-    iterations = 0
+#     default_dirs = direction_order
+#     safety_cap = 100000  # guard against unexpected infinite loops
+#     iterations = 0
 
-    while queue:
-        iterations += 1
-        if iterations > safety_cap:
-            raise RuntimeError("Grid placement search exceeded safety cap; layout may be stuck.")
+#     while queue:
+#         iterations += 1
+#         if iterations > safety_cap:
+#             raise RuntimeError("Grid placement search exceeded safety cap; layout may be stuck.")
 
-        pos = queue.popleft()
-        if pos in visited:
-            continue
-        visited.add(pos)
+#         pos = queue.popleft()
+#         if pos in visited:
+#             continue
+#         visited.add(pos)
 
-        if pos not in occupied:
-            return pos
+#         if pos not in occupied:
+#             return pos
 
-        for direction in default_dirs:
-            next_pos = (pos[0] + direction[0], pos[1] + direction[1])
-            if next_pos not in visited:
-                queue.append(next_pos)
+#         for direction in default_dirs:
+#             next_pos = (pos[0] + direction[0], pos[1] + direction[1])
+#             if next_pos not in visited:
+#                 queue.append(next_pos)
 
-    raise RuntimeError("Failed to find an empty grid position for image placement.")
-
-
-def layout_embeddings_to_grid(coords: np.ndarray):
-    """Assign each embedding to an integer grid coordinate while preserving locality."""
-    coords = np.asarray(coords, dtype=float)
-    n = coords.shape[0]
-    if n == 0:
-        return {}, (0, 0, 0, 0)
-
-    centroid = coords.mean(axis=0)
-    center_idx = int(np.argmin(np.linalg.norm(coords - centroid, axis=1)))
-
-    assignments = {center_idx: (0, 0)}
-    occupied = {(0, 0)}
-
-    unassigned = [idx for idx in range(n) if idx != center_idx]
-    if not unassigned:
-        return assignments, (0, 0, 0, 0)
-
-    unassigned_arr = np.array(unassigned, dtype=int)
-    best_dist = np.abs(coords[unassigned_arr] - coords[center_idx]).sum(axis=1)
-    best_neighbor = [center_idx for _ in unassigned]
-
-    while unassigned:
-        min_pos = int(np.argmin(best_dist))
-        idx = unassigned.pop(min_pos)
-        neighbor_idx = best_neighbor.pop(min_pos)
-        best_dist = np.delete(best_dist, min_pos)
-
-        neighbor_pos = assignments[neighbor_idx]
-        vec = coords[idx] - coords[neighbor_idx]
-        direction_order = _direction_priority(vec)
-        new_pos = _find_grid_position(neighbor_pos, direction_order, occupied)
-
-        assignments[idx] = new_pos
-        occupied.add(new_pos)
-
-        if unassigned:
-            unassigned_arr = np.array(unassigned, dtype=int)
-            new_dists = np.abs(coords[unassigned_arr] - coords[idx]).sum(axis=1)
-            mask = new_dists < best_dist
-            best_dist[mask] = new_dists[mask]
-            for i, use_new in enumerate(mask.tolist()):
-                if use_new:
-                    best_neighbor[i] = idx
-
-    rows = [pos[0] for pos in assignments.values()]
-    cols = [pos[1] for pos in assignments.values()]
-    bounds = (min(rows), max(rows), min(cols), max(cols))
-    return assignments, bounds
+#     raise RuntimeError("Failed to find an empty grid position for image placement.")
 
 
-def render_grid(assignments, bounds, image_paths, outpath: Path):
-    """Render the grid-aligned images to disk."""
-    if not assignments:
-        return
+# def layout_embeddings_to_grid(coords: np.ndarray):
+#     """Assign each embedding to an integer grid coordinate while preserving locality."""
+#     coords = np.asarray(coords, dtype=float)
+#     n = coords.shape[0]
+#     if n == 0:
+#         return {}, (0, 0, 0, 0)
 
-    min_row, max_row, min_col, max_col = bounds
-    rows = max_row - min_row + 1
-    cols = max_col - min_col + 1
+#     centroid = coords.mean(axis=0)
+#     center_idx = int(np.argmin(np.linalg.norm(coords - centroid, axis=1)))
 
-    fig_w = min(30.0, max(4.0, cols * 1.6))
-    fig_h = min(30.0, max(4.0, rows * 1.6))
-    fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h))
+#     assignments = {center_idx: (0, 0)}
+#     occupied = {(0, 0)}
 
-    if rows == 1 and cols == 1:
-        axes = np.array([[axes]])
-    elif rows == 1:
-        axes = axes.reshape(1, cols)
-    elif cols == 1:
-        axes = axes.reshape(rows, 1)
+#     unassigned = [idx for idx in range(n) if idx != center_idx]
+#     if not unassigned:
+#         return assignments, (0, 0, 0, 0)
 
-    for r in range(rows):
-        for c in range(cols):
-            ax = axes[r, c]
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.axis("off")
+#     unassigned_arr = np.array(unassigned, dtype=int)
+#     best_dist = np.abs(coords[unassigned_arr] - coords[center_idx]).sum(axis=1)
+#     best_neighbor = [center_idx for _ in unassigned]
 
-    for idx, (row, col) in assignments.items():
-        rr = row - min_row
-        cc = col - min_col
-        ax = axes[rr, cc]
-        try:
-            with Image.open(image_paths[idx]) as img:
-                img_rgb = img.convert("RGB")
-            ax.imshow(img_rgb)
-        except Exception:
-            continue
+#     while unassigned:
+#         min_pos = int(np.argmin(best_dist))
+#         idx = unassigned.pop(min_pos)
+#         neighbor_idx = best_neighbor.pop(min_pos)
+#         best_dist = np.delete(best_dist, min_pos)
 
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=150)
-    plt.close(fig)
+#         neighbor_pos = assignments[neighbor_idx]
+#         vec = coords[idx] - coords[neighbor_idx]
+#         direction_order = _direction_priority(vec)
+#         new_pos = _find_grid_position(neighbor_pos, direction_order, occupied)
+
+#         assignments[idx] = new_pos
+#         occupied.add(new_pos)
+
+#         if unassigned:
+#             unassigned_arr = np.array(unassigned, dtype=int)
+#             new_dists = np.abs(coords[unassigned_arr] - coords[idx]).sum(axis=1)
+#             mask = new_dists < best_dist
+#             best_dist[mask] = new_dists[mask]
+#             for i, use_new in enumerate(mask.tolist()):
+#                 if use_new:
+#                     best_neighbor[i] = idx
+
+#     rows = [pos[0] for pos in assignments.values()]
+#     cols = [pos[1] for pos in assignments.values()]
+#     bounds = (min(rows), max(rows), min(cols), max(cols))
+#     return assignments, bounds
+
+
+# def render_grid(assignments, bounds, image_paths, outpath: Path):
+#     """Render the grid-aligned images to disk."""
+#     if not assignments:
+#         return
+
+#     min_row, max_row, min_col, max_col = bounds
+#     rows = max_row - min_row + 1
+#     cols = max_col - min_col + 1
+
+#     fig_w = min(30.0, max(4.0, cols * 1.6))
+#     fig_h = min(30.0, max(4.0, rows * 1.6))
+#     fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h))
+
+#     if rows == 1 and cols == 1:
+#         axes = np.array([[axes]])
+#     elif rows == 1:
+#         axes = axes.reshape(1, cols)
+#     elif cols == 1:
+#         axes = axes.reshape(rows, 1)
+
+#     for r in range(rows):
+#         for c in range(cols):
+#             ax = axes[r, c]
+#             ax.set_xticks([])
+#             ax.set_yticks([])
+#             ax.axis("off")
+
+#     for idx, (row, col) in assignments.items():
+#         rr = row - min_row
+#         cc = col - min_col
+#         ax = axes[rr, cc]
+#         try:
+#             with Image.open(image_paths[idx]) as img:
+#                 img_rgb = img.convert("RGB")
+#             ax.imshow(img_rgb)
+#         except Exception:
+#             continue
+
+#     fig.tight_layout()
+#     fig.savefig(outpath, dpi=150)
+#     plt.close(fig)
 
 
 def _ensure_rasterfairy_ready():
@@ -414,10 +426,17 @@ def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path):
     plt.close(fig)
 
 
-def _mean_pairwise_distance(embeddings: np.ndarray, max_points: int = 2000, random_state: int = 0):
+def _compute_pairwise_distance_stats(
+    embeddings: np.ndarray, max_points: int = 2000, random_state: int = 0
+):
+    """Compute statistics on the distribution of pairwise distances.
+    
+    Returns mean, std, min, max, and percentiles of pairwise distances.
+    This gives a fuller picture of how spread out the embeddings are.
+    """
     n = embeddings.shape[0]
     if n < 2:
-        return {"value": None, "computed_on": n, "sampled": False}
+        return {"computed_on": n, "sampled": False}
 
     if n > max_points:
         rng = np.random.default_rng(random_state)
@@ -432,17 +451,67 @@ def _mean_pairwise_distance(embeddings: np.ndarray, max_points: int = 2000, rand
 
     dists = pairwise_distances(sample, metric="euclidean")
     iu = np.triu_indices(sample_size, k=1)
+    
     if iu[0].size == 0:
-        mean_dist = 0.0
-    else:
-        mean_dist = float(dists[iu].mean())
-    return {"value": mean_dist, "computed_on": sample_size, "sampled": sampled}
+        return {"computed_on": sample_size, "sampled": sampled}
+    
+    pairwise_dists = dists[iu]
+    
+    return {
+        "mean": float(pairwise_dists.mean()),
+        "std": float(pairwise_dists.std()),
+        "min": float(pairwise_dists.min()),
+        "max": float(pairwise_dists.max()),
+        "median": float(np.median(pairwise_dists)),
+        "p10": float(np.percentile(pairwise_dists, 10)),
+        "p25": float(np.percentile(pairwise_dists, 25)),
+        "p75": float(np.percentile(pairwise_dists, 75)),
+        "p90": float(np.percentile(pairwise_dists, 90)),
+        "computed_on": sample_size,
+        "sampled": sampled,
+    }
 
 
-def _greedy_k_center_radius(embeddings: np.ndarray, k: int):
+def _compute_nearest_neighbor_stats(embeddings: np.ndarray):
+    """Compute statistics on nearest neighbor distances.
+    
+    For each point, find the distance to its nearest neighbor.
+    This measures local density/clustering - if points are evenly spread,
+    NN distances should be relatively uniform. High variance indicates clustering.
+    """
+    n = embeddings.shape[0]
+    if n < 2:
+        return {"computed_on": n}
+    
+    dists = pairwise_distances(embeddings, metric="euclidean")
+    # Set diagonal to inf so we don't pick self as nearest neighbor
+    np.fill_diagonal(dists, np.inf)
+    nn_dists = dists.min(axis=1)
+    
+    return {
+        "mean": float(nn_dists.mean()),
+        "std": float(nn_dists.std()),
+        "min": float(nn_dists.min()),
+        "max": float(nn_dists.max()),
+        "median": float(np.median(nn_dists)),
+        "coefficient_of_variation": float(nn_dists.std() / nn_dists.mean()) if nn_dists.mean() > 0 else None,
+        "computed_on": n,
+    }
+
+
+def _greedy_k_center(embeddings: np.ndarray, k: int):
+    """Run greedy k-center algorithm and return centers + final distances.
+    
+    The greedy k-center algorithm:
+    1. Start with point furthest from centroid
+    2. Iteratively add the point furthest from any existing center
+    3. Return the center indices and the distance of each point to its nearest center
+    
+    This is a 2-approximation algorithm for the k-center problem.
+    """
     n = embeddings.shape[0]
     if n == 0 or k <= 0:
-        return None
+        return None, None
     k = min(k, n)
 
     mean_vec = embeddings.mean(axis=0)
@@ -456,7 +525,62 @@ def _greedy_k_center_radius(embeddings: np.ndarray, k: int):
         new_dist = np.linalg.norm(embeddings - embeddings[next_center], axis=1)
         dist_to_centers = np.minimum(dist_to_centers, new_dist)
 
-    return float(dist_to_centers.max())
+    return centers, dist_to_centers
+
+
+def _compute_k_center_metrics(embeddings: np.ndarray, k: int):
+    """Compute comprehensive k-center coverage metrics.
+    
+    Returns:
+    - covering_radius: max distance to nearest center (the classic k-center objective)
+    - mean_distance: average distance to nearest center
+    - std_distance: std dev of distances (low = even coverage)
+    - median_distance: median distance to nearest center
+    - coverage_uniformity: 1 - (std/mean), higher is more uniform (0-1 scale, can be negative)
+    """
+    n = embeddings.shape[0]
+    if n == 0 or k <= 0:
+        return None
+    
+    centers, dist_to_centers = _greedy_k_center(embeddings, k)
+    if centers is None:
+        return None
+    
+    effective_k = len(centers)
+    
+    # Basic statistics on distances to nearest center
+    covering_radius = float(dist_to_centers.max())
+    mean_dist = float(dist_to_centers.mean())
+    std_dist = float(dist_to_centers.std())
+    median_dist = float(np.median(dist_to_centers))
+    
+    # Coverage uniformity: coefficient of variation inverted
+    # Low CV means distances are uniform (good even coverage)
+    cv = std_dist / mean_dist if mean_dist > 0 else 0.0
+    
+    # Count how many points each center covers (assigned to nearest center)
+    # High variance in cluster sizes indicates uneven coverage
+    if effective_k > 1:
+        # Compute full distance matrix to centers
+        center_embeddings = embeddings[centers]
+        all_dists = pairwise_distances(embeddings, center_embeddings, metric="euclidean")
+        assignments = all_dists.argmin(axis=1)
+        cluster_sizes = np.bincount(assignments, minlength=effective_k)
+        cluster_size_std = float(cluster_sizes.std())
+        cluster_size_cv = cluster_size_std / cluster_sizes.mean() if cluster_sizes.mean() > 0 else 0.0
+    else:
+        cluster_size_std = 0.0
+        cluster_size_cv = 0.0
+    
+    return {
+        "effective_k": effective_k,
+        "covering_radius": covering_radius,
+        "mean_distance_to_center": mean_dist,
+        "std_distance_to_center": std_dist,
+        "median_distance_to_center": median_dist,
+        "distance_coefficient_of_variation": cv,
+        "cluster_size_coefficient_of_variation": cluster_size_cv,
+    }
 
 
 def compute_embedding_metrics(
@@ -466,27 +590,54 @@ def compute_embedding_metrics(
     pairwise_sample_limit: int = 2000,
     k_values=None,
 ):
+    """Compute comprehensive metrics for embedding space coverage.
+    
+    Metrics computed:
+    1. Basic info (num_embeddings, embedding_dim)
+    2. Pairwise distance distribution (mean, std, percentiles) - overall spread
+    3. Nearest neighbor statistics - local density/clustering  
+    4. K-center metrics for various k - coverage with k balls
+    
+    For understanding "evenness" of coverage:
+    - Low coefficient of variation in NN distances = even local density
+    - Low coefficient of variation in k-center distances = even global coverage
+    - Low cluster size CV = centers cover roughly equal numbers of points
+    """
     if k_values is None:
         k_values = [1, 5, 10, 20]
 
+    n = embeddings.shape[0]
     metrics = {
-        "num_embeddings": int(embeddings.shape[0]),
+        "num_embeddings": n,
         "embedding_dim": int(embeddings.shape[1]) if embeddings.size else 0,
     }
 
-    mpd = _mean_pairwise_distance(embeddings, max_points=pairwise_sample_limit, random_state=random_state)
-    metrics["mean_pairwise_distance"] = mpd
+    # Pairwise distance distribution - tells us about overall spread
+    metrics["pairwise_distances"] = _compute_pairwise_distance_stats(
+        embeddings, max_points=pairwise_sample_limit, random_state=random_state
+    )
 
-    n = metrics["num_embeddings"]
-    k_radius = {}
+    # Nearest neighbor statistics - tells us about local density/clustering
+    if n <= pairwise_sample_limit:
+        # Only compute if dataset is small enough (O(n^2) memory)
+        metrics["nearest_neighbor"] = _compute_nearest_neighbor_stats(embeddings)
+    else:
+        # Sample for large datasets
+        rng = np.random.default_rng(random_state)
+        sample_idx = rng.choice(n, size=pairwise_sample_limit, replace=False)
+        sample = embeddings[sample_idx]
+        nn_stats = _compute_nearest_neighbor_stats(sample)
+        nn_stats["sampled"] = True
+        nn_stats["computed_on"] = pairwise_sample_limit
+        metrics["nearest_neighbor"] = nn_stats
+
+    # K-center metrics for various k values
+    k_center_metrics = {}
     for k in k_values:
-        radius = _greedy_k_center_radius(embeddings, k)
-        if radius is not None:
-            k_radius[str(k)] = {
-                "radius": radius,
-                "effective_k": min(k, n),
-            }
-    metrics["k_center_radius"] = k_radius
+        result = _compute_k_center_metrics(embeddings, k)
+        if result is not None:
+            k_center_metrics[str(k)] = result
+    metrics["k_center"] = k_center_metrics
 
     return metrics
 def _parse_k_center_values(raw: str) -> list[int]:
@@ -500,7 +651,12 @@ def _parse_k_center_values(raw: str) -> list[int]:
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="embed_visualize_base")
-def main(cfg: EmbedVisualizeConfig) -> None:
+def main(
+    cfg: EmbedVisualizeConfig,
+    *,
+    model=None,
+    preprocess=None,
+) -> None:
     original_cwd = Path(get_original_cwd())
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
     _validate_embed_options(validated_cfg)
@@ -521,12 +677,15 @@ def main(cfg: EmbedVisualizeConfig) -> None:
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
 
-    print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        validated_cfg.embedding_model,
-        pretrained=validated_cfg.pretrained,
-    )
-    model.to(device)
+    if (model is None) ^ (preprocess is None):
+        raise ValueError("Provide both model and preprocess, or neither.")
+
+    if model is None:
+        print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
+        model, preprocess = prepare_openclip_components(validated_cfg, device)
+    else:
+        model.to(device)
+        model.eval()
 
     print(f"Embedding {len(image_paths)} images (batch_size={validated_cfg.batch_size})...")
     filenames, embeddings = embed_images(
@@ -561,10 +720,10 @@ def main(cfg: EmbedVisualizeConfig) -> None:
     print(f"Creating visualization (thumbnails limit={validated_cfg.thumbs_limit}) -> {viz_out}")
     plot_coords(coords, list(image_paths), viz_out, thumbs_limit=validated_cfg.thumbs_limit)
 
-    grid_assignments, grid_bounds = layout_embeddings_to_grid(coords)
-    grid_out = exp_dir / f"embed_grid_{validated_cfg.method}.pdf"
-    print(f"Rendering grid approximation -> {grid_out}")
-    render_grid(grid_assignments, grid_bounds, image_paths, grid_out)
+    # grid_assignments, grid_bounds = layout_embeddings_to_grid(coords)
+    # grid_out = exp_dir / f"embed_grid_{validated_cfg.method}.pdf"
+    # print(f"Rendering grid approximation -> {grid_out}")
+    # render_grid(grid_assignments, grid_bounds, image_paths, grid_out)
 
     rect_grid_out = exp_dir / f"embed_grid_rect_{validated_cfg.method}.pdf"
     print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")

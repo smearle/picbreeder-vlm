@@ -113,11 +113,23 @@ def _prepare_model(cfg: PairwiseDistanceConfig, device: torch.device):
     return model, preprocess
 
 
+def prepare_openclip_components(
+    cfg: PairwiseDistanceConfig,
+    device: torch.device,
+):
+    """Create the OpenCLIP model + preprocess transform for this config."""
+
+    return _prepare_model(cfg, device)
+
+
 def load_embeddings_in_order(
     image_paths: Sequence[Path],
     exp_dir: Path,
     cfg: PairwiseDistanceConfig,
     device: torch.device,
+    *,
+    model=None,
+    preprocess=None,
 ) -> np.ndarray:
     cache_path = exp_dir / "embeddings_openclip.npz"
     embeddings_map: Dict[str, np.ndarray] = {}
@@ -135,7 +147,10 @@ def load_embeddings_in_order(
         missing = list(image_paths)
 
     if missing:
-        model, preprocess = _prepare_model(cfg, device)
+        if (model is None) ^ (preprocess is None):
+            raise ValueError("Provide both model and preprocess, or neither.")
+        if model is None:
+            model, preprocess = _prepare_model(cfg, device)
         missing_names, missing_embeddings = embed_images(
             model,
             preprocess,
@@ -209,37 +224,47 @@ def plot_mpd_trajectory(results, outpath: Path):
     n_init_skip = 2
     steps = [item["index"] for item in results][n_init_skip:]
     mpd_vals = [item["mean_pairwise_distance"] for item in results][n_init_skip:]
-    min_dists = [item["nearest_neighbor_distance"] for item in results][n_init_skip:]
-    mean_min_vals = [item["mean_min_distance"] for item in results][n_init_skip:]
-    sum_min_vals = [item["sum_min_distance"] for item in results][n_init_skip:]
+    fig, ax = plt.subplots(1, 1, figsize=(12, 5))
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+    ax.plot(steps, mpd_vals, color="#1f77b4", linewidth=2)
+    ax.set_xlabel("Archive insertion order")
+    ax.set_ylabel("Mean pairwise distance")
+    ax.set_title("Embedding diversity as archive grows")
+    ax.grid(True, which="major", alpha=0.3)
 
-    axes[0].plot(steps, mpd_vals, color="#1f77b4", linewidth=2)
-    axes[0].set_ylabel("Mean pairwise distance")
-    axes[0].set_title("Embedding diversity as archive grows")
-    axes[0].grid(True, which="major", alpha=0.3)
-
-    nn_steps = [s for s, d in zip(steps, min_dists) if d is not None]
-    nn_vals = [d for d in min_dists if d is not None]
-    mean_steps = [s for s, d in zip(steps, mean_min_vals) if d is not None]
-    mean_vals = [d for d in mean_min_vals if d is not None]
-    sum_steps = [s for s, d in zip(steps, sum_min_vals) if d is not None]
-    sum_vals = [d for d in sum_min_vals if d is not None]
-
-    axes[1].plot(nn_steps, nn_vals, color="#17becf", linewidth=1.3, alpha=0.7, label="Nearest neighbor distance")
-    axes[1].plot(mean_steps, mean_vals, color="#9467bd", linewidth=2, label="Running mean min distance")
-    axes[1].set_xlabel("Archive insertion order")
-    axes[1].set_ylabel("Min distance scales")
-    axes[1].grid(True, which="major", alpha=0.3)
-
-    sum_axis = axes[1].twinx()
-    sum_axis.plot(sum_steps, sum_vals, color="#ff7f0e", linewidth=1.5, linestyle="--", label="Cumulative min distance")
-    sum_axis.set_ylabel("Cumulative min distance")
-
-    handles, labels = axes[1].get_legend_handles_labels()
-    sum_handles, sum_labels = sum_axis.get_legend_handles_labels()
-    axes[1].legend(handles + sum_handles, labels + sum_labels, loc="upper left")
+    # The nearest-neighbor / min-distance subplot was not useful for our analysis,
+    # but we keep the code here (commented) in case we want it back later.
+    #
+    # min_dists = [item["nearest_neighbor_distance"] for item in results][n_init_skip:]
+    # mean_min_vals = [item["mean_min_distance"] for item in results][n_init_skip:]
+    # sum_min_vals = [item["sum_min_distance"] for item in results][n_init_skip:]
+    #
+    # fig, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+    # axes[0].plot(steps, mpd_vals, color="#1f77b4", linewidth=2)
+    # axes[0].set_ylabel("Mean pairwise distance")
+    # axes[0].set_title("Embedding diversity as archive grows")
+    # axes[0].grid(True, which="major", alpha=0.3)
+    #
+    # nn_steps = [s for s, d in zip(steps, min_dists) if d is not None]
+    # nn_vals = [d for d in min_dists if d is not None]
+    # mean_steps = [s for s, d in zip(steps, mean_min_vals) if d is not None]
+    # mean_vals = [d for d in mean_min_vals if d is not None]
+    # sum_steps = [s for s, d in zip(steps, sum_min_vals) if d is not None]
+    # sum_vals = [d for d in sum_min_vals if d is not None]
+    #
+    # axes[1].plot(nn_steps, nn_vals, color="#17becf", linewidth=1.3, alpha=0.7, label="Nearest neighbor distance")
+    # axes[1].plot(mean_steps, mean_vals, color="#9467bd", linewidth=2, label="Running mean min distance")
+    # axes[1].set_xlabel("Archive insertion order")
+    # axes[1].set_ylabel("Min distance scales")
+    # axes[1].grid(True, which="major", alpha=0.3)
+    #
+    # sum_axis = axes[1].twinx()
+    # sum_axis.plot(sum_steps, sum_vals, color="#ff7f0e", linewidth=1.5, linestyle="--", label="Cumulative min distance")
+    # sum_axis.set_ylabel("Cumulative min distance")
+    #
+    # handles, labels = axes[1].get_legend_handles_labels()
+    # sum_handles, sum_labels = sum_axis.get_legend_handles_labels()
+    # axes[1].legend(handles + sum_handles, labels + sum_labels, loc="upper left")
 
     fig.tight_layout()
     outpath.parent.mkdir(parents=True, exist_ok=True)
@@ -267,7 +292,12 @@ def save_trajectory_json(results, outpath: Path):
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="pairwise_distance_base")
-def main(cfg: PairwiseDistanceConfig) -> None:
+def main(
+    cfg: PairwiseDistanceConfig,
+    *,
+    model=None,
+    preprocess=None,
+) -> None:
     original_cwd = Path(get_original_cwd())
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
 
@@ -286,7 +316,24 @@ def main(cfg: PairwiseDistanceConfig) -> None:
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
 
-    embeddings = load_embeddings_in_order(image_paths, exp_dir, validated_cfg, device)
+    if (model is None) ^ (preprocess is None):
+        raise ValueError("Provide both model and preprocess, or neither.")
+
+    if model is None:
+        model, preprocess = prepare_openclip_components(validated_cfg, device)
+    else:
+        # Ensure the injected model is ready for inference on the chosen device.
+        model.to(device)
+        model.eval()
+
+    embeddings = load_embeddings_in_order(
+        image_paths,
+        exp_dir,
+        validated_cfg,
+        device,
+        model=model,
+        preprocess=preprocess,
+    )
     print(f"Loaded embeddings for {len(image_paths)} images.")
 
     results = compute_mpd_trajectory(embeddings, image_paths)
