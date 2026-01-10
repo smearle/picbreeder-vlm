@@ -26,8 +26,22 @@ import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from constants import RATING_BATCH_SIZE
-from im_query import DEFAULT_MODEL, query_im, query_images_with_captions
+from vlm_backends import create_vlm_backend, VLMBackend
 from rendering import create_numbered_grid
+
+# Default model for rating
+DEFAULT_MODEL = "gemini-2.5-pro"
+
+# Cached backend instance
+_RATING_BACKEND: Optional[VLMBackend] = None
+
+
+def _get_backend(model: str = DEFAULT_MODEL) -> VLMBackend:
+    """Get or create a cached VLM backend."""
+    global _RATING_BACKEND
+    if _RATING_BACKEND is None or _RATING_BACKEND.name != model:
+        _RATING_BACKEND = create_vlm_backend(model)
+    return _RATING_BACKEND
 
 SYSTEM_PROMPT_TEMPLATE = """You are evaluating generated artwork from a collaborative evolution archive.
 The users were given the following objective: "{goal_prompt}"
@@ -271,13 +285,14 @@ def ensure_output_dir(archive_dir: Path, custom_dir: Optional[Path]) -> Path:
 
 
 def query_vlm(image_bytes: bytes, prompt: str, system_instruction: Optional[str]) -> str:
-    response = query_im(
+    backend = _get_backend()
+    response = backend.query(
         image_bytes,
         prompt=prompt,
         mime_type="image/png",
         system_instruction=system_instruction,
     )
-    return getattr(response, "text", "") or ""
+    return response.text or ""
 
 
 def log_record(log_path: Path, record: Dict) -> None:
@@ -721,13 +736,14 @@ def main() -> None:
                             image_bytes_cache[entry.image_id] = entry.image_path.read_bytes()
                         image_bytes_list.append(image_bytes_cache[entry.image_id])
                         captions_list.append(format_rating_entry_label(position, entry, include_titles))
-                    response = query_images_with_captions(
+                    backend = _get_backend()
+                    response = backend.query_multiple(
                         image_bytes_list,
                         captions_list,
                         prompt=prompt,
                         system_instruction=system_prompt,
                     )
-                    response_text = getattr(response, "text", "") or ""
+                    response_text = response.text or ""
                 else:
                     grid_path = output_dir / f"grid_run{run_idx:03d}_batch{batch_idx:03d}.png"
                     grid_image = build_grid_image(batch, args.grid_thumb_size, thumb_cache)

@@ -23,10 +23,12 @@ REPO_ROOT = Path(__file__).resolve().parent
 import neat
 from rendering import create_numbered_grid, decode_image
 import im_query  # type: ignore
+from vlm_backends import create_vlm_backend, VLMBackend, VLMChatSession, is_local_model
 
 DEFAULT_BASELINE_SELECTION_LIMIT = 1
-_CHAT_SESSION: Optional[Any] = None
+_CHAT_SESSION: Optional[VLMChatSession] = None
 _CHAT_SESSION_MAX_TURNS: Optional[int] = None
+_CHAT_SESSION_MODEL: Optional[str] = None
 
 
 class GeminiPromptBlockedError(RuntimeError):
@@ -135,17 +137,31 @@ def _session_max_turns(chat_history_turns: Optional[int]) -> Optional[int]:
 def reset_chat_session() -> None:
     """Clear any cached chat session so the next request starts fresh."""
 
-    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS
+    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS, _CHAT_SESSION_MODEL
     _CHAT_SESSION = None
     _CHAT_SESSION_MAX_TURNS = None
+    _CHAT_SESSION_MODEL = None
 
 
-def _ensure_chat_session(model: str, chat_history_turns: Optional[int]) -> Any:
-    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS
+# Cache for VLM backends (avoid re-loading models)
+_BACKEND_CACHE: Dict[str, VLMBackend] = {}
+
+
+def _get_backend(model: str) -> VLMBackend:
+    """Get or create a cached VLM backend."""
+    if model not in _BACKEND_CACHE:
+        _BACKEND_CACHE[model] = create_vlm_backend(model)
+    return _BACKEND_CACHE[model]
+
+
+def _ensure_chat_session(model: str, chat_history_turns: Optional[int]) -> VLMChatSession:
+    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS, _CHAT_SESSION_MODEL
     max_turns = _session_max_turns(chat_history_turns)
-    if _CHAT_SESSION is None or _CHAT_SESSION_MAX_TURNS != max_turns:
-        _CHAT_SESSION = im_query.create_chat_session(model=model, max_turns=max_turns,)
+    if _CHAT_SESSION is None or _CHAT_SESSION_MAX_TURNS != max_turns or _CHAT_SESSION_MODEL != model:
+        backend = _get_backend(model)
+        _CHAT_SESSION = backend.create_chat_session(max_turns=max_turns)
         _CHAT_SESSION_MAX_TURNS = max_turns
+        _CHAT_SESSION_MODEL = model
     return _CHAT_SESSION
 
 
@@ -158,7 +174,7 @@ def query_with_history(
     chat_history_turns: Optional[int],
     temperature: float,
 ) -> Any:
-    session: im_query.ImageChatSession = _ensure_chat_session(model, chat_history_turns)
+    session = _ensure_chat_session(model, chat_history_turns)
     return session.send(
         image_caption_pairs=image_caption_pairs,
         thinking_budget=thinking_budget,

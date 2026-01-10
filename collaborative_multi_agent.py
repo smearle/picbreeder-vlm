@@ -83,7 +83,18 @@ from rate_archive_with_vlm import (
     format_rating_entry_label,
     parse_rating_batch_response,
 )
-from im_query import query_images_with_captions
+from vlm_backends import create_vlm_backend, VLMBackend
+
+# Cache for VLM backend used in rating
+_RATING_BACKEND: Optional[VLMBackend] = None
+
+
+def _get_rating_backend(model: str = "gemini-2.5-pro") -> VLMBackend:
+    """Get or create a cached VLM backend for rating."""
+    global _RATING_BACKEND
+    if _RATING_BACKEND is None or _RATING_BACKEND.name != model:
+        _RATING_BACKEND = create_vlm_backend(model)
+    return _RATING_BACKEND
 
 
 def find_latest_checkpoint(population_dir: Path) -> Optional[Path]:
@@ -1661,13 +1672,14 @@ def _perform_rating(
             continue
         captions = [format_rating_entry_label(idx, entry, include_titles) for idx, entry in enumerate(batch)]
         try:
-            response = query_images_with_captions(
+            backend = _get_rating_backend()
+            response = backend.query_multiple(
                 image_bytes_list,
                 captions,
-                prompt=None,
+                prompt="",
                 system_instruction=system_prompt,
             )
-            response_text = getattr(response, "text", "") or ""
+            response_text = response.text or ""
         except Exception as exc:  # pylint: disable=broad-except
             print(f"Auto-rating query failed: {exc}")
             continue
