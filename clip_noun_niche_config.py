@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from constants import DEFAULT_NOUNLIST_PATH
+
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "picture2d" / "interactive_config_color"
-DEFAULT_NOUNLIST_PATH = Path("nounlist.txt")
 
 
 @dataclass

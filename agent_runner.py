@@ -23,7 +23,7 @@ from archive_manager import ARCHIVE_GRID_MARGIN, ArchiveEntry, ArchiveManager
 from artifacts import render_genome_images, save_neat_genome_diagrams
 from chat import GeminiPromptBlockedError, extract_json_object, query_with_history, reset_chat_session, restore_chat_history_from_metadata, select_parents_from_grid, summarize_genome_structure
 from config import PicbreederConfig
-from constants import DEFAULT_BASELINE_SELECTION_LIMIT, REPO_ROOT
+from constants import DEFAULT_BASELINE_SELECTION_LIMIT, DEFAULT_NOUNLIST_PATH, REPO_ROOT
 
 # Module-level cache so CLIP noun embeddings are computed once per process
 _CLIP_NOUN_CACHE: Dict[str, Any] = {}
@@ -2376,7 +2376,7 @@ class AgentRunner:
                 "CLIP noun baseline requires torch and open_clip (see compute_noun_similarity.py dependencies)."
             ) from exc
 
-        noun_path = REPO_ROOT / "nounlist.txt"
+        noun_path = DEFAULT_NOUNLIST_PATH
         nouns = load_nouns(noun_path)
         prompts = format_prompts(nouns, "{label}")
 

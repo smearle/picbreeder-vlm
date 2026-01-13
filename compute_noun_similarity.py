@@ -23,6 +23,8 @@ from tqdm import tqdm
 
 import matplotlib
 
+from constants import DEFAULT_NOUNLIST_PATH
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -42,7 +44,7 @@ from utils import _ensure_absolute
 
 @dataclass
 class NounSimilarityConfig(PicbreederConfig):
-    noun_file: Path = Path("nounlist.txt")
+    noun_file: Path = DEFAULT_NOUNLIST_PATH
     clip_model: str = "ViT-H-14"
     pretrained: str = "laion2b_s32b_b79k"
     batch_size: int = 64
@@ -61,7 +63,7 @@ class NounSimilarityConfig(PicbreederConfig):
                     "Hydra entry point for noun coverage metrics.\n"
                     "\n"
                     "Common overrides:\n"
-                    "  noun_file          Path to noun list (defaults to nounlist.txt).\n"
+                    "  noun_file          Path to noun list (defaults to noun_lists/imagenet_leaves.txt).\n"
                     "  label_template    Format each noun (must include {label}).\n"
                     "  experiment_dir    Override to target a specific archive directory.\n"
                 ),
@@ -495,12 +497,13 @@ def main(
     print(f"Saved noun similarity metrics to {output_path}")
     print(f"Mean of per-noun max cosine similarity: {mean_similarity:.4f}")
 
+    nounlist_name = DEFAULT_NOUNLIST_PATH.stem
     trajectory_json = _resolve_optional_path(validated_cfg.output_trajectory_json, original_cwd)
     if trajectory_json is None:
-        trajectory_json = exp_dir / "noun_similarity_over_time.json"
+        trajectory_json = exp_dir / f"noun_similarity_over_time_{nounlist_name}.json"
     trajectory_plot = _resolve_optional_path(validated_cfg.output_trajectory_plot, original_cwd)
     if trajectory_plot is None:
-        trajectory_plot = exp_dir / "noun_similarity_over_time.png"
+        trajectory_plot = exp_dir / f"noun_similarity_over_time_{nounlist_name}.png"
 
     save_trajectory_json(trajectory, trajectory_json)
     plot_mean_max_similarity_trajectory(trajectory, trajectory_plot)

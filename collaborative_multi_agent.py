@@ -160,6 +160,74 @@ def _resolve_task_temperature(cfg: PicbreederConfig, task: AgentTask) -> float:
     return float(temperature)
 
 
+# ---------------------------------------------------------------------------
+# Agent directory compression/decompression helpers
+# ---------------------------------------------------------------------------
+
+AGENT_ARCHIVE_SUFFIX = ".zip"
+
+
+def _compress_agent_directory(agent_dir: Path) -> Optional[Path]:
+    """Compress a completed agent directory into a zip archive.
+
+    The zip is created alongside the original directory (e.g. agent_000.zip)
+    and the original directory is removed on success.
+
+    Returns the path to the created archive, or None on failure.
+    """
+    if not agent_dir.is_dir():
+        return None
+    archive_path = agent_dir.with_suffix(AGENT_ARCHIVE_SUFFIX)
+    try:
+        # shutil.make_archive wants the base name without extension
+        base_name = str(archive_path.with_suffix(""))
+        created_path = shutil.make_archive(base_name, "zip", agent_dir.parent, agent_dir.name)
+        shutil.rmtree(agent_dir, ignore_errors=True)
+        return Path(created_path)
+    except Exception as exc:
+        print(f"Warning: failed to compress {agent_dir}: {exc}")
+        # Clean up partial archive if it exists
+        if archive_path.exists():
+            try:
+                archive_path.unlink()
+            except OSError:
+                pass
+        return None
+
+
+def _decompress_agent_directory(archive_path: Path) -> Optional[Path]:
+    """Decompress an agent archive back into its original directory.
+
+    Returns the path to the restored directory, or None on failure.
+    """
+    if not archive_path.is_file() or archive_path.suffix != AGENT_ARCHIVE_SUFFIX:
+        return None
+    agent_dir = archive_path.with_suffix("")
+    try:
+        shutil.unpack_archive(archive_path, agent_dir.parent)
+        archive_path.unlink()
+        return agent_dir
+    except Exception as exc:
+        print(f"Warning: failed to decompress {archive_path}: {exc}")
+        return None
+
+
+def _ensure_agent_directory_available(agent_dir: Path) -> Path:
+    """Ensure an agent directory is available (decompress if needed).
+
+    If the directory exists, returns it unchanged.
+    If a .zip archive exists in its place, decompresses it.
+    Otherwise returns the original path (caller must handle non-existence).
+    """
+    if agent_dir.is_dir():
+        return agent_dir
+    archive_path = agent_dir.with_suffix(AGENT_ARCHIVE_SUFFIX)
+    if archive_path.is_file():
+        restored = _decompress_agent_directory(archive_path)
+        if restored is not None:
+            return restored
+    return agent_dir
+
 
 @dataclass
 class AgentTask:
@@ -311,6 +379,7 @@ class CollaborativeMultiAgentOrchestrator:
         self.render_genome_diagrams = render_genome_diagrams
         self.process_index = process_index
         self.keep_query_images = bool(getattr(self.config, "keep_query_images", False))
+        self.compress_completed_agents = bool(getattr(self.config, "compress_completed_agents", True))
         self.archive_manager = ArchiveManager(
             self.experiment_dir / ARCHIVE_DIR_NAME,
             goal_prompt=GOAL_PROMPTS[self.config.goal],
@@ -673,6 +742,8 @@ class CollaborativeMultiAgentOrchestrator:
 
     def _hydrate_agent_record_from_disk(self, record: AgentRecord) -> None:
         agent_dir = self._agent_dir(record.agent_id)
+        # Decompress agent directory if it was archived
+        agent_dir = _ensure_agent_directory_available(agent_dir)
         logs_dir = agent_dir / "logs"
         updates: Dict[str, Any] = {}
         branch_path = logs_dir / "branching_selection.json"
@@ -1322,6 +1393,8 @@ class CollaborativeMultiAgentOrchestrator:
         self._hydrate_agent_record_from_disk(record)
         agent_id = record.agent_id
         agent_dir = self._agent_dir(agent_id)
+        # Ensure directory is available (may have been compressed)
+        agent_dir = _ensure_agent_directory_available(agent_dir)
         population, checkpoint_path = self._load_population_for_agent(agent_dir)
         if population is not None and checkpoint_path is not None:
             print(f"[{agent_id}] Resuming from checkpoint {checkpoint_path.name}")
@@ -1372,20 +1445,22 @@ class CollaborativeMultiAgentOrchestrator:
         self._maybe_run_auto_rating_serial()
         return True
 
-    def _cleanup_agent_artifacts(self, agent_dir: Path) -> None:
+    def _cleanup_agent_artifacts(self, agent_dir: Path, *, compress: bool = False) -> None:
         images_dir = agent_dir / "images"
         if images_dir.exists():
             shutil.rmtree(images_dir, ignore_errors=True)
-        if self.keep_query_images:
-            return
-        queries_dir = agent_dir / "queries"
-        if queries_dir.exists():
-            shutil.rmtree(queries_dir, ignore_errors=True)
+        if not self.keep_query_images:
+            queries_dir = agent_dir / "queries"
+            if queries_dir.exists():
+                shutil.rmtree(queries_dir, ignore_errors=True)
         latest_checkpoint = agent_dir / "populations" / LATEST_POPULATION_FILENAME
         try:
             latest_checkpoint.unlink(missing_ok=True)
         except OSError:
             pass
+        # Compress the agent directory if requested (reduces inode count on cluster)
+        if compress and self.compress_completed_agents and agent_dir.is_dir():
+            _compress_agent_directory(agent_dir)
 
     def _finalize_agent(
         self,
@@ -1420,7 +1495,7 @@ class CollaborativeMultiAgentOrchestrator:
         if archive_entry is not None:
             updates["archive_entry"] = archive_entry.as_dict()
         self._update_agent_record(agent_id, **updates)
-        self._cleanup_agent_artifacts(agent_dir)
+        self._cleanup_agent_artifacts(agent_dir, compress=True)
 
 
 
@@ -1770,6 +1845,8 @@ def _execute_agent_task(
     task_conn: Connection,
 ) -> Dict[str, Any]:
     agent_dir = Path(cfg.experiment_dir) / "agents" / task.agent_id
+    # Ensure directory is available (may have been compressed)
+    agent_dir = _ensure_agent_directory_available(agent_dir)
     resolved_temperature = _resolve_task_temperature(cfg, task)
     agent_cfg = copy.copy(cfg)
     agent_cfg.temperature = resolved_temperature

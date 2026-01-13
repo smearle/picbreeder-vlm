@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from typing import Iterable, List, Optional, Sequence, Tuple
 
@@ -26,6 +27,38 @@ def _is_token_limit_error(exc: Exception) -> bool:
     if isinstance(code, str) and code.lower() in {"400", "invalid_argument"} and "token" in message:
         return True
     return False
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "resource_exhausted" in message or "rate limit" in message or "quota" in message:
+        return True
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code == 429:
+        return True
+    if isinstance(code, str) and code.strip() == "429":
+        return True
+    return False
+
+
+def _extract_retry_delay_seconds(exc: Exception) -> Optional[float]:
+    details = getattr(exc, "details", None)
+    if isinstance(details, (list, tuple)):
+        for item in details:
+            if isinstance(item, dict) and item.get("@type", "").endswith("RetryInfo"):
+                retry_delay = item.get("retryDelay")
+                if isinstance(retry_delay, str):
+                    match = re.search(r"(\d+)(?:\.(\d+))?s", retry_delay)
+                    if match:
+                        seconds = float(match.group(1))
+                        if match.group(2):
+                            seconds += float("0." + match.group(2))
+                        return seconds
+    message = str(exc)
+    match = re.search(r"retry in\s+(\d+(?:\.\d+)?)s", message, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    return None
 
 
 ImageCaptionInput = Tuple[bytes, Optional[str]]
@@ -212,13 +245,23 @@ class ImageChatSession:
             try:
                 response = chat.send_message(parts)
                 break
+            except genai.errors.ServerError:
+                time.sleep(10)
+                continue
+            except genai.errors.ClientError as exc:
+                if _is_rate_limit_error(exc):
+                    delay = _extract_retry_delay_seconds(exc) or 5.0
+                    time.sleep(delay)
+                    continue
+                if _is_token_limit_error(exc) and start_index < len(self._turn_history):
+                    start_index += 1
+                    continue
+                raise
             except Exception as exc:
                 if _is_token_limit_error(exc) and start_index < len(self._turn_history):
                     start_index += 1
                     continue
-            except genai.errors.ServerError:
-                time.sleep(10)
-                continue
+                raise
 
         response_text = getattr(response, "text", "") or ""
         if start_index > 0:
@@ -266,6 +309,12 @@ def query_im(image_bytes, prompt: str, mime_type="image/png", system_instruction
             return response
         except genai.errors.ServerError:
             time.sleep(10)
+        except genai.errors.ClientError as exc:
+            if _is_rate_limit_error(exc):
+                delay = _extract_retry_delay_seconds(exc) or 5.0
+                time.sleep(delay)
+                continue
+            raise
 
 
 def query_images_with_captions(
@@ -325,6 +374,12 @@ def query_images_with_captions(
             return response
         except genai.errors.ServerError:
             time.sleep(10)
+        except genai.errors.ClientError as exc:
+            if _is_rate_limit_error(exc):
+                delay = _extract_retry_delay_seconds(exc) or 5.0
+                time.sleep(delay)
+                continue
+            raise
 
 if __name__ == '__main__':
     with open('rendered/rendered-34589-116.png', 'rb') as f:

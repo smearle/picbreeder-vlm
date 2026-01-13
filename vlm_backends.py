@@ -20,6 +20,7 @@ Usage:
     response = session.send([(image_bytes, "Image 1:")], prompt="What do you see?")
 """
 
+import importlib.util
 import os
 import time
 from abc import ABC, abstractmethod
@@ -464,13 +465,13 @@ class Qwen3VLBackend(VLMBackend):
             
             load_kwargs = {
                 "pretrained_model_name_or_path": self._model_name,
-                "torch_dtype": "auto",
+                "dtype": "auto",
                 "device_map": self._device_map,
             }
             
             if self._use_flash_attention:
                 load_kwargs["attn_implementation"] = "flash_attention_2"
-                load_kwargs["torch_dtype"] = torch.bfloat16
+                load_kwargs["dtype"] = torch.bfloat16
             
             self._model = Qwen3VLForConditionalGeneration.from_pretrained(**load_kwargs)
             self._processor = AutoProcessor.from_pretrained(self._model_name)
@@ -598,6 +599,142 @@ class Qwen3VLBackend(VLMBackend):
             processor=self._processor,
             model_name=self._model_name,
             max_turns=max_turns,
+        )
+
+
+class VLLMQwen3VLBackend(VLMBackend):
+    """Qwen3-VL local vLLM backend."""
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-VL-8B-Instruct",
+        tensor_parallel_size: int = 1,
+        # max_model_len: int = 4096,
+        # max_model_len: int = 8192,
+        max_model_len: int = 10_000,
+        gpu_memory_utilization: float = 0.9,
+    ):
+        self._model_name = model_name
+        self._tensor_parallel_size = tensor_parallel_size
+        self._max_model_len = max_model_len
+        self._gpu_memory_utilization = gpu_memory_utilization
+        self._llm = None
+        self._processor = None
+        self._SamplingParams = None
+
+    def _ensure_model(self):
+        if self._llm is None:
+            from vllm import LLM, SamplingParams
+            from transformers import AutoProcessor
+
+            self._llm = LLM(
+                model=self._model_name,
+                tensor_parallel_size=self._tensor_parallel_size,
+                max_model_len=self._max_model_len,
+                gpu_memory_utilization=self._gpu_memory_utilization,
+                trust_remote_code=True,
+            )
+            self._processor = AutoProcessor.from_pretrained(self._model_name)
+            self._SamplingParams = SamplingParams
+
+    @property
+    def name(self) -> str:
+        return self._model_name
+
+    def _bytes_to_pil(self, image_bytes: bytes) -> PIL.Image.Image:
+        return PIL.Image.open(BytesIO(image_bytes))
+
+    def _build_messages(
+        self,
+        image_bytes_list: Sequence[bytes],
+        captions: Sequence[str],
+        prompt: str,
+        system_instruction: Optional[str],
+    ) -> Tuple[List[dict], List[PIL.Image.Image]]:
+        images: List[PIL.Image.Image] = []
+        content: List[dict] = []
+        for idx, (image_bytes, caption) in enumerate(zip(image_bytes_list, captions)):
+            caption_text = caption or f"Image {idx + 1}:"
+            if caption_text:
+                content.append({"type": "text", "text": caption_text})
+            image = self._bytes_to_pil(image_bytes)
+            content.append({"type": "image", "image": image})
+            images.append(image)
+
+        if prompt:
+            content.append({"type": "text", "text": prompt})
+
+        messages: List[dict] = []
+        if system_instruction:
+            messages.append({"role": "system", "content": [{"type": "text", "text": system_instruction}]})
+        messages.append({"role": "user", "content": content})
+        return messages, images
+
+    def _generate(
+        self,
+        messages: List[dict],
+        images: Sequence[PIL.Image.Image],
+        max_new_tokens: int,
+        temperature: Optional[float] = None,
+    ) -> str:
+        self._ensure_model()
+        prompt_text = self._processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        sampling_params = self._SamplingParams(
+            max_tokens=max_new_tokens,
+            temperature=0.7 if temperature is None else float(temperature),
+            top_p=0.9,
+        )
+        image_payload: Any = images[0] if len(images) == 1 else list(images)
+        outputs = self._llm.generate(
+            [{
+                "prompt": prompt_text,
+                "multi_modal_data": {"image": image_payload},
+            }],
+            sampling_params=sampling_params,
+        )
+        return outputs[0].outputs[0].text if outputs else ""
+
+    def query(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+        max_new_tokens: int = 2048,
+    ) -> VLMResponse:
+        messages, images = self._build_messages([image_bytes], [""], prompt, system_instruction)
+        response_text = self._generate(messages, images, max_new_tokens)
+        return VLMResponse(text=response_text)
+
+    def query_multiple(
+        self,
+        image_bytes_list: Sequence[bytes],
+        captions: Sequence[str],
+        prompt: str,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+        max_new_tokens: int = 2048,
+    ) -> VLMResponse:
+        if len(image_bytes_list) != len(captions):
+            raise ValueError("image_bytes_list and captions must be the same length.")
+        if not image_bytes_list:
+            raise ValueError("At least one image must be provided.")
+        messages, images = self._build_messages(image_bytes_list, captions, prompt, system_instruction)
+        response_text = self._generate(messages, images, max_new_tokens)
+        return VLMResponse(text=response_text)
+
+    def create_chat_session(self, max_turns: Optional[int] = None) -> "VLLMQwen3VLChatSession":
+        self._ensure_model()
+        return VLLMQwen3VLChatSession(
+            llm=self._llm,
+            processor=self._processor,
+            model_name=self._model_name,
+            max_turns=max_turns,
+            sampling_params_cls=self._SamplingParams,
         )
 
 
@@ -790,25 +927,219 @@ class Qwen3VLChatSession(VLMChatSession):
         return VLMResponse(text=response_text, raw_response=generated_ids)
 
 
+class VLLMQwen3VLChatSession(VLMChatSession):
+    """Qwen3-VL vLLM chat session with conversation history."""
+
+    def __init__(
+        self,
+        llm: Any,
+        processor: Any,
+        model_name: str,
+        max_turns: Optional[int] = None,
+        sampling_params_cls: Optional[Any] = None,
+    ):
+        self._llm = llm
+        self._processor = processor
+        self._model_name = model_name
+        self._turn_history: List[StoredTurn] = []
+        self._max_turns = max_turns if (max_turns is None or max_turns >= 0) else None
+        self._SamplingParams = sampling_params_cls
+
+    @property
+    def turn_history(self) -> List[StoredTurn]:
+        return self._turn_history
+
+    def _bytes_to_pil(self, image_bytes: bytes) -> PIL.Image.Image:
+        return PIL.Image.open(BytesIO(image_bytes))
+
+    def _resolve_requested_turns(self, history_turns: Optional[int]) -> Optional[int]:
+        requested = history_turns if history_turns is not None else self._max_turns
+        if requested is not None and requested < 0:
+            return None
+        return requested
+
+    def load_history(self, turns: Iterable[HistoryTurnInput]) -> int:
+        normalised: List[StoredTurn] = []
+        for turn in turns:
+            try:
+                image_payload, trailing_prompt, response_text = turn
+            except (TypeError, ValueError):
+                continue
+            trailing_prompt_value = str(trailing_prompt or "")
+            response_value = str(response_text or "")
+            image_pairs: List[ImageCaptionPair] = []
+            for pair in image_payload:
+                try:
+                    image_bytes, caption_text = pair
+                except (TypeError, ValueError):
+                    continue
+                if image_bytes is None:
+                    continue
+                caption_value = caption_text if caption_text is not None else ""
+                if not isinstance(caption_value, str):
+                    caption_value = str(caption_value)
+                image_pairs.append((bytes(image_bytes), caption_value))
+            if not image_pairs:
+                continue
+            normalised.append((image_pairs, trailing_prompt_value, response_value))
+
+        if self._max_turns is None:
+            self._turn_history = normalised
+        elif self._max_turns <= 0:
+            self._turn_history = []
+        else:
+            self._turn_history = normalised[-self._max_turns:]
+        return len(self._turn_history)
+
+    def _build_messages_with_images(
+        self,
+        start_index: int,
+        normalized_pairs: Sequence[ImageCaptionPair],
+        prompt_value: str,
+    ) -> Tuple[List[dict], List[PIL.Image.Image], List[ImageCaptionPair]]:
+        messages: List[dict] = []
+        images: List[PIL.Image.Image] = []
+        if start_index < 0:
+            start_index = 0
+        for image_caption_pairs, trailing_prompt, response_text in self._turn_history[start_index:]:
+            user_content = []
+            for image_data, caption_text in image_caption_pairs:
+                if caption_text:
+                    user_content.append({"type": "text", "text": caption_text})
+                image = self._bytes_to_pil(image_data)
+                user_content.append({"type": "image", "image": image})
+                images.append(image)
+            if trailing_prompt:
+                user_content.append({"type": "text", "text": trailing_prompt})
+            messages.append({"role": "user", "content": user_content})
+            if response_text:
+                messages.append({"role": "assistant", "content": [{"type": "text", "text": response_text}]})
+
+        current_content = []
+        stored_pairs: List[ImageCaptionPair] = []
+        for idx, (image_data, caption_text) in enumerate(normalized_pairs):
+            caption_to_use = caption_text or f"Image {idx + 1}:"
+            if caption_to_use:
+                current_content.append({"type": "text", "text": caption_to_use})
+            image = self._bytes_to_pil(image_data)
+            current_content.append({"type": "image", "image": image})
+            images.append(image)
+            stored_pairs.append((bytes(image_data), caption_to_use))
+
+        if prompt_value:
+            current_content.append({"type": "text", "text": prompt_value})
+        messages.append({"role": "user", "content": current_content})
+        return messages, images, stored_pairs
+
+    def send(
+        self,
+        image_caption_pairs: Sequence[ImageCaptionInput],
+        prompt: Optional[str] = "",
+        history_turns: Optional[int] = 0,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+        temperature: Optional[float] = None,
+        thinking_budget: int = -1,
+        max_new_tokens: int = 2048,
+    ) -> VLMResponse:
+        requested_turns = self._resolve_requested_turns(history_turns)
+        if requested_turns is None:
+            start_index = 0
+        else:
+            start_index = max(len(self._turn_history) - requested_turns, 0)
+
+        pair_list = list(image_caption_pairs or ())
+        if not pair_list:
+            raise ValueError("image_caption_pairs must include at least one entry.")
+
+        prompt_value = "" if prompt is None else str(prompt)
+
+        normalized_pairs: List[ImageCaptionPair] = []
+        for pair in pair_list:
+            try:
+                image_data, caption_text = pair
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Each image_caption_pair must contain an image and caption.") from exc
+            if image_data is None:
+                raise ValueError("Image data must not be None.")
+            caption_value = caption_text if caption_text is not None else ""
+            if not isinstance(caption_value, str):
+                caption_value = str(caption_value)
+            normalized_pairs.append((bytes(image_data), caption_value))
+
+        messages, images, stored_pairs = self._build_messages_with_images(
+            start_index,
+            normalized_pairs,
+            prompt_value,
+        )
+        if system_instruction:
+            messages.insert(0, {"role": "system", "content": [{"type": "text", "text": system_instruction}]})
+
+        prompt_text = self._processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        sampling_params = self._SamplingParams(
+            max_tokens=max_new_tokens,
+            temperature=0.7 if temperature is None else float(temperature),
+            top_p=0.9,
+        )
+        image_payload: Any = images[0] if len(images) == 1 else list(images)
+        outputs = self._llm.generate(
+            [{
+                "prompt": prompt_text,
+                "multi_modal_data": {"image": image_payload},
+            }],
+            sampling_params=sampling_params,
+        )
+        response_text = outputs[0].outputs[0].text if outputs else ""
+
+        if start_index > 0:
+            self._turn_history = self._turn_history[start_index:]
+        self._turn_history.append((stored_pairs, prompt_value, response_text))
+        if self._max_turns is not None:
+            if self._max_turns == 0:
+                self._turn_history.clear()
+            else:
+                self._turn_history = self._turn_history[-self._max_turns:]
+
+        return VLMResponse(text=response_text, raw_response=outputs)
+
+
 # Registry of available backends
 _BACKEND_REGISTRY = {
     # Gemini models
     "gemini-2.5-pro": lambda: GeminiBackend("gemini-2.5-pro"),
     "gemini-2.5-flash": lambda: GeminiBackend("gemini-2.5-flash"),
     "gemini-3-pro-preview": lambda: GeminiBackend("gemini-3-pro-preview"),
-    # Qwen3-VL models
+    # Qwen3-VL models (default backend selected in create_vlm_backend)
     "qwen3-vl-8b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-8B-Instruct"),
     "qwen3-vl-4b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-4B-Instruct"),
     "qwen3-vl-2b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-2B-Instruct"),
 }
 
 
-def create_vlm_backend(model: str, **kwargs) -> VLMBackend:
+def _vllm_available() -> bool:
+    return importlib.util.find_spec("vllm") is not None
+
+
+def _resolve_qwen_model_name(model: str) -> str:
+    model_map = {
+        "qwen3-vl-8b": "Qwen/Qwen3-VL-8B-Instruct",
+        "qwen3-vl-4b": "Qwen/Qwen3-VL-4B-Instruct",
+        "qwen3-vl-2b": "Qwen/Qwen3-VL-2B-Instruct",
+    }
+    return model_map.get(model, model)
+
+
+def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> VLMBackend:
     """
     Create a VLM backend by model name.
     
     Args:
         model: Model name (e.g., "gemini-2.5-pro", "qwen3-vl-8b")
+        backend: Backend override ("auto", "vllm", "hf")
         **kwargs: Additional arguments passed to the backend constructor
     
     Returns:
@@ -816,21 +1147,25 @@ def create_vlm_backend(model: str, **kwargs) -> VLMBackend:
     
     Examples:
         >>> backend = create_vlm_backend("gemini-2.5-pro")
-        >>> backend = create_vlm_backend("qwen3-vl-8b", use_flash_attention=True)
+        >>> backend = create_vlm_backend("qwen3-vl-8b", backend="hf", use_flash_attention=True)
     """
+    backend_choice = (backend or "auto").lower()
+    if backend_choice not in {"auto", "vllm", "hf"}:
+        raise ValueError("backend must be one of: auto, vllm, hf")
+
     # Check registry first
     if model in _BACKEND_REGISTRY:
-        if kwargs:
-            # Custom kwargs - need to instantiate directly
-            if model.startswith("gemini"):
+        if model.startswith("gemini"):
+            if kwargs:
                 return GeminiBackend(model, **kwargs)
-            elif model.startswith("qwen"):
-                model_map = {
-                    "qwen3-vl-8b": "Qwen/Qwen3-VL-8B-Instruct",
-                    "qwen3-vl-4b": "Qwen/Qwen3-VL-4B-Instruct", 
-                    "qwen3-vl-2b": "Qwen/Qwen3-VL-2B-Instruct",
-                }
-                return Qwen3VLBackend(model_map.get(model, model), **kwargs)
+            return _BACKEND_REGISTRY[model]()
+        if model.startswith("qwen"):
+            resolved_model = _resolve_qwen_model_name(model)
+            if backend_choice == "vllm":
+                return VLLMQwen3VLBackend(resolved_model, **kwargs)
+            if backend_choice == "auto" and not kwargs and _vllm_available():
+                return VLLMQwen3VLBackend(resolved_model)
+            return Qwen3VLBackend(resolved_model, **kwargs)
         return _BACKEND_REGISTRY[model]()
     
     # Try to infer backend from model name
@@ -838,7 +1173,12 @@ def create_vlm_backend(model: str, **kwargs) -> VLMBackend:
     if "gemini" in model_lower:
         return GeminiBackend(model, **kwargs)
     elif "qwen" in model_lower:
-        return Qwen3VLBackend(model, **kwargs)
+        resolved_model = _resolve_qwen_model_name(model)
+        if backend_choice == "vllm":
+            return VLLMQwen3VLBackend(resolved_model, **kwargs)
+        if backend_choice == "auto" and not kwargs and _vllm_available():
+            return VLLMQwen3VLBackend(resolved_model)
+        return Qwen3VLBackend(resolved_model, **kwargs)
     
     raise ValueError(
         f"Unknown model: {model}. "

@@ -22,6 +22,7 @@ import submitit  # Do not remove this.
 
 from collaborative_multi_agent import run as run_collaborative
 from config import PicbreederConfig, ensure_valid_config
+from constants import DEFAULT_NOUNLIST_PATH
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -123,7 +124,8 @@ class ChatHistoryTurnsSweep(SweepConfig):
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    seed: List[int] = field(default_factory=lambda: [0, 1, 2])
+    # seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     num_agents: int = 200
 
 
@@ -140,7 +142,7 @@ class TemperatureSweep(SweepConfig):
 
 @dataclass
 class RandSelectProbSweep(SweepConfig):
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
@@ -150,12 +152,13 @@ class RandSelectProbSweep(SweepConfig):
     # leading to random publications.
     # seed: List[int] = field(default_factory=lambda: [0, 1, 2])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 200
+    num_agents: int = 500
 
 @dataclass
 class ModelSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro-preview"])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
+    # seed: List[int] = field(default_factory=lambda: [0, 1, 2])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     num_agents: int = 500
 
@@ -612,6 +615,7 @@ def _plot_seed_aggregates(
     noun_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     noun_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     mpd_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+    nounlist_name = Path(DEFAULT_NOUNLIST_PATH).stem
 
     for run_cfg in run_configs:
         group_key = _group_key_for_aggregate(run_cfg)
@@ -622,7 +626,7 @@ def _plot_seed_aggregates(
             novelty = _load_trajectory_metric(novelty_path, "mean_pairwise_distance")
             novelty_grouped.setdefault(group_key, []).append(novelty)
 
-        noun_path = exp_dir / "noun_similarity_over_time.json"
+        noun_path = exp_dir / f"noun_similarity_over_time_{nounlist_name}.json"
         if noun_path.exists():
             noun = _load_trajectory_metric(noun_path, "mean_max_similarity")
             noun_grouped.setdefault(group_key, []).append(noun)
@@ -643,7 +647,7 @@ def _plot_seed_aggregates(
         xlabel="Archive insertion order",
         ylabel="Mean pairwise distance",
     )
-    agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{filename_tag}.png"
+    agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{nounlist_name}_{filename_tag}.png"
     _write_aggregate_plot(
         grouped_runs=noun_grouped,
         outpath=agg_plot_noun_path,
@@ -654,7 +658,7 @@ def _plot_seed_aggregates(
 
     _write_scalar_bar_plot(
         grouped_values=noun_scalar_grouped,
-        outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{filename_tag}.png",
+        outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{nounlist_name}_{filename_tag}.png",
         title="Mean max noun similarity (mean±std across seeds)",
         ylabel="Mean of per-noun max cosine similarity",
     )

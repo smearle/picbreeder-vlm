@@ -114,6 +114,8 @@ def _ensure_absolute(path: Path, base: Path) -> Path:
 
 def _ensure_int_list(values: Iterable[Any]) -> List[int]:
     result: List[int] = []
+    if isinstance(values, int):
+        values = [values]
     for value in values:
         try:
             idx = int(value)
