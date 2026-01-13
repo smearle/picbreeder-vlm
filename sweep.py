@@ -124,7 +124,7 @@ class ChatHistoryTurnsSweep(SweepConfig):
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [0, 1, 2])
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     # seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     num_agents: int = 200
 
@@ -910,7 +910,7 @@ def main(cfg: SweepConfig) -> None:
                     preprocess=novelty_preprocess,
                 )
 
-                noun_cfg = NounSimilarityConfig(**base_kwargs)
+                noun_cfg = NounSimilarityConfig(**base_kwargs, render_grid=True)
                 noun_cfg = replace(noun_cfg, archive_limit=cfg.archive_limit)
                 print(f"{desc} -> compute_noun_similarity{extra}")
                 _call_hydra_wrapped_main(

@@ -227,6 +227,9 @@ class AgentRunner:
                 selection_json_suffix=selection_json_suffix,
                 publish_reason_suffix=publish_reason_suffix,
             )
+        if 'qwen' in config.model:
+            instruction_body += """ NOTE: You have a bad habit of only evolving grayscale images. PLEASE, spend AT LEAST SOME time evolving in color. In this case: if `Color: OFF`, then respond `{"color": "true"}` to turn it back on."""
+
         if self.personality_prompt:
             self.system_instruction = f"{self.personality_prompt}\n\n{instruction_body}"
         else:

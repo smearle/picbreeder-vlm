@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import torch
 from tqdm import tqdm
 
@@ -39,6 +39,7 @@ except Exception as exc:  # pragma: no cover - import guard
     raise RuntimeError("open_clip import failed. Is `open_clip_torch` installed?") from exc
 
 from config import PicbreederConfig, ensure_valid_config
+from rendering import try_load_font
 from utils import _ensure_absolute
 
 
@@ -55,6 +56,11 @@ class NounSimilarityConfig(PicbreederConfig):
     output_json: Optional[Path] = None
     output_trajectory_json: Optional[Path] = None
     output_trajectory_plot: Optional[Path] = None
+    render_grid: bool = False
+    output_grid: Optional[Path] = None
+    grid_thumb_size: int = 192
+    grid_margin: int = 12
+    grid_font_size: int = 10
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -65,6 +71,7 @@ class NounSimilarityConfig(PicbreederConfig):
                     "Common overrides:\n"
                     "  noun_file          Path to noun list (defaults to noun_lists/imagenet_leaves.txt).\n"
                     "  label_template    Format each noun (must include {label}).\n"
+                    "  render_grid       Emit a noun grid sorted by max similarity.\n"
                     "  experiment_dir    Override to target a specific archive directory.\n"
                 ),
                 footer="Override with +option=value (e.g. noun_file=data/nouns.txt).",
@@ -85,6 +92,13 @@ def _validate_noun_similarity_options(cfg: NounSimilarityConfig) -> None:
         raise ValueError("archive_limit must be a positive integer when provided")
     if "{label}" not in cfg.label_template:
         raise ValueError("label_template must contain '{label}' placeholder")
+    if cfg.render_grid:
+        if cfg.grid_thumb_size <= 0:
+            raise ValueError("grid_thumb_size must be positive when render_grid is enabled")
+        if cfg.grid_margin < 0:
+            raise ValueError("grid_margin must be non-negative when render_grid is enabled")
+        if cfg.grid_font_size <= 0:
+            raise ValueError("grid_font_size must be positive when render_grid is enabled")
 
 
 def prepare_openclip_components(
@@ -309,13 +323,14 @@ def format_prompts(nouns: Sequence[str], template: str) -> List[str]:
 def compute_max_similarities(
     image_embeddings: np.ndarray,
     noun_embeddings: np.ndarray,
-) -> Tuple[np.ndarray, float]:
-    """Return per-noun max cosine similarity and their mean."""
+) -> Tuple[np.ndarray, float, np.ndarray]:
+    """Return per-noun max cosine similarity, their mean, and argmax image indices."""
     if image_embeddings.size == 0:
         raise ValueError("No image embeddings available for similarity calculation.")
     sims = image_embeddings @ noun_embeddings.T
     max_per_noun = np.max(sims, axis=0)
-    return max_per_noun, float(max_per_noun.mean())
+    best_image_indices = np.argmax(sims, axis=0)
+    return max_per_noun, float(max_per_noun.mean()), best_image_indices
 
 
 def compute_mean_max_similarity_trajectory(
@@ -365,6 +380,52 @@ def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], ou
     plt.close(fig)
 
 
+def _text_size(text: str, font) -> Tuple[int, int]:
+    bbox = font.getbbox(text)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return width, height
+
+
+def create_captioned_grid(
+    images: Sequence[Image.Image],
+    captions: Sequence[str],
+    thumb_size: int,
+    margin: int,
+    font_size: int,
+) -> Image.Image:
+    font = try_load_font(font_size)
+    if not images:
+        raise ValueError("No images to render in grid.")
+
+    cols = max(1, int(math.ceil(math.sqrt(len(images)))))
+    rows = int(math.ceil(len(images) / cols))
+    label_height = max(_text_size(caption, font)[1] for caption in captions)
+
+    cell_height = thumb_size + label_height + 6
+    width = (cols * thumb_size) + ((cols + 1) * margin)
+    height = (rows * cell_height) + ((rows + 1) * margin)
+    canvas = Image.new("RGB", (width, height), (16, 16, 20))
+    draw = ImageDraw.Draw(canvas)
+
+    for i, (img, caption) in enumerate(zip(images, captions)):
+        row = i // cols
+        col = i % cols
+        x = margin + col * (thumb_size + margin)
+        y = margin + row * (cell_height + margin)
+
+        if img.size != (thumb_size, thumb_size):
+            img = img.resize((thumb_size, thumb_size), resample=Image.BICUBIC)
+        canvas.paste(img, (x, y))
+
+        text_w, text_h = _text_size(caption, font)
+        text_x = x + max(0, (thumb_size - text_w) // 2)
+        text_y = y + thumb_size + 2
+        draw.text((text_x, text_y), caption, font=font, fill=(255, 255, 0))
+
+    return canvas
+
+
 def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) -> None:
     serializable = [
         {
@@ -376,6 +437,37 @@ def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) ->
     ]
     outpath.parent.mkdir(parents=True, exist_ok=True)
     outpath.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+
+
+def render_noun_similarity_grid(
+    nouns: Sequence[str],
+    max_per_noun: np.ndarray,
+    best_image_indices: np.ndarray,
+    image_paths: Sequence[Path],
+    output_path: Path,
+    thumb_size: int,
+    margin: int,
+    font_size: int,
+) -> None:
+    order = np.argsort(-max_per_noun)
+    images: List[Image.Image] = []
+    captions: List[str] = []
+    cache: Dict[Path, Image.Image] = {}
+
+    for noun_idx in order:
+        image_idx = int(best_image_indices[noun_idx])
+        image_path = image_paths[image_idx]
+        cached = cache.get(image_path)
+        if cached is None:
+            cached = Image.open(image_path).convert("RGB")
+            cache[image_path] = cached
+        images.append(cached)
+        distance = 1.0 - float(max_per_noun[noun_idx])
+        captions.append(f"{nouns[noun_idx]} (dist {distance:.3f})")
+
+    grid = create_captioned_grid(images, captions, thumb_size, margin, font_size)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    grid.save(output_path, format="PNG")
 
 
 def _resolve_optional_path(value: Optional[Path], base: Path) -> Optional[Path]:
@@ -471,7 +563,10 @@ def main(
                 "noun_embeddings must be a 2D array with shape (num_nouns, embed_dim) matching prompts"
             )
 
-    max_per_noun, mean_similarity = compute_max_similarities(image_embeddings, noun_embeddings)
+    max_per_noun, mean_similarity, best_image_indices = compute_max_similarities(
+        image_embeddings,
+        noun_embeddings,
+    )
 
     trajectory = compute_mean_max_similarity_trajectory(image_embeddings, noun_embeddings, image_paths)
 
@@ -509,6 +604,22 @@ def main(
     plot_mean_max_similarity_trajectory(trajectory, trajectory_plot)
     print(f"Saved noun similarity trajectory JSON to {trajectory_json}")
     print(f"Saved noun similarity trajectory plot to {trajectory_plot}")
+
+    if validated_cfg.render_grid:
+        grid_output = _resolve_optional_path(validated_cfg.output_grid, original_cwd)
+        if grid_output is None:
+            grid_output = exp_dir / f"noun_similarity_grid_{nounlist_name}.png"
+        render_noun_similarity_grid(
+            nouns_list,
+            max_per_noun,
+            best_image_indices,
+            image_paths,
+            grid_output,
+            validated_cfg.grid_thumb_size,
+            validated_cfg.grid_margin,
+            validated_cfg.grid_font_size,
+        )
+        print(f"Saved noun similarity grid to {grid_output}")
 
 
 if __name__ == "__main__":
