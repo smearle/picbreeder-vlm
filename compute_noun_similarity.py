@@ -39,14 +39,14 @@ except Exception as exc:  # pragma: no cover - import guard
     raise RuntimeError("open_clip import failed. Is `open_clip_torch` installed?") from exc
 
 from config import PicbreederConfig, ensure_valid_config
-from rendering import try_load_font
+from rendering import try_load_font, create_captioned_grid
 from utils import _ensure_absolute
 
 
 @dataclass
 class NounSimilarityConfig(PicbreederConfig):
     noun_file: Path = DEFAULT_NOUNLIST_PATH
-    clip_model: str = "ViT-H-14"
+    embedding_model: str = "ViT-H-14"
     pretrained: str = "laion2b_s32b_b79k"
     batch_size: int = 64
     noun_batch_size: int = 512
@@ -108,12 +108,12 @@ def prepare_openclip_components(
     """Create the OpenCLIP model + preprocess + tokenizer for this config."""
 
     model, _, preprocess = open_clip.create_model_and_transforms(
-        cfg.clip_model,
+        cfg.embedding_model,
         pretrained=cfg.pretrained,
     )
     model.to(device)
     model.eval()
-    tokenizer = open_clip.get_tokenizer(cfg.clip_model)
+    tokenizer = open_clip.get_tokenizer(cfg.embedding_model)
     return model, preprocess, tokenizer
 
 
@@ -380,50 +380,7 @@ def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], ou
     plt.close(fig)
 
 
-def _text_size(text: str, font) -> Tuple[int, int]:
-    bbox = font.getbbox(text)
-    width = bbox[2] - bbox[0]
-    height = bbox[3] - bbox[1]
-    return width, height
 
-
-def create_captioned_grid(
-    images: Sequence[Image.Image],
-    captions: Sequence[str],
-    thumb_size: int,
-    margin: int,
-    font_size: int,
-) -> Image.Image:
-    font = try_load_font(font_size)
-    if not images:
-        raise ValueError("No images to render in grid.")
-
-    cols = max(1, int(math.ceil(math.sqrt(len(images)))))
-    rows = int(math.ceil(len(images) / cols))
-    label_height = max(_text_size(caption, font)[1] for caption in captions)
-
-    cell_height = thumb_size + label_height + 6
-    width = (cols * thumb_size) + ((cols + 1) * margin)
-    height = (rows * cell_height) + ((rows + 1) * margin)
-    canvas = Image.new("RGB", (width, height), (16, 16, 20))
-    draw = ImageDraw.Draw(canvas)
-
-    for i, (img, caption) in enumerate(zip(images, captions)):
-        row = i // cols
-        col = i % cols
-        x = margin + col * (thumb_size + margin)
-        y = margin + row * (cell_height + margin)
-
-        if img.size != (thumb_size, thumb_size):
-            img = img.resize((thumb_size, thumb_size), resample=Image.BICUBIC)
-        canvas.paste(img, (x, y))
-
-        text_w, text_h = _text_size(caption, font)
-        text_x = x + max(0, (thumb_size - text_w) // 2)
-        text_y = y + thumb_size + 2
-        draw.text((text_x, text_y), caption, font=font, fill=(255, 255, 0))
-
-    return canvas
 
 
 def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) -> None:
@@ -532,7 +489,7 @@ def main(
         raise ValueError("Provide nouns when providing noun_embeddings")
 
     if model is None:
-        print(f"Loading OpenCLIP model {validated_cfg.clip_model} ({validated_cfg.pretrained})...")
+        print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
         model, preprocess, tokenizer = prepare_openclip_components(validated_cfg, device)
     else:
         model.to(device)
@@ -574,7 +531,7 @@ def main(
         "experiment_dir": str(exp_dir),
         "num_images": len(image_paths),
         "num_nouns": len(nouns_list),
-        "model": validated_cfg.clip_model,
+        "model": validated_cfg.embedding_model,
         "pretrained": validated_cfg.pretrained,
         "label_template": validated_cfg.label_template,
         "mean_max_similarity": mean_similarity,
@@ -593,12 +550,13 @@ def main(
     print(f"Mean of per-noun max cosine similarity: {mean_similarity:.4f}")
 
     nounlist_name = DEFAULT_NOUNLIST_PATH.stem
+    model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
     trajectory_json = _resolve_optional_path(validated_cfg.output_trajectory_json, original_cwd)
     if trajectory_json is None:
-        trajectory_json = exp_dir / f"noun_similarity_over_time_{nounlist_name}.json"
+        trajectory_json = exp_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.json"
     trajectory_plot = _resolve_optional_path(validated_cfg.output_trajectory_plot, original_cwd)
     if trajectory_plot is None:
-        trajectory_plot = exp_dir / f"noun_similarity_over_time_{nounlist_name}.png"
+        trajectory_plot = exp_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.png"
 
     save_trajectory_json(trajectory, trajectory_json)
     plot_mean_max_similarity_trajectory(trajectory, trajectory_plot)
@@ -608,7 +566,7 @@ def main(
     if validated_cfg.render_grid:
         grid_output = _resolve_optional_path(validated_cfg.output_grid, original_cwd)
         if grid_output is None:
-            grid_output = exp_dir / f"noun_similarity_grid_{nounlist_name}.png"
+            grid_output = exp_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}.png"
         render_noun_similarity_grid(
             nouns_list,
             max_per_noun,

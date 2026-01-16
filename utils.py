@@ -138,3 +138,20 @@ def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     finally:
         tmp_path.unlink(missing_ok=True)
 
+
+def load_human_archive_images(archive_dir: Path) -> List[Path]:
+    """Load images from the directory, sorted by numeric filename."""
+    if not archive_dir.exists():
+        raise FileNotFoundError(f"Archive directory not found: {archive_dir}")
+    
+    images = []
+    for p in archive_dir.glob("*.png"):
+        try:
+            num = int(p.stem)
+            images.append((num, p))
+        except ValueError:
+            continue
+            
+    images.sort(key=lambda x: x[0])
+    return [p for _, p in images]
+

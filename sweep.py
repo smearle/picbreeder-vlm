@@ -62,6 +62,7 @@ class SweepConfig(PicbreederConfig):
     chat_history_turns: List[int] = field(default_factory=lambda: [1])  # Chat history lengths to evaluate
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])  # Probability of random parent selection
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])  # Sampling temperature values to evaluate
+    thumb_size: List[int] = field(default_factory=lambda: [128])  # Thumbnail sizes to evaluate
     goal: List[str] = field(default_factory=lambda: [  # Goals to sweep over
         "familiar_objects",
         # "fun",
@@ -76,11 +77,14 @@ class SweepConfig(PicbreederConfig):
         # "gemini-2.5-flash",
         # "gemini-2.5-flash-lite",
     ])
-    sweep_name: str = "sweep"  # Base directory for experiment outputs
+    embedding_model: str = "ViT-H-14"
+    pretrained: str = "laion2b_s32b_b79k"
+    sweep_name: str = "rand_select_prob"  # Base directory for experiment outputs
     log_dir: str = "sweep_logs"
     submitit_log_dir: str = "submitit_logs"
     slurm: bool = True  # Enable SLURM submission via Submitit
     partition: str = "cpu"  # SLURM partition name
+    gpu: bool = False
     # account: Optional[str] = None  # Optional SLURM account override
     account: Optional[str] = "pr_174_tandon_advanced"  # Optional SLURM account override
     timeout_hours: int = 24  # Wall-time limit in hours
@@ -130,6 +134,19 @@ class ChatHistoryTurnsSweep(SweepConfig):
 
 
 @dataclass
+class ChatHistoryTurnsQwenSweep(SweepConfig):
+    chat_history_turns: List[int] = field(default_factory=lambda: [0, 1, 2, 3])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["qwen3-vl-8b"])
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    num_agents: int = 200
+    num_proc: int = 1
+    gpu: bool = True
+
+
+@dataclass
 class TemperatureSweep(SweepConfig):
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [0.0, 1.0, 2.0, "random"])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
@@ -147,11 +164,9 @@ class RandSelectProbSweep(SweepConfig):
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    # These were run with a small bug where agents could publish twice during a generation 
-    # (even with fixed session length), and random selections could happen at the last generation,
-    # leading to random publications.
-    # seed: List[int] = field(default_factory=lambda: [0, 1, 2])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    thumb_size: List[int] = field(default_factory=lambda: [128, 224])
+    # thumb_size: List[int] = field(default_factory=lambda: [128,])
     num_agents: int = 500
 
 @dataclass
@@ -162,21 +177,33 @@ class ModelSweep(SweepConfig):
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     num_agents: int = 500
 
+@dataclass
+class LongSweep(SweepConfig):
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
+    chat_history_turns: List[int] = field(default_factory=lambda: [1])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
+    seed: List[int] = field(default_factory=lambda: [3])
+    num_agents: int = 10_000
+
 
 _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "sweep": SweepBasePreset,
     "chat_history_turns": ChatHistoryTurnsSweep,
+    "chat_history_turns_qwen": ChatHistoryTurnsQwenSweep,
     "temperature": TemperatureSweep,
     "rand_select_prob": RandSelectProbSweep,
     "model": ModelSweep,
+    "long_sweep": LongSweep,
 }
 
 
-def _extract_list_axes_from_preset(preset: SweepConfig) -> Dict[str, Any]:
-    """Return list-valued overrides from a preset.
+def _extract_overrides_from_preset(preset: SweepConfig) -> Dict[str, Any]:
+    """Return overrides from a preset.
 
-    We only apply list-valued fields so we don't clobber non-sweep runtime
-    settings (e.g. slurm params, log dirs).
+    We apply all fields from the preset so that scalar overrides (like num_agents)
+    take effect. We rely on _apply_named_sweep to protect explicit CLI overrides.
     """
 
     payload = asdict(preset)
@@ -186,6 +213,8 @@ def _extract_list_axes_from_preset(preset: SweepConfig) -> Dict[str, Any]:
             continue
         if isinstance(value, (list, tuple)):
             axes[key] = list(value)
+        else:
+            axes[key] = value
     return axes
 
 
@@ -203,7 +232,7 @@ def _apply_named_sweep(cfg: SweepConfig) -> SweepConfig:
         raise ValueError(f"Unknown sweep_name={sweep_name!r}. Known: {known}")
 
     preset = preset_cls()
-    updates = _extract_list_axes_from_preset(preset)
+    updates = _extract_overrides_from_preset(preset)
     if not updates:
         return cfg
 
@@ -378,14 +407,25 @@ def _load_trajectory_metric(path: Path, metric_key: str) -> Dict[int, float]:
     return result
 
 
-def _load_noun_similarity_scalar(exp_dir: Path) -> Optional[float]:
+def _load_noun_similarity_scalar(exp_dir: Path, model_name: Optional[str] = None) -> Optional[float]:
     """Load a single noun similarity scalar for an experiment.
 
     Prefers noun_similarity_metrics.json (written by compute_noun_similarity.py).
     Falls back to the final value in noun_similarity_over_time.json.
     """
+    model_suffix = ""
+    if model_name:
+        sanitized = model_name.replace("/", "-")
+        model_suffix = f"_{sanitized}"
 
-    metrics_path = exp_dir / "noun_similarity_metrics.json"
+    # Try model-specific metrics first
+    if model_name:
+        metrics_path = exp_dir / f"noun_similarity_metrics{model_suffix}.json"
+        if not metrics_path.exists():
+            metrics_path = exp_dir / "noun_similarity_metrics.json" # Fallback
+    else:
+        metrics_path = exp_dir / "noun_similarity_metrics.json"
+
     if metrics_path.exists():
         try:
             payload = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -394,27 +434,35 @@ def _load_noun_similarity_scalar(exp_dir: Path) -> Optional[float]:
                 return None
             return float(value)
         except Exception:
-            return None
+            pass
 
-    trajectory_path = exp_dir / "noun_similarity_over_time.json"
-    if not trajectory_path.exists():
-        return None
-    try:
-        traj = json.loads(trajectory_path.read_text(encoding="utf-8"))
-        if not isinstance(traj, list) or not traj:
-            return None
-        last = traj[-1]
-        if not isinstance(last, dict):
-            return None
-        value = last.get("mean_max_similarity")
-        if value is None:
-            return None
-        return float(value)
-    except Exception:
-        return None
+    # Try trajectory files
+    nounlist_name = DEFAULT_NOUNLIST_PATH.stem
+    candidates = []
+    if model_name:
+        candidates.append(exp_dir / f"noun_similarity_over_time_{nounlist_name}{model_suffix}.json")
+    candidates.append(exp_dir / f"noun_similarity_over_time_{nounlist_name}.json")
+    
+    for trajectory_path in candidates:
+        if not trajectory_path.exists():
+            continue
+        try:
+            traj = json.loads(trajectory_path.read_text(encoding="utf-8"))
+            if not isinstance(traj, list) or not traj:
+                continue
+            last = traj[-1]
+            if not isinstance(last, dict):
+                continue
+            value = last.get("mean_max_similarity")
+            if value is not None:
+                return float(value)
+        except Exception:
+            continue
+            
+    return None
 
 
-def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path) -> Optional[float]:
+def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path, model_name: Optional[str] = None) -> Optional[float]:
     """Load mean pairwise distance scalar for an experiment.
 
     Prefers embedding_metrics.json (produced by embed_and_visualize.py) using either:
@@ -423,41 +471,58 @@ def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path) -> Optional[flo
 
     Falls back to the final value in embedding_mean_pairwise_distance_over_time.json.
     """
+    model_suffix = ""
+    if model_name:
+        sanitized = model_name.replace("/", "-")
+        model_suffix = f"_{sanitized}"
 
-    metrics_path = exp_dir / "embedding_metrics.json"
-    if metrics_path.exists():
+    # Try model-specific metrics first
+    candidates_metrics = []
+    if model_name:
+         candidates_metrics.append(exp_dir / f"embedding_metrics{model_suffix}.json")
+    candidates_metrics.append(exp_dir / "embedding_metrics.json")
+
+    for metrics_path in candidates_metrics:
+        if metrics_path.exists():
+            try:
+                payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+                mpd = payload.get("mean_pairwise_distance")
+                if isinstance(mpd, dict):
+                    value = mpd.get("value")
+                    if value is not None:
+                        return float(value)
+
+                pairwise = payload.get("pairwise_distances")
+                if isinstance(pairwise, dict):
+                    value = pairwise.get("mean")
+                    if value is not None:
+                        return float(value)
+            except Exception:
+                continue
+
+    # Try trajectory files
+    candidates_traj = []
+    if model_name:
+        candidates_traj.append(exp_dir / f"embedding_mean_pairwise_distance_over_time{model_suffix}.json")
+    candidates_traj.append(exp_dir / "embedding_mean_pairwise_distance_over_time.json")
+
+    for traj_path in candidates_traj:
+        if not traj_path.exists():
+            continue
         try:
-            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
-            mpd = payload.get("mean_pairwise_distance")
-            if isinstance(mpd, dict):
-                value = mpd.get("value")
-                if value is not None:
-                    return float(value)
-
-            pairwise = payload.get("pairwise_distances")
-            if isinstance(pairwise, dict):
-                value = pairwise.get("mean")
-                if value is not None:
-                    return float(value)
+            traj = json.loads(traj_path.read_text(encoding="utf-8"))
+            if not isinstance(traj, list) or not traj:
+                continue
+            last = traj[-1]
+            if not isinstance(last, dict):
+                continue
+            value = last.get("mean_pairwise_distance")
+            if value is not None:
+                return float(value)
         except Exception:
-            return None
-
-    traj_path = exp_dir / "embedding_mean_pairwise_distance_over_time.json"
-    if not traj_path.exists():
-        return None
-    try:
-        traj = json.loads(traj_path.read_text(encoding="utf-8"))
-        if not isinstance(traj, list) or not traj:
-            return None
-        last = traj[-1]
-        if not isinstance(last, dict):
-            return None
-        value = last.get("mean_pairwise_distance")
-        if value is None:
-            return None
-        return float(value)
-    except Exception:
-        return None
+            continue
+            
+    return None
 
 
 def _write_scalar_bar_plot(
@@ -545,6 +610,52 @@ def _write_scalar_bar_plot(
     plt.close(fig)
 
 
+def _load_human_baseline(
+    metric: str,
+    render_size: int,
+    model: str,
+    nounlist: Optional[str] = None
+) -> Optional[Dict[int, float]]:
+    """Load human baseline trajectory for the given metric."""
+    baseline_dir = SCRIPT_ROOT / "human_baseline"
+    if not baseline_dir.exists():
+        print(f"Human baseline directory not found: {baseline_dir}")
+        return None
+        
+    model_name = model.replace("/", "-")
+    
+    if metric == "novelty":
+        filename = f"novelty_res{render_size}_{model_name}.json"
+        key = "mean_pairwise_distance"
+    elif metric == "noun":
+        if not nounlist:
+            print("Nounlist name must be provided to load noun similarity baseline.")
+            return None
+        filename = f"noun_similarity_res{render_size}_{model_name}_{nounlist}.json"
+        key = "mean_max_similarity"
+    else:
+        print(f"Unknown metric for human baseline: {metric}")
+        return None
+        
+    path = baseline_dir / filename
+    if not path.exists():
+        print(f"Human baseline file not found: {path}")
+        return None
+        
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        trajectory = {}
+        for row in data:
+            idx = row.get("index")
+            val = row.get(key)
+            if idx is not None and val is not None:
+                trajectory[int(idx)] = float(val)
+        return trajectory
+    except Exception as e:
+        print(f"Failed to load human baseline from {path}: {e}")
+        return None
+
+
 def _write_aggregate_plot(
     *,
     grouped_runs: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]],
@@ -552,6 +663,7 @@ def _write_aggregate_plot(
     title: str,
     xlabel: str,
     ylabel: str,
+    baselines: Optional[List[Tuple[str, Dict[int, float]]]] = None,
 ) -> None:
     import numpy as np
 
@@ -573,6 +685,7 @@ def _write_aggregate_plot(
     ax.grid(True, which="major", alpha=0.3)
 
     plotted = 0
+    max_x = 0
 
     for group_key in group_keys:
         runs = grouped_runs[group_key]
@@ -585,6 +698,8 @@ def _write_aggregate_plot(
         if not common:
             continue
         indices = sorted(common)
+        if indices:
+            max_x = max(max_x, indices[-1])
         values = np.array([[run[i] for i in indices] for run in runs], dtype=float)
         mean = values.mean(axis=0)
         std = values.std(axis=0)
@@ -594,6 +709,27 @@ def _write_aggregate_plot(
         ax.fill_between(indices, mean - std, mean + std, alpha=0.2, color=line.get_color())
         plotted += 1
 
+    if baselines and max_x > 0:
+        # Use black if there's only one baseline, otherwise cycle colors
+        use_black = (len(baselines) == 1)
+
+        for label, trajectory in baselines:
+            indices = sorted([i for i in trajectory.keys() if i <= max_x])
+            if indices:
+                values = [trajectory[i] for i in indices]
+                
+                kwargs = {
+                    "linestyle": "--",
+                    "linewidth": 2,
+                    "label": label,
+                    "alpha": 0.7,
+                }
+                if use_black:
+                    kwargs["color"] = "black"
+
+                ax.plot(indices, values, **kwargs)
+                plotted += 1
+
     if plotted == 0:
         plt.close(fig)
         return
@@ -602,6 +738,7 @@ def _write_aggregate_plot(
     outpath.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(outpath, dpi=150)
+    print(f"Wrote aggregate plot to {outpath}")
     plt.close(fig)
 
 
@@ -610,6 +747,7 @@ def _plot_seed_aggregates(
     run_configs: Sequence[PicbreederConfig],
     output_dir: Path,
     filename_tag: str,
+    embedding_model: Optional[str] = None,
 ) -> None:
     novelty_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     noun_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
@@ -617,55 +755,89 @@ def _plot_seed_aggregates(
     mpd_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     nounlist_name = Path(DEFAULT_NOUNLIST_PATH).stem
 
+    model_suffix = ""
+    if embedding_model:
+        sanitized = embedding_model.replace("/", "-")
+        model_suffix = f"_{sanitized}"
+
+    baselines_novelty: List[Tuple[str, Dict[int, float]]] = []
+    baselines_noun: List[Tuple[str, Dict[int, float]]] = []
+    if run_configs:
+        unique_sizes = sorted(list({cfg.thumb_size for cfg in run_configs}))
+        # embedding_model = run_configs[0].embedding_model
+        baseline_model_novelty = embedding_model if embedding_model else "ViT-B-32"
+        baseline_model_noun = embedding_model if embedding_model else "ViT-H-14"
+        
+        for size in unique_sizes:
+            label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
+            
+            bn = _load_human_baseline("novelty", size, baseline_model_novelty)
+            if bn:
+                baselines_novelty.append((f"Human Baseline{label_suffix}", bn))
+            
+            bnn = _load_human_baseline("noun", size, baseline_model_noun, nounlist=nounlist_name)
+            if bnn:
+                baselines_noun.append((f"Human Baseline{label_suffix}", bnn))
+
     for run_cfg in run_configs:
         group_key = _group_key_for_aggregate(run_cfg)
         exp_dir = Path(run_cfg.experiment_dir)
 
-        novelty_path = exp_dir / "embedding_mean_pairwise_distance_over_time.json"
+        # Try specific model file first
+        novelty_path = exp_dir / f"embedding_mean_pairwise_distance_over_time{model_suffix}.json"
+        if not novelty_path.exists():
+            novelty_path = exp_dir / "embedding_mean_pairwise_distance_over_time.json"
+            
         if novelty_path.exists():
             novelty = _load_trajectory_metric(novelty_path, "mean_pairwise_distance")
             novelty_grouped.setdefault(group_key, []).append(novelty)
 
-        noun_path = exp_dir / f"noun_similarity_over_time_{nounlist_name}.json"
+        # Try specific model file first
+        noun_path = exp_dir / f"noun_similarity_over_time_{nounlist_name}{model_suffix}.json"
+        if not noun_path.exists():
+            noun_path = exp_dir / f"noun_similarity_over_time_{nounlist_name}.json"
+            
         if noun_path.exists():
             noun = _load_trajectory_metric(noun_path, "mean_max_similarity")
             noun_grouped.setdefault(group_key, []).append(noun)
 
-        noun_scalar = _load_noun_similarity_scalar(exp_dir)
+        noun_scalar = _load_noun_similarity_scalar(exp_dir, model_name=embedding_model)
         if noun_scalar is not None:
             noun_scalar_grouped.setdefault(group_key, []).append(noun_scalar)
 
-        mpd_scalar = _load_embedding_mean_pairwise_distance_scalar(exp_dir)
+        mpd_scalar = _load_embedding_mean_pairwise_distance_scalar(exp_dir, model_name=embedding_model)
         if mpd_scalar is not None:
             mpd_scalar_grouped.setdefault(group_key, []).append(mpd_scalar)
 
-    agg_plot_distance_path = output_dir / f"aggregate_embedding_mean_pairwise_distance_over_time_{filename_tag}.png"
+    agg_plot_distance_path = output_dir / f"aggregate_embedding_mean_pairwise_distance_over_time_{filename_tag}{model_suffix}.png"
     _write_aggregate_plot(
         grouped_runs=novelty_grouped,
         outpath=agg_plot_distance_path,
         title="Embedding diversity over time (mean±std across seeds)",
         xlabel="Archive insertion order",
         ylabel="Mean pairwise distance",
+        baselines=baselines_novelty,
     )
-    agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{nounlist_name}_{filename_tag}.png"
+    agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{nounlist_name}_{filename_tag}{model_suffix}.png"
     _write_aggregate_plot(
         grouped_runs=noun_grouped,
         outpath=agg_plot_noun_path,
         title="Noun similarity over time (mean±std across seeds)",
         xlabel="Archive insertion order",
         ylabel="Mean max cosine similarity",
+        baselines=baselines_noun,
     )
 
     _write_scalar_bar_plot(
         grouped_values=noun_scalar_grouped,
-        outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{nounlist_name}_{filename_tag}.png",
+        outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{nounlist_name}_{filename_tag}{model_suffix}.png",
         title="Mean max noun similarity (mean±std across seeds)",
         ylabel="Mean of per-noun max cosine similarity",
     )
 
     _write_scalar_bar_plot(
         grouped_values=mpd_scalar_grouped,
-        outpath=output_dir / f"aggregate_mean_pairwise_distance_mean_bar_{filename_tag}.png",
+        outpath=output_dir / f"aggregate_mean_pairwise_distance_mean_bar_{filename_tag}{model_suffix}.png",
         title="Mean pairwise distance (mean±std across seeds)",
         ylabel="Mean pairwise distance (euclidean)",
     )
@@ -708,7 +880,7 @@ def _build_run_config(cfg: SweepConfig, original_cwd: Path) -> PicbreederConfig:
     per_run_cfg = replace(base_cfg, experiment_dir=None, resume=False)
     validated_cfg = ensure_valid_config(per_run_cfg, original_cwd=original_cwd)
     exp_name = Path(validated_cfg.experiment_dir).name
-    exp_dir = _ensure_absolute(os.path.join(cfg.log_dir, cfg.sweep_name), original_cwd) / exp_name
+    exp_dir = _ensure_absolute(os.path.join(cfg.log_dir, 'sweep'), original_cwd) / exp_name
     validated_cfg = replace(validated_cfg, experiment_dir=exp_dir)
     resume = exp_dir.exists()
     if resume != validated_cfg.resume:
@@ -742,6 +914,11 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         slurm_account=cfg.account,
         name="picbreeder-vlm",
     )
+    if cfg.gpu:
+        executor.update_parameters(
+            slurm_gres='gpu:1',
+        )
+
     jobs = [CollaborativeRun(cfg, run_cfg) for run_cfg in configs]
     futures = executor.map_array(_execute_job, jobs)
     for run_cfg, future in zip(configs, futures):
@@ -780,6 +957,7 @@ def main(cfg: SweepConfig) -> None:
             run_configs=run_configs,
             output_dir=cross_eval_dir,
             filename_tag=filename_tag,
+            embedding_model=cfg.embedding_model,
         )
 
         metrics_name = DEFAULT_METRICS_FILENAME
@@ -874,8 +1052,8 @@ def main(cfg: SweepConfig) -> None:
                 for field_def in dataclass_fields(PicbreederConfig)
                 if field_def.name != "hydra"
             }
-            novelty_cfg0 = PairwiseDistanceConfig(**base_kwargs0)
-            noun_cfg0 = NounSimilarityConfig(**base_kwargs0)
+            novelty_cfg0 = PairwiseDistanceConfig(**base_kwargs0, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
+            noun_cfg0 = NounSimilarityConfig(**base_kwargs0, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
 
             novelty_model, novelty_preprocess = prepare_novelty_clip(novelty_cfg0, device)
             noun_model, noun_preprocess, noun_tokenizer = prepare_noun_clip(noun_cfg0, device)
@@ -894,7 +1072,7 @@ def main(cfg: SweepConfig) -> None:
                     if field_def.name != "hydra"
                 }
 
-                novelty_cfg = PairwiseDistanceConfig(**base_kwargs)
+                novelty_cfg = PairwiseDistanceConfig(**base_kwargs, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
                 novelty_cfg = replace(novelty_cfg, archive_limit=cfg.archive_limit)
                 desc = _format_run_prefix(run_cfg, "[local-plot]")
                 extra = (
@@ -910,7 +1088,7 @@ def main(cfg: SweepConfig) -> None:
                     preprocess=novelty_preprocess,
                 )
 
-                noun_cfg = NounSimilarityConfig(**base_kwargs, render_grid=True)
+                noun_cfg = NounSimilarityConfig(**base_kwargs, render_grid=True, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
                 noun_cfg = replace(noun_cfg, archive_limit=cfg.archive_limit)
                 print(f"{desc} -> compute_noun_similarity{extra}")
                 _call_hydra_wrapped_main(
@@ -929,6 +1107,7 @@ def main(cfg: SweepConfig) -> None:
                 run_configs=run_configs,
                 output_dir=cross_eval_dir,
                 filename_tag=filename_tag,
+                embedding_model=cfg.embedding_model,
             )
 
         finally:
@@ -961,7 +1140,7 @@ def main(cfg: SweepConfig) -> None:
                     for field_def in dataclass_fields(PicbreederConfig)
                     if field_def.name != "hydra"
                 }
-                eval_cfg0 = EmbedVisualizeConfig(**base_kwargs0)
+                eval_cfg0 = EmbedVisualizeConfig(**base_kwargs0, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
                 eval_model, eval_preprocess = prepare_eval_clip(eval_cfg0, device)
 
                 for run_cfg in run_configs:
@@ -970,7 +1149,7 @@ def main(cfg: SweepConfig) -> None:
                         for field_def in dataclass_fields(PicbreederConfig)
                         if field_def.name != "hydra"
                     }
-                    eval_cfg = EmbedVisualizeConfig(**base_kwargs)
+                    eval_cfg = EmbedVisualizeConfig(**base_kwargs, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
                     eval_cfg = replace(eval_cfg, archive_limit=cfg.archive_limit)
                     desc = _format_run_prefix(run_cfg, "[local-eval]")
                     extra = (

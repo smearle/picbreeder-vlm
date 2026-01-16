@@ -124,9 +124,12 @@ class AgentRunner:
         self.request_rationale = bool(getattr(self.config, "request_rationale", True))
         self.log_raw_responses = bool(getattr(self.config, "log_raw_responses", False))
         self.fixed_session_lengths = bool(getattr(self.config, "fixed_session_lengths", True))
-        self.rand_select_prob = max(
-            0.0, min(1.0, float(getattr(self.config, "rand_select_prob", 0.0) or 0.0))
-        )
+        val = float(getattr(self.config, "rand_select_prob", 0.0) or 0.0)
+        if val == 2.0:
+            self.rand_select_prob = 2.0
+        else:
+            self.rand_select_prob = max(0.0, min(1.0, val))
+        self.rand_select_mode = getattr(self.config, "rand_select_mode", "select-only")
 
         # Start each agent with a fresh conversation history before any VLM calls.
         reset_chat_session()
@@ -762,6 +765,33 @@ class AgentRunner:
                 elite_name_list,
                 timestamp=timestamp,
             )
+
+        # Check for hack mode (random branching)
+        if self.rand_select_mode == "all" and self.rand_select_prob == 2.0:
+            rationale = "Hack mode active; random branching decision."
+            choice = "fresh" if random.random() < 0.2 else "branch"
+            selected_images: List[int] = []
+            if choice == "branch":
+                selected_images = [random.randrange(len(archive_entries))]
+            
+            decision = {
+                "choice": choice,
+                "selected_images": selected_images,
+                "rationale": rationale,
+                "raw_response": None,
+                "timestamp": timestamp,
+                "archive_elite_names": list(elite_name_list),
+                "archive_subset_counts": dict(subset_counts),
+            }
+            decision["selected_entry_ids"] = [
+                archive_entries[idx]["id"]
+                for idx in selected_images
+                if 0 <= idx < len(archive_entries)
+            ]
+            if choice == "branch":
+                preview_path = self._save_archive_branch_preview(decision, archive_entries)
+                decision["branch_preview_path"] = str(preview_path)
+            return decision
 
         if self.selection_baseline != "none":
             rationale = "Dry-run mode; random decision."
@@ -1433,29 +1463,73 @@ class AgentRunner:
 
         if self.selection_baseline == "none":
             selection_meta_raw: Dict[str, Any]
-            if (
-                self.rand_select_prob > 0
-                and not (self.fixed_session_lengths and generation_i == self.generations - 1)
-                and random.random() < self.rand_select_prob
-            ):
-                grid_image = create_numbered_grid(population_images, self.rows, self.cols, self.thumb_size)
-                grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
-                grid_image.save(grid_path, format="PNG")
-                self._update_latest_image(grid_path)
-                selected_idx = random.randrange(len(population_images))
-                selection_meta_raw = {
-                    "selected": [selected_idx],
-                    "grid_path": str(grid_path),
-                    "short_circuit": "random_selection",
-                }
-                if self.request_rationale:
-                    selection_meta_raw["rationale"] = f"Random selection triggered (p={self.rand_select_prob:.3f})."
-                print(
-                    f"[{self.agent_id}] Gen {generation_i}: random short-circuit selection -> {selected_idx} "
-                    f"(p={self.rand_select_prob:.3f})"
+            while True:
+                population_images = color_images if self._color_enabled else gray_images
+
+                is_random_step = (
+                    self.rand_select_prob > 0
+                    and (self.rand_select_prob == 2.0 or not (self.fixed_session_lengths and generation_i == self.generations - 1))
+                    and random.random() < self.rand_select_prob
                 )
-            else:
-                while True:
+
+                if is_random_step:
+                    if self.rand_select_mode == "all" and random.random() < 0.1:
+                        self._color_enabled = not self._color_enabled
+                        self._update_mutation_mode(self._mutation_mode)
+                        view_index += 1
+                        print(f"[{self.agent_id}] Gen {generation_i}: Random intervention toggled color to {self._color_enabled}")
+                        continue
+
+                    grid_image = create_numbered_grid(population_images, self.rows, self.cols, self.thumb_size)
+                    grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
+                    grid_image.save(grid_path, format="PNG")
+                    self._update_latest_image(grid_path)
+                    
+                    selected_idx = random.randrange(len(population_images))
+                    selection_meta_raw = {
+                        "selected": [selected_idx],
+                        "grid_path": str(grid_path),
+                        "short_circuit": "random_selection",
+                    }
+                    if self.request_rationale:
+                        selection_meta_raw["rationale"] = f"Random selection triggered (p={self.rand_select_prob:.3f})."
+
+                    if self.rand_select_mode == "all":
+                        if self._color_enabled and random.random() < 0.2:
+                            modes = ["all", "color_only", "structure_only"]
+                            new_mode = random.choice(modes)
+                            selection_meta_raw["mutation_mode"] = new_mode
+                            print(f"[{self.agent_id}] Gen {generation_i}: Random intervention set mutation mode to {new_mode}")
+                        
+                        if random.random() < 0.2:
+                            new_strength = round(random.uniform(0.1, 1.0), 2)
+                            selection_meta_raw["mutation_strength"] = new_strength
+                            print(f"[{self.agent_id}] Gen {generation_i}: Random intervention set mutation strength to {new_strength}")
+
+                        if self.rand_select_prob == 2.0:
+                            should_publish = False
+                            if self.fixed_session_lengths:
+                                should_publish = (generation_i == self.generations - 1)
+                            else:
+                                should_publish = ((generation_i + 1) % 20 == 0)
+                            
+                            if should_publish:
+                                pub_idx = random.randrange(len(population_images))
+                                selection_meta_raw["response_text"] = json.dumps({
+                                    "publish": {
+                                        "index": pub_idx, 
+                                        "reason": "Random publication triggered by hack mode."
+                                    }
+                                })
+                                print(f"[{self.agent_id}] Gen {generation_i}: Random publication triggered for index {pub_idx}")
+
+                    print(
+                        f"[{self.agent_id}] Gen {generation_i}: random short-circuit selection -> {selected_idx} "
+                        f"(p={self.rand_select_prob:.3f})"
+                    )
+                    break
+
+                else:
                     prompt_with_settings = self._prompt_with_settings(prompt_template)
                     variant_key = "color" if self._color_enabled else "gray"
                     population_images = color_images if self._color_enabled else gray_images
@@ -1533,6 +1607,13 @@ class AgentRunner:
             else:
                 grid_path = self.query_dir / f"{name_prefix}gen_{generation_i:03d}_view_{view_index:02d}_grid.png"
         selection_meta["grid_path"] = str(grid_path)
+
+        if "selection_path" not in selection_meta or not str(selection_meta["selection_path"]).endswith(".png"):
+            selection_image_path = grid_path.with_name(grid_path.name.replace("_grid.png", "_selection.png"))
+            if selection_image_path == grid_path:
+                selection_image_path = grid_path.with_name(grid_path.stem + "_selection.png")
+            selection_meta["selection_path"] = str(selection_image_path)
+
         selection_meta["color"] = self._color_enabled
         
         # In fixed session mode, ignore restart and quit requests
@@ -1562,6 +1643,7 @@ class AgentRunner:
         selection_meta["mutation_strength"] = resolved_strength
         if self.warm_start_active:
             selection_meta["mutation_mode_forced"] = True
+        
         selection_path_value = selection_meta.get("selection_path")
         selection_path = Path(selection_path_value) if selection_path_value else Path(grid_path)
         selected_indices: Sequence[int] = selection_meta["selected"]
@@ -1681,7 +1763,7 @@ class AgentRunner:
             elif self._last_publish_rejection and "publish_error" not in selection_meta:
                 selection_meta["publish_error"] = dict(self._last_publish_rejection)
 
-        selection_path = Path(selection_meta.get("selection_path") or grid_path)
+        selection_path = Path(selection_meta["selection_path"])
         self._render_selection_with_publication(
             population_images,
             selected_indices,

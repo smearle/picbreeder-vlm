@@ -3,6 +3,7 @@ google-genai
 hydra-core
 matplotlib
 neat-python==0.92
+pathlib
 Pillow
 pygame
 python-dotenv
@@ -23,3 +24,4 @@ rasterfairy
 # For local models (? let's see if this works)
 transformers
 accelerate
+vllm

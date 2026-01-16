@@ -60,6 +60,54 @@ def draw_label(draw: ImageDraw.ImageDraw, position: Sequence[int], text: str, fo
     draw.text(position, text, font=font, fill=(255, 255, 0))
 
 
+def _text_size(text: str, font: ImageFont.ImageFont) -> Tuple[int, int]:
+    bbox = font.getbbox(text)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return width, height
+
+
+def create_captioned_grid(
+    images: Sequence[Image.Image],
+    captions: Sequence[str],
+    thumb_size: int,
+    margin: int,
+    font_size: int,
+) -> Image.Image:
+    font = try_load_font(font_size)
+    if not images:
+        raise ValueError("No images to render in grid.")
+
+    cols = max(1, int(math.ceil(math.sqrt(len(images)))))
+    rows = int(math.ceil(len(images) / cols))
+    label_height = max(_text_size(caption, font)[1] for caption in captions) if captions else 0
+
+    cell_height = thumb_size + label_height + 6
+    width = (cols * thumb_size) + ((cols + 1) * margin)
+    height = (rows * cell_height) + ((rows + 1) * margin)
+    canvas = Image.new("RGB", (width, height), (16, 16, 20))
+    draw = ImageDraw.Draw(canvas)
+
+    for i, (img, caption) in enumerate(zip(images, captions)):
+        row = i // cols
+        col = i % cols
+        x = margin + col * (thumb_size + margin)
+        y = margin + row * (cell_height + margin)
+
+        if img and img.size != (thumb_size, thumb_size):
+            img = img.resize((thumb_size, thumb_size), resample=Image.BICUBIC)
+        
+        if img:
+            canvas.paste(img, (x, y))
+
+        text_w, text_h = _text_size(caption, font)
+        text_x = x + max(0, (thumb_size - text_w) // 2)
+        text_y = y + thumb_size + 2
+        draw.text((text_x, text_y), caption, font=font, fill=(255, 255, 0))
+
+    return canvas
+
+
 def create_numbered_grid(
     population_images: List[Image.Image],
     rows: int,
@@ -252,6 +300,7 @@ __all__ = [
     "decode_image",
     "try_load_font",
     "draw_label",
+    "create_captioned_grid",
     "create_numbered_grid",
     "render_genome_image",
     "render_genome_diagram",

@@ -801,7 +801,7 @@ def main() -> None:
                     "prompt": prompt,
                     "response_text": response_text,
                     "error": error_message,
-                    "model": DEFAULT_MODEL,
+                    "model": model,
                     "grid_path": str(grid_path) if grid_path else None,
                     "input_mode": input_mode,
                     "query_time_sec": query_time_sec,

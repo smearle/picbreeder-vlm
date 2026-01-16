@@ -22,6 +22,7 @@ Usage:
 
 import importlib.util
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from io import BytesIO
@@ -177,8 +178,16 @@ class GeminiBackend(VLMBackend):
                     text=getattr(response, "text", "") or "",
                     raw_response=response,
                 )
-            except self._genai.errors.ServerError:
-                time.sleep(10)
+            except Exception as exc:
+                if isinstance(exc, self._genai.errors.ClientError) and _is_rate_limit_error(exc):
+                    delay = _extract_retry_delay_seconds(exc) or 40.0
+                    print(f"Gemini quota exceeded (429) in query. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    continue
+                if isinstance(exc, self._genai.errors.ServerError):
+                    time.sleep(10)
+                    continue
+                raise
     
     def query_multiple(
         self,
@@ -231,8 +240,16 @@ class GeminiBackend(VLMBackend):
                     text=getattr(response, "text", "") or "",
                     raw_response=response,
                 )
-            except self._genai.errors.ServerError:
-                time.sleep(10)
+            except Exception as exc:
+                if isinstance(exc, self._genai.errors.ClientError) and _is_rate_limit_error(exc):
+                    delay = _extract_retry_delay_seconds(exc) or 40.0
+                    print(f"Gemini quota exceeded (429) in query_multiple. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    continue
+                if isinstance(exc, self._genai.errors.ServerError):
+                    time.sleep(10)
+                    continue
+                raise
     
     def create_chat_session(self, max_turns: Optional[int] = None) -> "GeminiChatSession":
         """Create a Gemini chat session with history support."""
@@ -255,6 +272,38 @@ def _is_token_limit_error(exc: Exception) -> bool:
     if isinstance(code, str) and code.lower() in {"400", "invalid_argument"} and "token" in message:
         return True
     return False
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "resource_exhausted" in message or "rate limit" in message or "quota" in message:
+        return True
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code == 429:
+        return True
+    if isinstance(code, str) and code.strip() == "429":
+        return True
+    return False
+
+
+def _extract_retry_delay_seconds(exc: Exception) -> Optional[float]:
+    details = getattr(exc, "details", None)
+    if isinstance(details, (list, tuple)):
+        for item in details:
+            if isinstance(item, dict) and item.get("@type", "").endswith("RetryInfo"):
+                retry_delay = item.get("retryDelay")
+                if isinstance(retry_delay, str):
+                    match = re.search(r"(\d+)(?:\.(\d+))?s", retry_delay)
+                    if match:
+                        seconds = float(match.group(1))
+                        if match.group(2):
+                            seconds += float("0." + match.group(2))
+                        return seconds
+    message = str(exc)
+    match = re.search(r"retry in\s+(\d+(?:\.\d+)?)s", message, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    return None
 
 
 class GeminiChatSession(VLMChatSession):
@@ -422,13 +471,22 @@ class GeminiChatSession(VLMChatSession):
                 response = chat.send_message(parts)
                 break
             except Exception as exc:
+                # Handle 429 Resource Exhausted (Rate Limit)
+                if isinstance(exc, self._genai.errors.ClientError) and _is_rate_limit_error(exc):
+                    delay = _extract_retry_delay_seconds(exc) or 40.0
+                    print(f"Gemini quota exceeded (429). Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    continue
+
                 if _is_token_limit_error(exc) and start_index < len(self._turn_history):
                     start_index += 1
                     continue
+                
+                if isinstance(exc, self._genai.errors.ServerError):
+                    time.sleep(10)
+                    continue
+                
                 raise
-            except self._genai.errors.ServerError:
-                time.sleep(10)
-                continue
         
         response_text = getattr(response, "text", "") or ""
         if start_index > 0:
@@ -625,15 +683,75 @@ class VLLMQwen3VLBackend(VLMBackend):
     def _ensure_model(self):
         if self._llm is None:
             from vllm import LLM, SamplingParams
-            from transformers import AutoProcessor
+            from transformers import AutoProcessor, AutoConfig
 
-            self._llm = LLM(
-                model=self._model_name,
-                tensor_parallel_size=self._tensor_parallel_size,
-                max_model_len=self._max_model_len,
-                gpu_memory_utilization=self._gpu_memory_utilization,
-                trust_remote_code=True,
-            )
+            # Patch Qwen3VLConfig if needed (workaround for vLLM compatibility)
+            # vLLM expects 'num_attention_heads' but Qwen3-VL might use a different name
+            try:
+                # We trust remote code because we are using the model
+                config = AutoConfig.from_pretrained(self._model_name, trust_remote_code=True)
+                config_class = config.__class__
+                
+                if not hasattr(config, "num_attention_heads"):
+                    print(f"Patching {config_class.__name__} to add 'num_attention_heads' for vLLM compatibility...")
+                    
+                    # Look for alternative attribute names
+                    candidates = ["num_heads", "n_head", "n_heads", "attention_heads"]
+                    found_attr = None
+                    for attr in candidates:
+                        if hasattr(config, attr):
+                            found_attr = attr
+                            break
+                    
+                    if found_attr:
+                        print(f"  -> Mapping 'num_attention_heads' to '{found_attr}'")
+                        # Patch the class so all instances get it
+                        setattr(config_class, "num_attention_heads", property(lambda self, attr=found_attr: getattr(self, attr)))
+                    else:
+                        print(f"  -> Warning: Could not find candidate for num_attention_heads in {candidates}")
+                        
+            except Exception as e:
+                print(f"Warning: Failed to patch config: {e}")
+
+            # Start with full arguments
+            kwargs = {
+                "model": self._model_name,
+                "tensor_parallel_size": self._tensor_parallel_size,
+                "gpu_memory_utilization": self._gpu_memory_utilization,
+                "trust_remote_code": True,
+                "max_model_len": self._max_model_len,
+            }
+
+            # Helper to try initialization
+            def try_init(current_kwargs):
+                return LLM(**current_kwargs)
+
+            # Iteratively try to initialize, removing unsupported arguments on failure
+            try:
+                self._llm = try_init(kwargs)
+            except TypeError as e:
+                import re
+                current_err = e
+                while True:
+                    err_str = str(current_err)
+                    if "unexpected keyword argument" in err_str:
+                        match = re.search(r"unexpected keyword argument '([^']+)'", err_str)
+                        if match:
+                            bad_arg = match.group(1)
+                            if bad_arg in kwargs:
+                                print(f"Warning: vLLM init failed with argument '{bad_arg}'. Removing it and retrying.")
+                                del kwargs[bad_arg]
+                                try:
+                                    self._llm = try_init(kwargs)
+                                    break  # Success
+                                except TypeError as next_e:
+                                    current_err = next_e
+                                    continue
+                    
+                    # If we can't handle the error, raise it
+                    print(f"Failed to initialize vLLM with kwargs: {kwargs.keys()}")
+                    raise current_err
+
             self._processor = AutoProcessor.from_pretrained(self._model_name)
             self._SamplingParams = SamplingParams
 
@@ -723,11 +841,13 @@ class VLLMQwen3VLBackend(VLMBackend):
             raise ValueError("image_bytes_list and captions must be the same length.")
         if not image_bytes_list:
             raise ValueError("At least one image must be provided.")
+
         messages, images = self._build_messages(image_bytes_list, captions, prompt, system_instruction)
         response_text = self._generate(messages, images, max_new_tokens)
         return VLMResponse(text=response_text)
-
+    
     def create_chat_session(self, max_turns: Optional[int] = None) -> "VLLMQwen3VLChatSession":
+        """Create a Qwen3-VL chat session with history support."""
         self._ensure_model()
         return VLLMQwen3VLChatSession(
             llm=self._llm,

@@ -8,8 +8,15 @@ but makes it easy to batch-export the figures as image files.
 
 from __future__ import annotations
 
+import os
+
+# Enforce CPU usage for JAX to avoid GPU OOM/contention and because individual CPPNs are small/variable
+os.environ["JAX_PLATFORM_NAME"] = "cpu"
+
 import argparse
 import math
+import multiprocessing
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
@@ -213,20 +220,54 @@ def render_final_image(genomes: List[Dict], res: int = 200):
     return np.clip(rgb, 0, 1)
 
 
+def process_one_pid(pid, pb_dir, output_dir, archive_dir, args):
+    if args.archive_final:
+        out_path = archive_dir / f"{pid}.png"
+    else:
+        out_path = output_dir / f"{pid}.{args.format}"
+
+    if out_path.exists():
+        return None
+
+    try:
+        genomes = get_lineage_genomes(pb_dir, pid)
+    except Exception as exc:
+        return f"[WARN] Failed to gather genomes for pid {pid}: {exc}"
+
+    if args.archive_final:
+        rgb = render_final_image(genomes, res=args.res)
+        if rgb is None:
+            return f"[INFO] No genomes found for pid {pid}; skipping."
+        plt.imsave(out_path, rgb)
+        return f"[OK] Archived final genome for pid {pid} -> {out_path}"
+    else:
+        fig, count = render_lineage_figure(
+            genomes,
+            max_genomes=args.max_genomes,
+            grid_cols=args.grid_size,
+            res=args.res,
+        )
+        if fig is None:
+            return f"[INFO] No genomes found for pid {pid}; skipping."
+        fig.savefig(out_path, format=args.format, bbox_inches="tight", dpi=100)
+        plt.close(fig)
+        return f"[OK] Saved {count} genomes for pid {pid} -> {out_path}"
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Save lineage figures (adaptive grids) for every pid in a Picbreeder directory.",
     )
     parser.add_argument(
         "--pb-dir",
-        default=Path("../spaghetti/pbrender/genomeAll"),
+        default=Path("../spaghetti/pbRender/genomeAll"),
         type=Path,
         help="Directory that contains pid subdirectories (each with Picbreeder zip files).",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("figures/lineages"),
+        default=Path("lineages"),
         help="Where to write the generated figures (default: figures/lineages).",
     )
     parser.add_argument(
@@ -244,7 +285,7 @@ def parse_args():
     parser.add_argument(
         "--res",
         type=int,
-        default=200,
+        default=128,
         help="Resolution for rendering each genome (default: 200).",
     )
     parser.add_argument(
@@ -255,7 +296,7 @@ def parse_args():
     parser.add_argument(
         "--archive-final",
         action="store_true",
-        help="If set, skip lineage grids and save each pid's final genome as a 200x200 PNG.",
+        help="If set, skip lineage grids and save each pid's final genome as a PNG.",
     )
     parser.add_argument(
         "--archive-dir",
@@ -275,8 +316,10 @@ def parse_args():
 def main():
     args = parse_args()
     pb_dir = args.pb_dir.expanduser().resolve()
-    output_dir = args.output_dir.expanduser().resolve()
-    archive_dir = args.archive_dir.expanduser().resolve()
+    ouput_dir = Path(str(args.output_dir) + f"res-{args.res}")
+    output_dir = ouput_dir.expanduser().resolve()
+    archive_dir = Path(str(args.archive_dir) + f"_res-{args.res}")
+    archive_dir = archive_dir.expanduser().resolve()
     if args.archive_final:
         archive_dir.mkdir(parents=True, exist_ok=True)
     else:
@@ -296,34 +339,24 @@ def main():
     if not pids:
         raise SystemExit(f"No pid directories found in {pb_dir}")
 
-    for pid in tqdm(pids, desc="Rendering lineages"):
-        try:
-            genomes = get_lineage_genomes(pb_dir, pid)
-        except Exception as exc:  # pragma: no cover - defensive logging aid
-            tqdm.write(f"[WARN] Failed to gather genomes for pid {pid}: {exc}")
-            continue
-        if args.archive_final:
-            rgb = render_final_image(genomes, res=200)
-            if rgb is None:
-                tqdm.write(f"[INFO] No genomes found for pid {pid}; skipping.")
-                continue
-            out_path = archive_dir / f"{pid}.png"
-            plt.imsave(out_path, rgb)
-            tqdm.write(f"[OK] Archived final genome for pid {pid} -> {out_path}")
-        else:
-            fig, count = render_lineage_figure(
-                genomes,
-                max_genomes=args.max_genomes,
-                grid_cols=args.grid_size,
-                res=args.res,
-            )
-            if fig is None:
-                tqdm.write(f"[INFO] No genomes found for pid {pid}; skipping.")
-                continue
-            out_path = output_dir / f"{pid}.{args.format}"
-            fig.savefig(out_path, format=args.format, bbox_inches="tight", dpi=100)
-            plt.close(fig)
-            tqdm.write(f"[OK] Saved {count} genomes for pid {pid} -> {out_path}")
+    # Multiprocessing setup
+    num_workers = multiprocessing.cpu_count()
+    if args.limit and args.limit < num_workers:
+        num_workers = args.limit
+
+    func = partial(
+        process_one_pid,
+        pb_dir=pb_dir,
+        output_dir=output_dir,
+        archive_dir=archive_dir,
+        args=args,
+    )
+
+    print(f"Rendering lineages using {num_workers} workers...")
+    with multiprocessing.Pool(num_workers) as pool:
+        for msg in tqdm(pool.imap_unordered(func, pids), total=len(pids), desc="Rendering lineages"):
+            if msg:
+                tqdm.write(msg)
 
 
 if __name__ == "__main__":

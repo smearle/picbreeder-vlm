@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pickle
 import random
 import re
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Sequence, Tuple
@@ -41,8 +43,13 @@ from picbreeder_reproduction import PicbreederReproduction
 from picture2d.common import eval_genome_as_grayscale_and_color
 from rendering import create_numbered_grid
 
-from clip_noun_niche_config import ClipNounNicheConfig, DEFAULT_CONFIG_PATH, DEFAULT_NOUNLIST_PATH
-from clip_noun_niche_shared import build_run_name, resolve_path
+from clip_noun_niche_config import ClipNounNicheConfig
+from clip_noun_niche_shared import (
+    build_run_name,
+    resolve_path,
+    compress_run_images,
+    decompress_run_images,
+)
 
 
 STATE_FILENAME = "state.pkl"
@@ -72,6 +79,7 @@ def ensure_output_dir(base: Path, run_name: str, save_images: bool) -> Path:
     if save_images:
         (run_dir / "images" / "grids").mkdir(parents=True, exist_ok=True)
         (run_dir / "images" / "niches").mkdir(parents=True, exist_ok=True)
+        (run_dir / "elites").mkdir(parents=True, exist_ok=True)
     return run_dir
 
 
@@ -120,14 +128,42 @@ def _new_random_genome(
     return genome
 
 
-def render_population(genomes: Sequence[PicbreederGenome], config: neat.Config, render_size: int, image_paths: List[Path] = None) -> List[Image.Image]:
+def _render_worker(args: Tuple[PicbreederGenome, neat.Config, int]) -> np.ndarray:
+    genome, config, render_size = args
+    _, color_image = eval_genome_as_grayscale_and_color(genome, config, render_size, render_size)
+    return np.array(color_image, dtype=np.uint8)
+
+
+def render_population(
+    genomes: Sequence[PicbreederGenome],
+    config: neat.Config,
+    render_size: int,
+    image_paths: List[Path] = None,
+    num_proc: int = 1,
+) -> List[Image.Image]:
     images: List[Image.Image] = []
-    for i, genome in tqdm(enumerate(genomes), desc="Rendering genomes"):
-        _, color_image = eval_genome_as_grayscale_and_color(genome, config, render_size, render_size)
-        arr = np.array(color_image, dtype=np.uint8)
-        image = Image.fromarray(arr, mode="RGB")
-        images.append(image)
-        if image_paths is not None:
+    if num_proc > 1:
+        with ProcessPoolExecutor(max_workers=num_proc) as executor:
+            args_list = [(genome, config, render_size) for genome in genomes]
+            results = list(
+                tqdm(
+                    executor.map(_render_worker, args_list),
+                    total=len(genomes),
+                    desc="Rendering genomes (MP)",
+                )
+            )
+            images = [Image.fromarray(arr, mode="RGB") for arr in results]
+    else:
+        for i, genome in tqdm(enumerate(genomes), desc="Rendering genomes"):
+            _, color_image = eval_genome_as_grayscale_and_color(
+                genome, config, render_size, render_size
+            )
+            arr = np.array(color_image, dtype=np.uint8)
+            image = Image.fromarray(arr, mode="RGB")
+            images.append(image)
+
+    if image_paths is not None:
+        for i, image in enumerate(images):
             image_path = image_paths[i]
             image_path.parent.mkdir(parents=True, exist_ok=True)
             print(f"Saving image for genome {i} to {image_path}")
@@ -208,11 +244,23 @@ def sanitize_noun(noun: str) -> str:
     return cleaned or "noun"
 
 
-def save_niche_image(run_dir: Path, noun: str, generation: int, mode: str, score: float, image: Image.Image) -> Path:
+def save_niche_image(run_dir: Path, noun: str, generation: int, mode: str, score: float, image: Image.Image, save_history: bool = True) -> Path | None:
     noun_slug = sanitize_noun(noun)
-    filename = f"gen_{generation:04d}_mode-{mode}_{noun_slug}_score_{score:.4f}.png"
-    path = run_dir / "images" / "niches" / filename
-    image.save(path, format="PNG")
+    
+    # Ensure output directories exist
+    (run_dir / "elites").mkdir(parents=True, exist_ok=True)
+    
+    # Always update the current elite image for this noun
+    elite_path = run_dir / "elites" / f"{noun_slug}.png"
+    image.save(elite_path, format="PNG")
+    
+    path = None
+    if save_history:
+        (run_dir / "images" / "niches").mkdir(parents=True, exist_ok=True)
+        filename = f"gen_{generation:04d}_mode-{mode}_{noun_slug}_score_{score:.4f}.png"
+        path = run_dir / "images" / "niches" / filename
+        image.save(path, format="PNG")
+    
     return path
 
 
@@ -229,8 +277,9 @@ def evaluate_and_update_niches(
     generation: int,
     phase: str,
     save_images: bool,
+    num_proc: int = 1,
 ) -> Tuple[int, List[Image.Image], List[str]]:
-    images = render_population(genomes, config, render_size)
+    images = render_population(genomes, config, render_size, num_proc=num_proc)
     embedding_dim = int(clip.text_embeddings.shape[1])
     image_embeddings = embed_images(clip.model, clip.preprocess, clip.device, images, batch_size, embedding_dim)
     if image_embeddings.numel() == 0:
@@ -247,8 +296,7 @@ def evaluate_and_update_niches(
             if sim > best_scores[noun_idx]:
                 best_scores[noun_idx] = float(sim)
                 niche_elites[noun_idx] = NicheElite(genome=genome, score=float(sim))
-                if save_images:
-                    save_niche_image(run_dir, nouns[noun_idx], generation, phase, float(sim), image)
+                save_niche_image(run_dir, nouns[noun_idx], generation, phase, float(sim), image, save_history=save_images)
                 replacements += 1
                 replaced_nouns.append(nouns[noun_idx])
     return replacements, images, replaced_nouns
@@ -271,8 +319,6 @@ def make_args_signature(
     output_root: Path,
 ) -> dict:
     return {
-        "mu": cfg.mu,
-        "lambda_offspring": cfg.lambda_offspring,
         "stage_length": cfg.stage_length,
         "render_size": cfg.render_size,
         "batch_size": cfg.batch_size,
@@ -308,8 +354,12 @@ def save_state(
         "torch_cuda_state": torch_cuda_state,
         "args_signature": args_signature,
     }
-    with path.open("wb") as handle:
+    temp_path = path.with_name(f"{path.name}.tmp")
+    with temp_path.open("wb") as handle:
         pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temp_path.replace(path)
 
 
 def load_state(path: Path, expected_signature: dict) -> Tuple[int, List[float], List[NicheElite | None], int]:
@@ -330,7 +380,7 @@ def load_state(path: Path, expected_signature: dict) -> Tuple[int, List[float], 
     )
 
 
-def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
+def _run_es_unsafe(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
     if cfg.seed is not None:
         random.seed(cfg.seed)
         np.random.seed(cfg.seed)
@@ -352,7 +402,7 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
     state_path = run_dir / STATE_FILENAME
     args_signature = make_args_signature(cfg, nouns, nounlist_path, config_path, output_root)
 
-    config = build_config(config_path, cfg.mu, cfg.mutation_strength)
+    config = build_config(config_path, cfg.batch_size, cfg.mutation_strength)
     print(f"Starting CLIP noun-niche ES run: {run_name}")
     clip = load_clip_components(cfg.clip_model, cfg.clip_pretrained, cfg.device, nouns)
     activation_choices = [opt for opt in getattr(config.genome_config, "activation_options", [])]
@@ -383,6 +433,7 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
             generation=0,
             phase="init",
             save_images=cfg.save_images,
+            num_proc=cfg.num_proc,
         )
 
         init_payload = {
@@ -391,10 +442,9 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
             "replacements": init_replacements,
             "filled_niches": int(sum(1 for elite in niche_elites if elite is not None)),
             "mean_best_score": float(np.mean(best_scores)),
+            "std_best_score": float(np.std(best_scores)),
             "max_best_score": float(np.max(best_scores)),
             "qd_score": qd_score(best_scores),
-            "mu": cfg.mu,
-            "lambda": cfg.lambda_offspring,
             "nouns": len(nouns),
         }
         with metrics_path.open("a", encoding="utf-8") as handle:
@@ -425,7 +475,7 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
             raise RuntimeError("No parents available; niche elites list is empty.")
 
         children: List[PicbreederGenome] = []
-        for _ in range(cfg.lambda_offspring):
+        for _ in range(cfg.batch_size):
             parent = random.choice(parents)
             key, next_key_value = allocate_key(next_key_value)
             if random.random() < cfg.new_random_prob:
@@ -436,7 +486,7 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
             children.append(child)
 
         if cfg.save_images and cfg.save_offspring_grids:
-            child_images = render_population(children, config, cfg.render_size)
+            child_images = render_population(children, config, cfg.render_size, num_proc=cfg.num_proc)
             total = len(child_images)
             if total > 0:
                 cols = max(1, int(math.ceil(math.sqrt(total))))
@@ -458,6 +508,7 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
             generation=generation,
             phase=phase,
             save_images=cfg.save_images,
+            num_proc=cfg.num_proc,
         )
 
         payload = {
@@ -466,10 +517,9 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
             "replacements": replacements,
             "filled_niches": int(sum(1 for elite in niche_elites if elite is not None)),
             "mean_best_score": float(np.mean(best_scores)),
+            "std_best_score": float(np.std(best_scores)),
             "max_best_score": float(np.max(best_scores)),
             "qd_score": qd_score(best_scores),
-            "mu": cfg.mu,
-            "lambda": cfg.lambda_offspring,
             "nouns": len(nouns),
         }
         with metrics_path.open("a", encoding="utf-8") as handle:
@@ -494,8 +544,6 @@ def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
 
 
 def _validate_cfg(cfg: ClipNounNicheConfig) -> ClipNounNicheConfig:
-    if cfg.mu <= 0 or cfg.lambda_offspring <= 0:
-        raise ValueError("mu and lambda_offspring must be positive.")
     if cfg.generations <= 0:
         raise ValueError("generations must be positive.")
     if cfg.stage_length <= 0:
@@ -503,6 +551,21 @@ def _validate_cfg(cfg: ClipNounNicheConfig) -> ClipNounNicheConfig:
     if cfg.new_random_prob < 0 or cfg.new_random_prob > 1:
         raise ValueError("new_random_prob must be between 0 and 1.")
     return cfg
+
+
+def run_es(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
+    # Determine run directory to handle zip compression/decompression
+    output_root = resolve_path(cfg.output_dir, Path(original_cwd))
+    run_name = build_run_name(cfg)
+    run_dir = output_root / run_name
+
+    # Decompress existing images if we are resuming
+    decompress_run_images(run_dir, remove_zip=True)
+    try:
+        _run_es_unsafe(cfg, original_cwd)
+    finally:
+        # Compress images on exit (success, failure, or interruption)
+        compress_run_images(run_dir)
 
 
 @hydra_main(version_base="1.3", config_path=None, config_name="clip_noun_niche")

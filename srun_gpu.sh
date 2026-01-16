@@ -1,1 +1,1 @@
-srun -n1 --tasks=1 --cpus-per-task=1 -t1:00:00 --mem=30000 --gres=gpu:1 --pty /bin/bash
+srun -n1 --tasks=1 --cpus-per-task=1 -t1:00:00 --mem=30000 --gres=gpu:1 --account=pr_174_tandon_advanced --pty /bin/bash

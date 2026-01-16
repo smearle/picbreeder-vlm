@@ -1,9 +1,58 @@
 from __future__ import annotations
 
 import re
+import shutil
+import zipfile
 from pathlib import Path
 
 from clip_noun_niche_config import ClipNounNicheConfig
+
+
+def compress_run_images(run_dir: Path) -> None:
+    """Compress images/ and elites/ directories into images.zip and remove originals."""
+    zip_path = run_dir / "images.zip"
+    paths_to_zip = [run_dir / "images", run_dir / "elites"]
+    
+    # Only compress if directories exist
+    if not any(p.exists() for p in paths_to_zip):
+        return
+
+    print(f"Compressing images in {run_dir} to {zip_path}...")
+    temp_zip = zip_path.with_suffix(".tmp.zip")
+    try:
+        with zipfile.ZipFile(temp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in paths_to_zip:
+                if p.exists():
+                    for file_path in p.rglob("*"):
+                        if file_path.is_file():
+                            arcname = file_path.relative_to(run_dir)
+                            zf.write(file_path, arcname)
+        temp_zip.rename(zip_path)
+    except Exception as e:
+        if temp_zip.exists():
+            temp_zip.unlink()
+        raise e
+    
+    # Remove original directories
+    for p in paths_to_zip:
+        if p.exists():
+            shutil.rmtree(p)
+    print(f"Compression complete.")
+
+
+def decompress_run_images(run_dir: Path, remove_zip: bool = True) -> None:
+    """Decompress images.zip into run_dir and optionally remove the zip file."""
+    zip_path = run_dir / "images.zip"
+    if not zip_path.exists():
+        return
+
+    print(f"Decompressing images in {run_dir} from {zip_path}...")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(run_dir)
+    
+    if remove_zip:
+        zip_path.unlink()
+    print("Decompression complete.")
 
 
 def sanitize_tag(text: str) -> str:
@@ -17,8 +66,6 @@ def build_run_name(cfg: ClipNounNicheConfig) -> str:
     clip_tag = f"{sanitize_tag(cfg.clip_model)}-{sanitize_tag(cfg.clip_pretrained)}"
     parts = [
         f"nouns-{noun_tag}",
-        f"mu{cfg.mu}",
-        f"lam{cfg.lambda_offspring}",
         f"stage{cfg.stage_length}",
         f"render{cfg.render_size}",
         f"batch{cfg.batch_size}",

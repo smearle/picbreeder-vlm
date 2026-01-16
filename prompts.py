@@ -18,8 +18,7 @@ GOAL_PROMPTS = {
 }
 
 # DEBUG_PROMPT = (
-#     "(Also, for debugging, please tell me how many previous grids/populations you see in the chat history, briefly describe in neutral, objective terms how the grids have changed over time, "
-#     "and tell me if you see the archive from which you made your original branching decision; add this to the `rationale` text.) "
+#     "(Also, for debugging, please tell me how many images you see in the current prompt; add this to the `rationale` text.) "
 # )
 
 DEFAULT_SYSTEM_INSTRUCTION = (
@@ -44,11 +43,11 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "You may also include a \"publish\" field in the JSON response if you wish to publish an image from the current population. It should have the form: "
     '{{\"index\": image_index, \"title\": \"Image Title\"{publish_reason_suffix}}}. '
     "When you wish to stop generating new populations, add \"quit\": true to your JSON (optionally include \"quit_reason\" for context). "
-    # f"{DEBUG_PROMPT}"
     "{color_prompt}"
     "{mutation_mode_prompt}"
     "{mutation_strength_prompt}"
     "{archive_novelty_prompt}"
+    # f"{DEBUG_PROMPT}"
 )
 
 ARCHIVE_NOVELTY_PROMPT = (
@@ -81,6 +80,7 @@ FIXED_SESSION_SYSTEM_INSTRUCTION = (
     "{mutation_mode_prompt}"
     "{mutation_strength_prompt}"
     "{archive_novelty_prompt}"
+    # f"{DEBUG_PROMPT}"
 )
 
 def gen_selection_prompt(select_k: Optional[int], enable_crossover: bool) -> str:

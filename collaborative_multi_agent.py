@@ -89,7 +89,7 @@ from vlm_backends import create_vlm_backend, VLMBackend
 _RATING_BACKEND: Optional[VLMBackend] = None
 
 
-def _get_rating_backend(model: str = "gemini-2.5-pro") -> VLMBackend:
+def _get_rating_backend(model) -> VLMBackend:
     """Get or create a cached VLM backend for rating."""
     global _RATING_BACKEND
     if _RATING_BACKEND is None or _RATING_BACKEND.name != model:
@@ -1208,7 +1208,7 @@ class CollaborativeMultiAgentOrchestrator:
         goal_prompt = self.archive_manager.goal_prompt
         archive_dir = self.archive_manager.archive_dir
         try:
-            results = _perform_rating(targets, goal_prompt, archive_dir)
+            results = _perform_rating(targets, goal_prompt, archive_dir, model=self.config.model)
         except Exception as exc:  # pylint: disable=broad-except
             print(f"Auto-rating failed: {exc}")
             self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
@@ -1700,9 +1700,29 @@ def _perform_rating(
     targets: Sequence[Dict[str, str]],
     goal_prompt: str,
     archive_dir: Path,
+    model: str,
+    rand_select_prob: float = 0.0,
+    rand_select_mode: str = "select-only",
 ) -> Dict[str, RatingResult]:
     if not targets:
         return {}
+    
+    if rand_select_mode == "all" and rand_select_prob == 2.0:
+        results: Dict[str, RatingResult] = {}
+        print("Hack mode active: assigning random ratings to all targets.")
+        for target in targets:
+            image_id = str(target.get("id"))
+            # Assign a random score between 0 and 5
+            # We want integers for consistency with typical VLM outputs, or floats? 
+            # The VLM usually outputs integers 0-5. Let's do integers.
+            random_score = float(random.randint(0, 5))
+            results[image_id] = RatingResult(
+                score=random_score,
+                justification="Random rating triggered by hack mode.",
+                reported_title=None
+            )
+        return results
+
     entries: List[RatingArchiveEntry] = []
     for target in targets:
         image_path = Path(target.get("image_path", ""))
@@ -1747,7 +1767,7 @@ def _perform_rating(
             continue
         captions = [format_rating_entry_label(idx, entry, include_titles) for idx, entry in enumerate(batch)]
         try:
-            backend = _get_rating_backend()
+            backend = _get_rating_backend(model=model)
             response = backend.query_multiple(
                 image_bytes_list,
                 captions,
@@ -1772,6 +1792,9 @@ def _run_auto_rating_job(
     trigger_entry_count: int,
     goal_prompt: str,
     archive_dir: Path,
+    model:str,
+    rand_select_prob: float = 0.0,
+    rand_select_mode: str = "select-only",
 ) -> None:
     if not rating_targets:
         task_conn.send(
@@ -1783,7 +1806,14 @@ def _run_auto_rating_job(
         )
         return
     try:
-        rating_results = _perform_rating(rating_targets, goal_prompt, archive_dir)
+        rating_results = _perform_rating(
+            rating_targets,
+            goal_prompt,
+            archive_dir,
+            model=model,
+            rand_select_prob=rand_select_prob,
+            rand_select_mode=rand_select_mode,
+        )
     except Exception as exc:  # pylint: disable=broad-except
         task_conn.send(
             {
@@ -1834,6 +1864,7 @@ def _maybe_trigger_auto_rating_after_publish(
         trigger_entry_count=trigger_entry_count,
         goal_prompt=goal_prompt,
         archive_dir=archive_dir,
+        model=cfg.model,
     )
 
 
@@ -2037,6 +2068,9 @@ def _continual_agent_worker(
                     trigger_entry_count=trigger_entry_count,
                     goal_prompt=goal_prompt,
                     archive_dir=archive_dir,
+                    model=cfg.model,
+                    rand_select_prob=cfg.rand_select_prob,
+                    rand_select_mode=getattr(cfg, "rand_select_mode", "select-only"),
                 )
             elif msg_type == "stop":
                 task_conn.send({"type": "stopped"})

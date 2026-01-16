@@ -231,6 +231,17 @@ def select_parents_from_grid(
         part_bytes = buffer.getvalue()
         caption = f"Image {i}"
         stored_image_path: Optional[str] = None
+
+        if image_path_map is not None:
+            entry = image_path_map.get(i)
+            if entry:
+                stored_image_path = str(entry)
+        elif parts_dir is not None:
+            part_name = f"part_{i:03d}.png"
+            part_path = parts_dir / part_name
+            part_path.write_bytes(part_bytes)
+            stored_image_path = f"parts/{parts_dir.name}/{part_name}"
+
         image_caption_pairs.append((part_bytes, caption))
         input_parts_metadata.append(
             {
@@ -477,7 +488,8 @@ def select_parents_from_grid(
     if select_k is not None and not color_toggle_only:
         cleaned = cleaned[:select_k]
 
-    selection_path: Optional[Path] = None
+    selection_filename = f"{name_prefix}gen_{generation:03d}{suffix}_selection.json"
+    selection_path = metadata_dir / selection_filename
 
     metadata = {
         "selected": cleaned,
@@ -486,7 +498,7 @@ def select_parents_from_grid(
         "response_text": response_text,
         "prompt": prompt,
         "generation": generation,
-        "selection_path": str(selection_path) if selection_path else None,
+        "metadata_path": str(selection_path),
         "input_parts": input_parts_metadata,
         "select_k": select_k,
         "chat_history_turns": chat_history_turns,
@@ -502,6 +514,8 @@ def select_parents_from_grid(
         "restart": parsed.get("restart"),
         "run_label": run_label or None,
     }
+
+    selection_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     return metadata
 
@@ -603,7 +617,7 @@ def restore_chat_history_from_metadata(
     chat_history_turns: Optional[int],
     prompt_template: Optional[str],
 ) -> int:
-    """Rehydrate the Gemini chat session from saved selection metadata."""
+    """Rehydrate the VLM chat session from saved selection metadata."""
 
     max_turns = _session_max_turns(chat_history_turns)
     if max_turns == 0:

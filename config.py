@@ -38,6 +38,7 @@ class PicbreederConfig:
     enable_crossover: bool = True  # Toggle Picbreeder-style crossover (CrossoverCombiner)
     selection_baseline: str = "none"  # Parent-selection policy: none/random/max-depth/max-nodes/clip-nouns
     rand_select_prob: float = 0.0  # Probability of short-circuiting VLM selection with a random pick
+    rand_select_mode: str = "select-only"
     generate_personalities: bool = False  # Generate persona prompts before agent runs
     personality_path: Optional[Path] = None  # Destination for generated personality JSON
     resume: bool = False  # Resume a previously interrupted experiment
@@ -116,8 +117,27 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         raise ValueError("warm-start-structure must be non-negative")
     if cfg.selection_baseline not in SELECTION_BASELINES:
         raise ValueError(f"selection-baseline must be one of {sorted(SELECTION_BASELINES)}")
-    if cfg.rand_select_prob < 0 or cfg.rand_select_prob > 1:
-        raise ValueError("rand-select-prob must be between 0 and 1")
+    if not (0 <= cfg.rand_select_prob <= 1 or cfg.rand_select_prob == 2):
+        raise ValueError("rand-select-prob must be between 0 and 1, or exactly 2")
+    if cfg.rand_select_mode not in {"select-only", "all"}:
+        raise ValueError("rand-select-mode must be 'select-only' or 'all'")
+
+    is_hack_mode = (cfg.rand_select_prob == 2 and cfg.rand_select_mode == "all")
+    if is_hack_mode and cfg.model != "gemini-2.5-pro":
+        raise ValueError(
+            f"Hack mode (rand_select_prob=2, rand_select_mode='all') ignores the model, "
+            f"but a non-default model '{cfg.model}' was specified. Please leave model as default."
+        )
+    if is_hack_mode and cfg.chat_history_turns != -1:
+        raise ValueError(
+            f"Hack mode (rand_select_prob=2, rand_select_mode='all') ignores chat history, "
+            f"but chat_history_turns was set to {cfg.chat_history_turns}. Please set it to -1 (default)."
+        )
+    if is_hack_mode and cfg.temperature != 1.0:
+        raise ValueError(
+            f"Hack mode (rand_select_prob=2, rand_select_mode='all') ignores temperature, "
+            f"but temperature was set to {cfg.temperature}. Please set it to 1.0 (default)."
+        )
 
     # Enforce 20 generations when fixed_session_lengths is enabled
     if cfg.fixed_session_lengths:
@@ -131,7 +151,12 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
 
     if cfg.experiment_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_model-{cfg.model}_tb{cfg.thinking_budget}"
+        if is_hack_mode:
+            experiment_name = f"ag{cfg.agent_generations}"
+        else:
+            experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_model-{cfg.model}"
+
+        experiment_name += f"_tb{cfg.thinking_budget}"
         if cfg.goal != "familiar_objects":
             experiment_name += f"_goal-{cfg.goal}"
         experiment_name += f"_scheme-{cfg.scheme}"
@@ -143,7 +168,9 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
             experiment_name += f"_baseline-{cfg.selection_baseline}"
         if cfg.rand_select_prob > 0:
             experiment_name += f"_randp{cfg.rand_select_prob:g}"
-        if cfg.temperature != 1.0:
+            if cfg.rand_select_mode == "all":
+                experiment_name += "_rmode-all"
+        if cfg.temperature != 1.0 and not is_hack_mode:
             if cfg.temperature == "random":
                 experiment_name += "_temp-random"
             else:

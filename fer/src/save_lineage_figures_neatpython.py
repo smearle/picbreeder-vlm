@@ -494,7 +494,7 @@ def parse_args(argv: Iterable[str] | None = None):
     )
     parser.add_argument(
         "--pb-dir",
-        default=Path("../spaghetti/pbrender/genomeAll"),
+        default=Path("../spaghetti/pbRender/genomeAll"),
         type=Path,
         help="Directory containing pid subdirectories (each with Picbreeder zip files).",
     )

@@ -11,19 +11,18 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "picture2d" / "interacti
 
 @dataclass
 class ClipNounNicheConfig:
-    generations: int = 1_000
-    mu: int = 12
-    lambda_offspring: int = 36
+    generations: int = 10_000
+    batch_size: int = 15
     stage_length: int = 5
-    render_size: int = 224
-    batch_size: int = 8
+    render_size: int = 128
+    num_proc: int = 15
     mutation_strength: float = 0.5
     new_random_prob: float = 0.05
     save_offspring_grids: bool = False
     save_images: bool = False
     nounlist: Path = DEFAULT_NOUNLIST_PATH
     config: Path = DEFAULT_CONFIG_PATH
-    output_dir: Path = Path("outputs") / "clip_noun_niche_es"
+    output_dir: Path = "clip_noun_niche_es_logs"
     device: str | None = None
     seed: int | None = None
     clip_model: str = "ViT-H-14"

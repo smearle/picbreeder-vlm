@@ -25,8 +25,8 @@ from embed_and_visualize import embed_images
 
 @dataclass
 class PairwiseDistanceConfig(PicbreederConfig):
-    embedding_model: str = "ViT-B-32"
-    pretrained: str = "openai"
+    embedding_model: str = "ViT-H-14"
+    pretrained: str = "laion2b_s32b_b79k"
     batch_size: int = 64
     archive_limit: Optional[int] = None
     recompute_embeddings: bool = False
@@ -131,7 +131,8 @@ def load_embeddings_in_order(
     model=None,
     preprocess=None,
 ) -> np.ndarray:
-    cache_path = exp_dir / "embeddings_openclip.npz"
+    model_name_sanitized = cfg.embedding_model.replace("/", "-")
+    cache_path = exp_dir / f"embeddings_openclip_{model_name_sanitized}.npz"
     embeddings_map: Dict[str, np.ndarray] = {}
     missing: List[Path] = []
 
@@ -338,8 +339,9 @@ def main(
 
     results = compute_mpd_trajectory(embeddings, image_paths)
 
-    plot_path = exp_dir / "embedding_mean_pairwise_distance_over_time.png"
-    data_path = exp_dir / "embedding_mean_pairwise_distance_over_time.json"
+    model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
+    plot_path = exp_dir / f"embedding_mean_pairwise_distance_over_time_{model_name_sanitized}.png"
+    data_path = exp_dir / f"embedding_mean_pairwise_distance_over_time_{model_name_sanitized}.json"
     plot_mpd_trajectory(results, plot_path)
     save_trajectory_json(results, data_path)
 

@@ -66,8 +66,8 @@ _RASTERFAIRY_READY = False
 
 @dataclass
 class EmbedVisualizeConfig(PicbreederConfig):
-    embedding_model: str = "ViT-B-32"
-    pretrained: str = "openai"
+    embedding_model: str = "ViT-H-16"
+    pretrained: str = "laion2b_s32b_b79k"
     method: str = "umap"
     batch_size: int = 64
     thumbs_limit: int = 200
@@ -696,7 +696,8 @@ def main(
         batch_size=validated_cfg.batch_size,
     )
 
-    emb_out = exp_dir / "embeddings_openclip.npz"
+    model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
+    emb_out = exp_dir / f"embeddings_openclip_{model_name_sanitized}.npz"
     np.savez_compressed(emb_out, filenames=np.array(filenames), embeddings=embeddings)
     print(f"Saved embeddings to {emb_out}")
 
@@ -708,7 +709,7 @@ def main(
         pairwise_sample_limit=validated_cfg.pairwise_sample_limit,
         k_values=k_values,
     )
-    metrics_out = exp_dir / "embedding_metrics.json"
+    metrics_out = exp_dir / f"embedding_metrics_{model_name_sanitized}.json"
     with metrics_out.open("w") as f:
         json.dump(metrics, f, indent=2)
     print(f"Saved embedding coverage metrics to {metrics_out}")
@@ -716,16 +717,16 @@ def main(
     print(f"Reducing to 2D using {validated_cfg.method}...")
     coords = reduce_embeddings(embeddings, method=validated_cfg.method)
 
-    viz_out = exp_dir / f"embed_viz_{validated_cfg.method}.pdf"
+    viz_out = exp_dir / f"embed_viz_{model_name_sanitized}_{validated_cfg.method}.pdf"
     print(f"Creating visualization (thumbnails limit={validated_cfg.thumbs_limit}) -> {viz_out}")
     plot_coords(coords, list(image_paths), viz_out, thumbs_limit=validated_cfg.thumbs_limit)
 
     # grid_assignments, grid_bounds = layout_embeddings_to_grid(coords)
-    # grid_out = exp_dir / f"embed_grid_{validated_cfg.method}.pdf"
+    # grid_out = exp_dir / f"embed_grid_{model_name_sanitized}_{validated_cfg.method}.pdf"
     # print(f"Rendering grid approximation -> {grid_out}")
     # render_grid(grid_assignments, grid_bounds, image_paths, grid_out)
 
-    rect_grid_out = exp_dir / f"embed_grid_rect_{validated_cfg.method}.pdf"
+    rect_grid_out = exp_dir / f"embed_grid_rect_{model_name_sanitized}_{validated_cfg.method}.pdf"
     print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
     render_rectangular_grid(coords, image_paths, rect_grid_out)
 
