@@ -95,8 +95,8 @@ class SweepConfig(PicbreederConfig):
     timeout_hours: int = 24  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
     num_proc: int = 10  # Number of parallel processes per task
-    evaluate: bool = False  # If true, run evaluation instead of training
-    visualize: bool = False  # If true, run phylogeny visualization instead of training
+    render_archive: bool = False  # If true, run evaluation instead of training
+    render_tree: bool = False  # If true, run phylogeny visualization instead of training
     eval: bool = False  # If true, run plotting/analysis scripts instead of training
     overwrite_evals: bool = True  # If false, skip evaluation if output files already exist
     cross_eval: bool = False  # If true, summarize embedding metrics from the configured runs
@@ -135,8 +135,7 @@ class ChatHistoryTurnsSweep(SweepConfig):
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    # seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 200
+    num_agents: int = 750
 
 
 @dataclass
@@ -160,7 +159,7 @@ class TemperatureSweep(SweepConfig):
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 200
+    num_agents: int = 500
 
 
 @dataclass
@@ -191,17 +190,17 @@ class FullRandSelectProbSweep(SweepConfig):
 class ModelSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: [
         "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro-preview",
-        "gemini-random"
+        "gemini-random",
+        # "qwen3-vl-8b",
     ])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    # seed: List[int] = field(default_factory=lambda: [0, 1, 2])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 500
+    num_agents: int = 1_000
 
 @dataclass
 class TraitsSweep(SweepConfig):
     n_personality_traits: List[int] = field(default_factory=lambda: [
-        # 0,
+        0,
         10, 100, 1_000
     ])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
@@ -733,6 +732,7 @@ def _plot_seed_aggregates(
     for run_cfg in run_configs:
         group_key = _group_key_for_aggregate(run_cfg)
         exp_dir = Path(run_cfg.experiment_dir)
+        limit = run_cfg.num_agents
         
         current_nounlist_name = Path(run_cfg.nounlist).stem
 
@@ -744,7 +744,10 @@ def _plot_seed_aggregates(
             
         if novelty_path.exists():
             novelty = _load_trajectory_metric(novelty_path, "mean_pairwise_distance")
-            novelty_grouped.setdefault(group_key, []).append(novelty)
+            # Truncate at num_agents
+            novelty = {k: v for k, v in novelty.items() if k <= limit}
+            if novelty:
+                novelty_grouped.setdefault(group_key, []).append(novelty)
 
         # Try specific model file first
         if text_image_embedding_model:
@@ -754,15 +757,27 @@ def _plot_seed_aggregates(
             
         if noun_path.exists():
             noun = _load_trajectory_metric(noun_path, "mean_max_similarity")
-            noun_grouped.setdefault(group_key, []).append(noun)
+            # Truncate at num_agents
+            noun = {k: v for k, v in noun.items() if k <= limit}
+            if noun:
+                noun_grouped.setdefault(group_key, []).append(noun)
 
-        noun_scalar = _load_noun_similarity_scalar(exp_dir, model_name=text_image_embedding_model, nounlist_name=current_nounlist_name)
-        if noun_scalar is not None:
-            noun_scalar_grouped.setdefault(group_key, []).append(noun_scalar)
+    # Derive scalars strictly from the truncated trajectories
+    for group_key, runs in novelty_grouped.items():
+        scalars = []
+        for run in runs:
+            if run:
+                scalars.append(run[max(run.keys())])
+        if scalars:
+            mpd_scalar_grouped[group_key] = scalars
 
-        mpd_scalar = _load_embedding_mean_pairwise_distance_scalar(exp_dir, model_name=image_embedding_model)
-        if mpd_scalar is not None:
-            mpd_scalar_grouped.setdefault(group_key, []).append(mpd_scalar)
+    for group_key, runs in noun_grouped.items():
+        scalars = []
+        for run in runs:
+            if run:
+                scalars.append(run[max(run.keys())])
+        if scalars:
+            noun_scalar_grouped[group_key] = scalars
 
     # Use image model suffix for novelty plots, text-image model suffix for noun plots
     # If mixed, we append both or stick to one convention. 
@@ -1059,15 +1074,20 @@ def main(cfg: SweepConfig) -> None:
 
         return
 
-    if cfg.evaluate or cfg.visualize:
+    if cfg.render_archive or cfg.render_tree:
         # Match the launch_locally pattern: instantiate the relevant Config objects
         # and call their main functions directly (no subprocess).
         from dataclasses import fields as dataclass_fields
+        import shutil
+
+        # Helper to compute group label for a run (used for organization)
+        group_keys = [_group_key_for_aggregate(rc) for rc in run_configs]
+        varying_fields = compute_varying_fields(group_keys)
 
         previous_cwd = Path.cwd()
         os.chdir(original_cwd)
         try:
-            if cfg.evaluate:
+            if cfg.render_archive:
                 import torch
 
                 from embed_and_visualize import (
@@ -1087,46 +1107,89 @@ def main(cfg: SweepConfig) -> None:
                 eval_cfg0 = EmbedVisualizeConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
                 eval_model, eval_preprocess = prepare_eval_clip(eval_cfg0, device)
 
-                for run_cfg in run_configs:
+                for run_cfg, group_key in zip(run_configs, group_keys):
                     base_kwargs = {
                         field_def.name: getattr(run_cfg, field_def.name)
                         for field_def in dataclass_fields(PicbreederConfig)
                         if field_def.name != "hydra"
                     }
                     eval_cfg = EmbedVisualizeConfig(**base_kwargs, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
-                    eval_cfg = replace(eval_cfg, archive_limit=cfg.archive_limit)
+                    
+                    # Enforce archive limit = num_agents
+                    eval_cfg = replace(eval_cfg, archive_limit=run_cfg.num_agents)
+                    
                     desc = _format_run_prefix(run_cfg, "[local-eval]")
-                    extra = (
-                        f" archive_limit={cfg.archive_limit}"
-                        if cfg.archive_limit is not None
-                        else ""
-                    )
-                    print(f"{desc} -> embed_and_visualize{extra}")
+                    print(f"{desc} -> embed_and_visualize limit={eval_cfg.archive_limit}")
+                    
                     _call_hydra_wrapped_main(
                         embed_main,
                         eval_cfg,
                         model=eval_model,
                         preprocess=eval_preprocess,
                     )
+
+                    # Copy results to cross_eval
+                    label = format_group_label(group_key, varying_fields)
+                    # Sanitize label for directory usage
+                    sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
+                    dest_dir = cross_eval_dir / sanitized_label
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    model_name_sanitized = cfg.image_embedding_model.replace("/", "-")
+                    
+                    # Files to copy
+                    src_files = [
+                        Path(run_cfg.experiment_dir) / f"embed_viz_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                        Path(run_cfg.experiment_dir) / f"embed_grid_rect_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                        Path(run_cfg.experiment_dir) / f"embed_grid_representative_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                        Path(run_cfg.experiment_dir) / f"embed_grid_representative_simple_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                        Path(run_cfg.experiment_dir) / f"embed_grid_uniform_interval_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                        Path(run_cfg.experiment_dir) / f"embed_grid_uniform_random_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                    ]
+                    
+                    for src in src_files:
+                        if src.exists():
+                            # Append seed to filename
+                            dest_name = f"{src.stem}_seed{run_cfg.seed}{src.suffix}"
+                            shutil.copy2(src, dest_dir / dest_name)
+                            print(f"Copied {src.name} -> {dest_dir / dest_name}")
+
             else:
                 from visualize_archive_phylogeny import ArchivePhylogenyConfig, main as viz_main
 
-                for run_cfg in run_configs:
+                for run_cfg, group_key in zip(run_configs, group_keys):
                     base_kwargs = {
                         field_def.name: getattr(run_cfg, field_def.name)
                         for field_def in dataclass_fields(PicbreederConfig)
                         if field_def.name != "hydra"
                     }
                     viz_cfg = ArchivePhylogenyConfig(**base_kwargs)
-                    viz_cfg = replace(viz_cfg, archive_limit=cfg.archive_limit)
+                    
+                    # Enforce archive limit = num_agents
+                    viz_cfg = replace(viz_cfg, archive_limit=run_cfg.num_agents)
+                    
                     desc = _format_run_prefix(run_cfg, "[local-viz]")
-                    extra = (
-                        f" archive_limit={cfg.archive_limit}"
-                        if cfg.archive_limit is not None
-                        else ""
-                    )
-                    print(f"{desc} -> visualize_archive_phylogeny{extra}")
+                    print(f"{desc} -> visualize_archive_phylogeny limit={viz_cfg.archive_limit}")
+                    
                     _call_hydra_wrapped_main(viz_main, viz_cfg)
+
+                    # Copy results to cross_eval
+                    label = format_group_label(group_key, varying_fields)
+                    # Sanitize label for directory usage
+                    sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
+                    dest_dir = cross_eval_dir / sanitized_label
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Files to copy (default format is pdf)
+                    src_file = Path(run_cfg.experiment_dir) / "archive" / f"archive_phylogeny.{viz_cfg.format}"
+                    
+                    if src_file.exists():
+                        dest_name = f"archive_phylogeny_seed{run_cfg.seed}.{viz_cfg.format}"
+                        shutil.copy2(src_file, dest_dir / dest_name)
+                        print(f"Copied {src_file.name} -> {dest_dir / dest_name}")
+                    else:
+                        print(f"Warning: Expected output {src_file} not found.")
+
         finally:
             os.chdir(previous_cwd)
     elif cfg.slurm:

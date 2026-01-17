@@ -481,8 +481,30 @@ class CollaborativeMultiAgentOrchestrator:
             for entry in metadata.get("agents", []):
                 agents_dict[entry["agent_id"]] = entry
             metadata["agents"] = agents_dict
+
+        # Backward compatibility for personality_traits -> personality_trait
+        # TODO: Remove this block once old runs are successfully resumed
+        raw_agents = metadata.get("agents", {})
+        processed_agents = {}
+        for agent_id, entry in raw_agents.items():
+            if "personality_traits" in entry:
+                entry["personality_trait"] = entry.pop("personality_traits")
+            # If it was a list (legacy), take the first element or join?
+            # Based on previous context, user said "can't we just use the record" and "assume each agent only gets one trait".
+            # The old code stored it as a list. The new code expects a string.
+            # So if we find a list, we should probably take the first item.
+            trait = entry.get("personality_trait")
+            if isinstance(trait, list):
+                if trait:
+                    entry["personality_trait"] = trait[0]
+                else:
+                    entry["personality_trait"] = None
+            processed_agents[agent_id] = AgentRecord(**entry)
         
-        metadata["agents"] = {agent_id: AgentRecord(**entry) for agent_id, entry in metadata.get("agents", {}).items()}
+        metadata["agents"] = processed_agents
+        # End backward compatibility block. Replace with this:
+        # metadata["agents"] = {agent_id: AgentRecord(**entry) for agent_id, entry in metadata.get("agents", {}).items()}
+
         return metadata
 
     def _write_metadata_file(self, metadata: Dict[str, Any]) -> None:

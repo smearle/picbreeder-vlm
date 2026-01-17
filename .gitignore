@@ -6,7 +6,7 @@ multirun
 initial_populations/*
 interactive_runs/*
 logs_collaborative*
-sweep_logs/*
+sweep_logs*
 logs/*
 log/*
 .env

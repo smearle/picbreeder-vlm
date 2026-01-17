@@ -287,14 +287,14 @@ def write_scalar_bar_plot(
     means = [r[2] for r in ordered]
     stds = [r[3] for r in ordered]
 
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    fig, ax = plt.subplots(1, 1, figsize=(6, 6))
     x = np.arange(len(labels), dtype=float)
 
     # Distinct colors per bar.
     cmap = plt.get_cmap("tab20")
     colors = [cmap(i % cmap.N) for i in range(len(labels))]
 
-    ax.bar(x, means, yerr=stds, capsize=6, color=colors)
+    ax.bar(x, means, yerr=stds, capsize=6, color=colors, width=0.4)
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)

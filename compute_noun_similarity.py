@@ -59,6 +59,7 @@ class NounSimilarityConfig(PicbreederConfig):
     grid_thumb_size: int = 192
     grid_margin: int = 12
     grid_font_size: int = 10
+    grid_top_k: Optional[int] = 900
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -97,6 +98,8 @@ def _validate_noun_similarity_options(cfg: NounSimilarityConfig) -> None:
             raise ValueError("grid_margin must be non-negative when render_grid is enabled")
         if cfg.grid_font_size <= 0:
             raise ValueError("grid_font_size must be positive when render_grid is enabled")
+        if cfg.grid_top_k is not None and cfg.grid_top_k <= 0:
+            raise ValueError("grid_top_k must be positive when provided")
 
 
 def prepare_openclip_components(
@@ -395,8 +398,12 @@ def render_noun_similarity_grid(
     thumb_size: int,
     margin: int,
     font_size: int,
+    top_k: Optional[int] = None,
 ) -> None:
     order = np.argsort(-max_per_noun)
+    if top_k is not None:
+        order = order[:top_k]
+
     images: List[Image.Image] = []
     captions: List[str] = []
     cache: Dict[Path, Image.Image] = {}
@@ -565,7 +572,8 @@ def main(
     if validated_cfg.render_grid:
         grid_output = _resolve_optional_path(validated_cfg.output_grid, original_cwd)
         if grid_output is None:
-            grid_output = exp_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}.png"
+            suffix = f"_top{validated_cfg.grid_top_k}" if validated_cfg.grid_top_k else ""
+            grid_output = exp_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}{suffix}.png"
         render_noun_similarity_grid(
             nouns_list,
             max_per_noun,
@@ -575,6 +583,7 @@ def main(
             validated_cfg.grid_thumb_size,
             validated_cfg.grid_margin,
             validated_cfg.grid_font_size,
+            top_k=validated_cfg.grid_top_k,
         )
         print(f"Saved noun similarity grid to {grid_output}")
 

@@ -43,16 +43,17 @@ VALID_VARIANTS = ("auto", "color", "gray")
 class ArchiveHighresConfig(PicbreederConfig):
     output_dir: Optional[Path] = None
     grid_output: Optional[Path] = None
-    image_size: int = 200
-    grid_thumb_size: int = 512
+    image_size: int = 128
+    grid_thumb_size: int = 128
     grid_margin: int = 24
     variant: str = "auto"
     limit: Optional[int] = None
     overwrite: bool = False
+    subset_count: int = 100
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
-                app_name="render_archive_highres",
+                app_name="render_archive",
                 header=(
                     "Hydra entry point for rendering high-resolution archive images and grids.\n"
                     "\n"
@@ -62,7 +63,7 @@ class ArchiveHighresConfig(PicbreederConfig):
                     "  output_dir          Custom directory for per-image renders.\n"
                     "  grid_output         Override the archive grid destination.\n"
                 ),
-                footer="Override with +option=value (e.g. variant=color image_size=256).",
+                footer="Override with +option=value (e.g. variant=color image_size=256 subset_count=200).",
             )
         )
     )
@@ -80,6 +81,8 @@ def _validate_render_options(cfg: ArchiveHighresConfig) -> None:
         raise ValueError("grid_margin must be non-negative")
     if cfg.limit is not None and cfg.limit <= 0:
         raise ValueError("limit must be positive when provided")
+    if cfg.subset_count < -1 or cfg.subset_count == 0:
+        raise ValueError("subset_count must be positive or -1")
     if cfg.variant not in VALID_VARIANTS:
         raise ValueError(f"variant must be one of {VALID_VARIANTS}")
 
@@ -221,7 +224,10 @@ def build_label_free_grid(
 
 def iter_entries(metadata: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     entries = metadata.get("entries", [])
-    return sorted(entries, key=lambda item: item.get("id", ""))
+    try:
+        return sorted(entries, key=lambda item: int(item.get("id", 0)))
+    except ValueError:
+        return sorted(entries, key=lambda item: item.get("id", ""))
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="archive_highres_base")
@@ -240,6 +246,17 @@ def main(cfg: ArchiveHighresConfig) -> None:
     config = load_config(neat_config_path)
     metadata = load_archive_metadata(archive_dir)
     entries = list(iter_entries(metadata))
+
+    if validated_cfg.subset_count != -1 and len(entries) > validated_cfg.subset_count:
+        if validated_cfg.subset_count == 1:
+            entries = [entries[0]]
+        elif validated_cfg.subset_count > 0:
+            indices = [
+                int(i * (len(entries) - 1) / (validated_cfg.subset_count - 1))
+                for i in range(validated_cfg.subset_count)
+            ]
+            entries = [entries[i] for i in indices]
+
     if validated_cfg.limit is not None:
         entries = entries[: validated_cfg.limit]
 

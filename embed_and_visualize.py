@@ -76,6 +76,7 @@ class EmbedVisualizeConfig(PicbreederConfig):
     device: Optional[str] = None
     pairwise_sample_limit: int = 2000
     k_center_values: str = "1,5,10,20"
+    representative_k: int = 36
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -88,6 +89,7 @@ class EmbedVisualizeConfig(PicbreederConfig):
                     "  goal/scheme/seed    Combine with ensure_valid_config to infer a run directory.\n"
                     "  method              Choose between umap/tsne/pca.\n"
                     "  k_center_values     Comma-separated radii to measure diversity.\n"
+                    "  representative_k    Number of representative images to select (default 36).\n"
                 ),
                 footer="Override with +option=value (e.g. method=pca k_center_values=5,10).",
             )
@@ -422,6 +424,54 @@ def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path):
     plt.close(fig)
 
 
+def render_simple_grid(image_paths, outpath: Path):
+    """Render images in a simple row-major grid."""
+    n = len(image_paths)
+    if n == 0:
+        return
+
+    # Compute grid dimensions (aim for square-ish)
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols, rows))
+
+    # Handle 1x1 case and other shape quirks for easy iteration
+    if rows == 1 and cols == 1:
+        axes = np.array([[axes]])
+    elif rows == 1:
+        axes = axes.reshape(1, cols)
+    elif cols == 1:
+        axes = axes.reshape(rows, 1)
+
+    # Hide all axes first
+    for r in range(rows):
+        for c in range(cols):
+            ax = axes[r, c]
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.axis("off")
+
+    for idx, path in enumerate(image_paths):
+        r = idx // cols
+        c = idx % cols
+        ax = axes[r, c]
+        try:
+            with Image.open(path) as img:
+                img_rgb = img.convert("RGB")
+            ax.imshow(img_rgb)
+            ax.set_aspect("equal")
+        except Exception:
+            continue
+
+    fig.subplots_adjust(
+        left=0.0, right=1.0, bottom=0.0, top=1.0,
+        wspace=0.02, hspace=0.02,
+    )
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+
+
 def _compute_pairwise_distance_stats(
     embeddings: np.ndarray, max_points: int = 2000, random_state: int = 0
 ):
@@ -725,6 +775,46 @@ def main(
     rect_grid_out = exp_dir / f"embed_grid_rect_{model_name_sanitized}_{validated_cfg.method}.pdf"
     print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
     render_rectangular_grid(coords, image_paths, rect_grid_out)
+
+    if validated_cfg.representative_k > 0:
+        print(f"Selecting {validated_cfg.representative_k} representative images via FPS...")
+        rep_indices, _ = _greedy_k_center(embeddings, validated_cfg.representative_k)
+        if rep_indices is not None and len(rep_indices) > 0:
+            rep_coords = coords[rep_indices]
+            rep_paths = [image_paths[i] for i in rep_indices]
+
+            rep_grid_out = exp_dir / f"embed_grid_representative_{model_name_sanitized}_{validated_cfg.method}.pdf"
+            print(f"Rendering representative grid -> {rep_grid_out}")
+            render_rectangular_grid(rep_coords, rep_paths, rep_grid_out)
+
+            # Non-rasterfairied simple grid for representatives
+            rep_simple_out = exp_dir / f"embed_grid_representative_simple_{model_name_sanitized}_{validated_cfg.method}.pdf"
+            print(f"Rendering simple representative grid -> {rep_simple_out}")
+            render_simple_grid(rep_paths, rep_simple_out)
+
+            # Uniform sample (even intervals)
+            n_total = len(image_paths)
+            k = validated_cfg.representative_k
+            if n_total > 0:
+                indices = np.linspace(0, n_total - 1, min(k, n_total), dtype=int)
+                interval_paths = [image_paths[i] for i in indices]
+                interval_out = exp_dir / f"embed_grid_uniform_interval_{model_name_sanitized}_{validated_cfg.method}.pdf"
+                print(f"Rendering uniform interval grid -> {interval_out}")
+                render_simple_grid(interval_paths, interval_out)
+
+            # Uniform random sample
+            if n_total > 0:
+                rng = np.random.default_rng(0) # fixed seed for reproducible sampling of the view
+                if n_total <= k:
+                    rand_indices = np.arange(n_total)
+                else:
+                    rand_indices = rng.choice(n_total, size=k, replace=False)
+                # Sort indices to keep chronological order in the grid (optional, but cleaner)
+                rand_indices.sort()
+                rand_paths = [image_paths[i] for i in rand_indices]
+                rand_out = exp_dir / f"embed_grid_uniform_random_{model_name_sanitized}_{validated_cfg.method}.pdf"
+                print(f"Rendering uniform random grid -> {rand_out}")
+                render_simple_grid(rand_paths, rand_out)
 
     print("Done.")
 
