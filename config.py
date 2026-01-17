@@ -18,7 +18,7 @@ class PicbreederConfig:
     rows: int = 3  # Rows in the CPPN grid (legacy Picbreeder default)
     cols: int = 5  # Columns in the CPPN grid
     thumb_size: int = 128  # Pixel size for rendered genome thumbnails
-    chat_history_turns: int = -1  # How many prior turns each agent sees (-1 keeps all)
+    chat_history_turns: int = 1  # How many prior turns each agent sees (-1 keeps all)
     model: str = "gemini-2.5-pro"
     temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
     thinking_budget: int = -1
@@ -48,6 +48,8 @@ class PicbreederConfig:
     render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
     log_raw_responses: bool = False  # When true, dump raw VLM responses to timestamped text files
     fixed_session_lengths: bool = True  # When true, agents run for exactly 20 generations and must publish at the 20th generation
+    nounlist: str = "imagenet21k"  # Noun list name (in noun_lists/) or path
+    n_personality_traits: int = 0  # Number of random personality traits to prepend to the system prompt
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -128,7 +130,7 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
             f"Hack mode (rand_select_prob=2, rand_select_mode='all') ignores the model, "
             f"but a non-default model '{cfg.model}' was specified. Please leave model as default."
         )
-    if is_hack_mode and cfg.chat_history_turns != -1:
+    if is_hack_mode and cfg.chat_history_turns != 1:
         raise ValueError(
             f"Hack mode (rand_select_prob=2, rand_select_mode='all') ignores chat history, "
             f"but chat_history_turns was set to {cfg.chat_history_turns}. Please set it to -1 (default)."
@@ -176,6 +178,8 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
             else:
                 experiment_name += f"_temp{cfg.temperature:g}"
         experiment_name += "_personalities" if cfg.generate_personalities else "_nopersonalities"
+        if cfg.n_personality_traits > 0:
+            experiment_name += f"_traits{cfg.n_personality_traits}"
         experiment_name += "_norationale" if not cfg.request_rationale else ""
         if cfg.fixed_session_lengths:
             experiment_name += "_fixed-sesh"

@@ -74,6 +74,8 @@ def build_run_name(cfg: ClipNounNicheConfig) -> str:
         f"clip-{clip_tag}",
         f"cfg-{config_tag}",
     ]
+    if cfg.crossover_strength > 0:
+        parts.append(f"cross{cfg.crossover_strength}")
     if cfg.seed is not None:
         parts.append(f"seed{cfg.seed}")
     if cfg.save_images:

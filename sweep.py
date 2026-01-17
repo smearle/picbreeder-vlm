@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch collaborative_multi_agent sweeps locally or via Submitit."""
+"""Launch Picbreeder-VLM collaborative_multi_agent sweeps locally or via Submitit."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import json
+import multiprocessing
 from dataclasses import dataclass, field, replace, fields, asdict
 from itertools import product
 from pathlib import Path
@@ -22,18 +23,19 @@ import submitit  # Do not remove this.
 
 from collaborative_multi_agent import run as run_collaborative
 from config import PicbreederConfig, ensure_valid_config
-from constants import DEFAULT_NOUNLIST_PATH
+from utils import resolve_nounlist
+from sweep_analysis_utils import (
+    sanitize_filename_tag,
+    normalize_group_value,
+    compute_varying_fields,
+    format_group_label,
+    load_human_baseline,
+    write_aggregate_plot,
+    write_scalar_bar_plot,
+)
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
-
-
-_TAG_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _sanitize_filename_tag(tag: str) -> str:
-    cleaned = _TAG_SANITIZE_PATTERN.sub("_", str(tag)).strip("_")
-    return cleaned or "sweep"
 
 
 class CollaborativeRun:
@@ -77,8 +79,11 @@ class SweepConfig(PicbreederConfig):
         # "gemini-2.5-flash",
         # "gemini-2.5-flash-lite",
     ])
-    embedding_model: str = "ViT-H-14"
-    pretrained: str = "laion2b_s32b_b79k"
+    n_personality_traits: List[int] = field(default_factory=lambda: [0])  # Number of personality traits to use
+    image_embedding_model: str = "SigLIP2-B-alignet"
+    image_pretrained: str = "laion2b_s32b_b79k"
+    text_image_embedding_model: str = "ViT-SO400M-14-SigLIP2"
+    text_image_pretrained: str = "webli"
     sweep_name: str = "rand_select_prob"  # Base directory for experiment outputs
     log_dir: str = "sweep_logs"
     submitit_log_dir: str = "submitit_logs"
@@ -92,13 +97,14 @@ class SweepConfig(PicbreederConfig):
     num_proc: int = 10  # Number of parallel processes per task
     evaluate: bool = False  # If true, run evaluation instead of training
     visualize: bool = False  # If true, run phylogeny visualization instead of training
-    plot: bool = False  # If true, run plotting/analysis scripts instead of training
+    eval: bool = False  # If true, run plotting/analysis scripts instead of training
+    overwrite_evals: bool = True  # If false, skip evaluation if output files already exist
     cross_eval: bool = False  # If true, summarize embedding metrics from the configured runs
     archive_limit: Optional[int] = None  # Limit the number of archive images passed to analysis scripts
+    nounlist: List[str] = field(default_factory=lambda: ["imagenet21k"])  # Noun list(s) to evaluate
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
-            help=HelpConf(
-                app_name="sweep",
+            help=HelpConf(                app_name="sweep",
                 header=(
                     "Submitit/Hydra sweep launcher for collaborative_multi_agent.\n"
                     "\n"
@@ -141,7 +147,7 @@ class ChatHistoryTurnsQwenSweep(SweepConfig):
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["qwen3-vl-8b"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 200
+    num_agents: int = 500
     num_proc: int = 1
     gpu: bool = True
 
@@ -165,15 +171,41 @@ class RandSelectProbSweep(SweepConfig):
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    thumb_size: List[int] = field(default_factory=lambda: [128, 224])
-    # thumb_size: List[int] = field(default_factory=lambda: [128,])
+    # thumb_size: List[int] = field(default_factory=lambda: [128, 224])
+    thumb_size: List[int] = field(default_factory=lambda: [128,])
+    num_agents: int = 500
+
+@dataclass
+class FullRandSelectProbSweep(SweepConfig):
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0, 2.0])
+    rand_select_mode: str = 'all'
+    chat_history_turns: List[int] = field(default_factory=lambda: [1])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    thumb_size: List[int] = field(default_factory=lambda: [128,])
     num_agents: int = 500
 
 @dataclass
 class ModelSweep(SweepConfig):
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro-preview"])
+    model: List[str] = field(default_factory=lambda: [
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro-preview",
+        "gemini-random"
+    ])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     # seed: List[int] = field(default_factory=lambda: [0, 1, 2])
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    num_agents: int = 500
+
+@dataclass
+class TraitsSweep(SweepConfig):
+    n_personality_traits: List[int] = field(default_factory=lambda: [
+        # 0,
+        10, 100, 1_000
+    ])
+    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
+    chat_history_turns: List[int] = field(default_factory=lambda: [1])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     num_agents: int = 500
 
@@ -187,6 +219,17 @@ class LongSweep(SweepConfig):
     seed: List[int] = field(default_factory=lambda: [3])
     num_agents: int = 10_000
 
+@dataclass
+class LongSweep2(SweepConfig):
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.25])
+    rand_select_mode: str = 'all'
+    chat_history_turns: List[int] = field(default_factory=lambda: [1])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
+    seed: List[int] = field(default_factory=lambda: [5])
+    num_agents: int = 10_000
+
 
 _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "sweep": SweepBasePreset,
@@ -194,8 +237,11 @@ _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "chat_history_turns_qwen": ChatHistoryTurnsQwenSweep,
     "temperature": TemperatureSweep,
     "rand_select_prob": RandSelectProbSweep,
+    "full_rand_select_prob": FullRandSelectProbSweep,
     "model": ModelSweep,
+    "traits": TraitsSweep,
     "long_sweep": LongSweep,
+    "long_sweep_2": LongSweep2,
 }
 
 
@@ -282,6 +328,186 @@ def _call_hydra_wrapped_main(main_func, cfg_obj, **kwargs) -> None:
     wrapped(cfg_obj, **kwargs)
 
 
+def _run_eval_phase_1(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str):
+    import torch
+    import os
+    from pathlib import Path
+    from dataclasses import fields as dataclass_fields, replace
+    from plot_novelty_over_time import (
+        PairwiseDistanceConfig,
+        main as novelty_main,
+        prepare_openclip_components as prepare_novelty_clip,
+    )
+    from config import PicbreederConfig
+
+    # Attempt to set TF memory growth
+    try:
+        import tensorflow as tf
+        gpus = tf.config.list_physical_devices('GPU')
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except RuntimeError as e:
+                print(f"Error setting TF memory growth: {e}")
+    except ImportError:
+        pass
+
+    os.chdir(original_cwd)
+    device = torch.device(device_str)
+    print(f"[Phase 1 Worker] Using device: {device}")
+
+    base_kwargs0 = {
+        field_def.name: getattr(run_configs[0], field_def.name)
+        for field_def in dataclass_fields(PicbreederConfig)
+        if field_def.name != "hydra"
+    }
+    
+    print("\n[Phase 1] Evaluating visual novelty...")
+    novelty_cfg0 = PairwiseDistanceConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
+    novelty_model, novelty_preprocess = prepare_novelty_clip(novelty_cfg0, device)
+
+    for run_cfg in run_configs:
+        # Check if output exists
+        model_name_sanitized = cfg.image_embedding_model.replace("/", "-")
+        exp_dir = Path(run_cfg.experiment_dir)
+        output_file = exp_dir / f"embedding_mean_pairwise_distance_over_time_{model_name_sanitized}.json"
+        
+        if not cfg.overwrite_evals and output_file.exists():
+            print(f"Skipping novelty eval for {exp_dir} (already exists)")
+            continue
+
+        base_kwargs = {
+            field_def.name: getattr(run_cfg, field_def.name)
+            for field_def in dataclass_fields(PicbreederConfig)
+            if field_def.name != "hydra"
+        }
+
+        novelty_cfg = PairwiseDistanceConfig(**base_kwargs, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
+        novelty_cfg = replace(novelty_cfg, archive_limit=cfg.archive_limit)
+        desc = _format_run_prefix(run_cfg, "[local-eval]")
+        extra = (
+            f" archive_limit={cfg.archive_limit}"
+            if cfg.archive_limit is not None
+            else ""
+        )
+        print(f"{desc} -> plot_novelty_over_time{extra}")
+        _call_hydra_wrapped_main(
+            novelty_main,
+            novelty_cfg,
+            model=novelty_model,
+            preprocess=novelty_preprocess,
+            original_cwd_override=original_cwd,
+        )
+
+
+def _run_eval_phase_2(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str):
+    import torch
+    import os
+    from pathlib import Path
+    from collections import defaultdict
+    from dataclasses import fields as dataclass_fields, replace
+    from compute_noun_similarity import (
+        NounSimilarityConfig,
+        main as noun_main,
+        prepare_openclip_components as prepare_noun_clip,
+        prepare_noun_text_embeddings,
+    )
+    from config import PicbreederConfig
+
+    # Attempt to set TF memory growth (just in case)
+    try:
+        import tensorflow as tf
+        gpus = tf.config.list_physical_devices('GPU')
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except RuntimeError as e:
+                print(f"Error setting TF memory growth: {e}")
+    except ImportError:
+        pass
+
+    os.chdir(original_cwd)
+    device = torch.device(device_str)
+    print(f"[Phase 2 Worker] Using device: {device}")
+
+    base_kwargs0 = {
+        field_def.name: getattr(run_configs[0], field_def.name)
+        for field_def in dataclass_fields(PicbreederConfig)
+        if field_def.name != "hydra"
+    }
+
+    print("\n[Phase 2] Evaluating noun similarity...")
+    # Initialize model once (assuming embedding model is constant across sweep)
+    noun_cfg_template = NounSimilarityConfig(**base_kwargs0, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+    noun_model, noun_preprocess, noun_tokenizer = prepare_noun_clip(noun_cfg_template, device)
+
+    # Group runs by nounlist to avoid reloading/re-embedding nouns unnecessarily
+    runs_by_nounlist = defaultdict(list)
+    for rc in run_configs:
+        runs_by_nounlist[rc.nounlist].append(rc)
+
+    for nounlist, group_configs in runs_by_nounlist.items():
+        print(f"  Processing group with nounlist: {nounlist}")
+        
+        # Create a config for this group to prepare embeddings
+        group_ref_cfg = group_configs[0]
+        base_kwargs_group = {
+             field_def.name: getattr(group_ref_cfg, field_def.name)
+             for field_def in dataclass_fields(PicbreederConfig)
+             if field_def.name != "hydra"
+        }
+        noun_cfg_group = NounSimilarityConfig(**base_kwargs_group, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+        noun_cfg_group.nounlist = nounlist
+
+        nouns_list, prompts_list, noun_text_embeddings = prepare_noun_text_embeddings(
+            noun_cfg_group,
+            original_cwd=original_cwd,
+            device=device,
+            model=noun_model,
+            tokenizer=noun_tokenizer,
+        )
+
+        for run_cfg in group_configs:
+            # Check if output exists
+            nounlist_name = Path(run_cfg.nounlist).stem
+            model_name_sanitized = cfg.text_image_embedding_model.replace("/", "-")
+            exp_dir = Path(run_cfg.experiment_dir)
+            output_file = exp_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.json"
+
+            if not cfg.overwrite_evals and output_file.exists():
+                print(f"Skipping noun similarity eval for {exp_dir} (already exists)")
+                continue
+
+            base_kwargs = {
+                field_def.name: getattr(run_cfg, field_def.name)
+                for field_def in dataclass_fields(PicbreederConfig)
+                if field_def.name != "hydra"
+            }
+            noun_cfg = NounSimilarityConfig(**base_kwargs, render_grid=True, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+            noun_cfg = replace(noun_cfg, archive_limit=cfg.archive_limit)
+            
+            noun_cfg.nounlist = nounlist
+
+            desc = _format_run_prefix(run_cfg, "[local-eval]")
+            extra = (
+                f" archive_limit={cfg.archive_limit}"
+                if cfg.archive_limit is not None
+                else ""
+            )
+            print(f"{desc} -> compute_noun_similarity{extra}")
+            _call_hydra_wrapped_main(
+                noun_main,
+                noun_cfg,
+                model=noun_model,
+                preprocess=noun_preprocess,
+                tokenizer=noun_tokenizer,
+                nouns=nouns_list,
+                prompts=prompts_list,
+                noun_embeddings=noun_text_embeddings,
+                original_cwd_override=original_cwd,
+            )
+
+
 _AGGREGATE_EXCLUDE_FIELDS: Tuple[str, ...] = (
     "hydra",
     "seed",
@@ -291,69 +517,13 @@ _AGGREGATE_EXCLUDE_FIELDS: Tuple[str, ...] = (
 )
 
 
-# Centralized display-name mapping for cross-eval/visualization labels.
-# Keep this small and extend as needed.
-HYPERPARAM_PRETTY_LABELS: Dict[str, str] = {
-    "chat_history_turns": "turns in context",
-    "rand_select_prob": "rand. selection prob.",
-}
 
 
-def _pretty_hyperparam_name(name: str) -> str:
-    return HYPERPARAM_PRETTY_LABELS.get(name, name)
 
 
-def _pretty_hyperparam_value(name: str, value: Any, values: Dict[str, Any]) -> str:
-    """Pretty-print a config value for plotting/table labels."""
-
-    if name == "chat_history_turns":
-        # -1 means: keep all turns; for plotting, map to agent_generations.
-        try:
-            turns = int(value)
-        except Exception:
-            return str(value)
-        if turns == -1:
-            gens = values.get("agent_generations")
-            try:
-                return str(int(gens)) if gens is not None else str(turns)
-            except Exception:
-                return str(turns)
-        return str(turns)
-
-    if isinstance(value, float):
-        return f"{value:g}"
-    return str(value)
 
 
-def _effective_numeric_for_sort(name: str, value: Any, values: Dict[str, Any]) -> Optional[float]:
-    """Return a numeric sort key for the swept hyperparameter when possible."""
 
-    if name == "chat_history_turns":
-        try:
-            turns = int(value)
-        except Exception:
-            return None
-        if turns == -1:
-            gens = values.get("agent_generations")
-            try:
-                return float(int(gens)) if gens is not None else float(turns)
-            except Exception:
-                return float(turns)
-        return float(turns)
-
-    try:
-        return float(value)
-    except Exception:
-        return None
-
-
-def _normalize_group_value(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, float):
-        # Keep floats stable-ish in labels/keys.
-        return float(f"{value:.6g}")
-    return value
 
 
 def _group_key_for_aggregate(cfg: PicbreederConfig) -> Tuple[Tuple[str, Any], ...]:
@@ -362,32 +532,11 @@ def _group_key_for_aggregate(cfg: PicbreederConfig) -> Tuple[Tuple[str, Any], ..
         name = field_def.name
         if name in _AGGREGATE_EXCLUDE_FIELDS:
             continue
-        items.append((name, _normalize_group_value(getattr(cfg, name))))
+        items.append((name, normalize_group_value(getattr(cfg, name))))
     return tuple(items)
 
 
-def _compute_varying_fields(group_keys: Sequence[Tuple[Tuple[str, Any], ...]]) -> List[str]:
-    values_by_field: Dict[str, set] = {}
-    for key in group_keys:
-        for name, value in key:
-            values_by_field.setdefault(name, set()).add(value)
-    varying = [name for name, values in values_by_field.items() if len(values) > 1]
-    # Deterministic ordering.
-    varying.sort()
-    return varying
 
-
-def _format_group_label(group_key: Tuple[Tuple[str, Any], ...], varying_fields: Sequence[str]) -> str:
-    values = dict(group_key)
-    parts = []
-    for name in varying_fields:
-        if name in values:
-            pretty_name = _pretty_hyperparam_name(name)
-            pretty_value = _pretty_hyperparam_value(name, values[name], values)
-            parts.append(f"{pretty_name} = {pretty_value}")
-    if not parts:
-        return "default"
-    return " ".join(parts)
 
 
 def _load_trajectory_metric(path: Path, metric_key: str) -> Dict[int, float]:
@@ -407,7 +556,7 @@ def _load_trajectory_metric(path: Path, metric_key: str) -> Dict[int, float]:
     return result
 
 
-def _load_noun_similarity_scalar(exp_dir: Path, model_name: Optional[str] = None) -> Optional[float]:
+def _load_noun_similarity_scalar(exp_dir: Path, model_name: Optional[str] = None, nounlist_name: Optional[str] = None) -> Optional[float]:
     """Load a single noun similarity scalar for an experiment.
 
     Prefers noun_similarity_metrics.json (written by compute_noun_similarity.py).
@@ -421,8 +570,6 @@ def _load_noun_similarity_scalar(exp_dir: Path, model_name: Optional[str] = None
     # Try model-specific metrics first
     if model_name:
         metrics_path = exp_dir / f"noun_similarity_metrics{model_suffix}.json"
-        if not metrics_path.exists():
-            metrics_path = exp_dir / "noun_similarity_metrics.json" # Fallback
     else:
         metrics_path = exp_dir / "noun_similarity_metrics.json"
 
@@ -437,11 +584,14 @@ def _load_noun_similarity_scalar(exp_dir: Path, model_name: Optional[str] = None
             pass
 
     # Try trajectory files
-    nounlist_name = DEFAULT_NOUNLIST_PATH.stem
+    if nounlist_name is None:
+        raise ValueError("nounlist_name must be provided to load from trajectory files.")
+
     candidates = []
     if model_name:
         candidates.append(exp_dir / f"noun_similarity_over_time_{nounlist_name}{model_suffix}.json")
-    candidates.append(exp_dir / f"noun_similarity_over_time_{nounlist_name}.json")
+    else:
+        candidates.append(exp_dir / f"noun_similarity_over_time_{nounlist_name}.json")
     
     for trajectory_path in candidates:
         if not trajectory_path.exists():
@@ -480,7 +630,8 @@ def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path, model_name: Opt
     candidates_metrics = []
     if model_name:
          candidates_metrics.append(exp_dir / f"embedding_metrics{model_suffix}.json")
-    candidates_metrics.append(exp_dir / "embedding_metrics.json")
+    else:
+         candidates_metrics.append(exp_dir / "embedding_metrics.json")
 
     for metrics_path in candidates_metrics:
         if metrics_path.exists():
@@ -504,7 +655,8 @@ def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path, model_name: Opt
     candidates_traj = []
     if model_name:
         candidates_traj.append(exp_dir / f"embedding_mean_pairwise_distance_over_time{model_suffix}.json")
-    candidates_traj.append(exp_dir / "embedding_mean_pairwise_distance_over_time.json")
+    else:
+        candidates_traj.append(exp_dir / "embedding_mean_pairwise_distance_over_time.json")
 
     for traj_path in candidates_traj:
         if not traj_path.exists():
@@ -525,267 +677,69 @@ def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path, model_name: Opt
     return None
 
 
-def _write_scalar_bar_plot(
-    *,
-    grouped_values: Dict[Tuple[Tuple[str, Any], ...], List[float]],
-    outpath: Path,
-    title: str,
-    ylabel: str,
-) -> None:
-    import numpy as np
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    if not grouped_values:
-        return
-
-    group_keys = list(grouped_values.keys())
-    varying_fields = _compute_varying_fields(group_keys)
-    sort_field: Optional[str] = varying_fields[0] if len(varying_fields) == 1 else None
-
-    records: List[Tuple[Optional[float], str, float, float]] = []
-
-    for group_key in group_keys:
-        vals = grouped_values.get(group_key, [])
-        if not vals:
-            continue
-        arr = np.asarray(vals, dtype=float)
-        mean = float(arr.mean())
-        std = float(arr.std())
-
-        values = dict(group_key)
-
-        label = _format_group_label(group_key, varying_fields)
-
-        sort_key: Optional[float] = None
-        if sort_field is not None:
-            raw = values.get(sort_field)
-            if raw is not None:
-                sort_key = _effective_numeric_for_sort(sort_field, raw, values)
-
-        records.append((sort_key, label, mean, std))
-
-    if not records:
-        return
-
-    # Order bars by the swept axis (when numeric), otherwise lexically.
-    numeric = [r for r in records if r[0] is not None]
-    non_numeric = [r for r in records if r[0] is None]
-    numeric.sort(key=lambda r: (r[0], r[1]))
-    non_numeric.sort(key=lambda r: r[1])
-    ordered = numeric + non_numeric
-
-    labels = [r[1] for r in ordered]
-    means = [r[2] for r in ordered]
-    stds = [r[3] for r in ordered]
-
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
-    x = np.arange(len(labels), dtype=float)
-
-    # Distinct colors per bar.
-    cmap = plt.get_cmap("tab20")
-    colors = [cmap(i % cmap.N) for i in range(len(labels))]
-
-    ax.bar(x, means, yerr=stds, capsize=6, color=colors)
-    ax.set_title(title)
-    ax.set_ylabel(ylabel)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.grid(True, axis="y", alpha=0.3)
-
-    # Make small differences easier to see by starting slightly below
-    # the minimum value touched by an error bar.
-    lower = min((m - s) for m, s in zip(means, stds))
-    upper = max((m + s) for m, s in zip(means, stds))
-    span = max(upper - lower, 1e-6)
-    pad = 0.05 * span
-    ax.set_ylim(bottom=lower - pad)
-
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=150)
-    plt.close(fig)
-
-
-def _load_human_baseline(
-    metric: str,
-    render_size: int,
-    model: str,
-    nounlist: Optional[str] = None
-) -> Optional[Dict[int, float]]:
-    """Load human baseline trajectory for the given metric."""
-    baseline_dir = SCRIPT_ROOT / "human_baseline"
-    if not baseline_dir.exists():
-        print(f"Human baseline directory not found: {baseline_dir}")
-        return None
-        
-    model_name = model.replace("/", "-")
-    
-    if metric == "novelty":
-        filename = f"novelty_res{render_size}_{model_name}.json"
-        key = "mean_pairwise_distance"
-    elif metric == "noun":
-        if not nounlist:
-            print("Nounlist name must be provided to load noun similarity baseline.")
-            return None
-        filename = f"noun_similarity_res{render_size}_{model_name}_{nounlist}.json"
-        key = "mean_max_similarity"
-    else:
-        print(f"Unknown metric for human baseline: {metric}")
-        return None
-        
-    path = baseline_dir / filename
-    if not path.exists():
-        print(f"Human baseline file not found: {path}")
-        return None
-        
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        trajectory = {}
-        for row in data:
-            idx = row.get("index")
-            val = row.get(key)
-            if idx is not None and val is not None:
-                trajectory[int(idx)] = float(val)
-        return trajectory
-    except Exception as e:
-        print(f"Failed to load human baseline from {path}: {e}")
-        return None
-
-
-def _write_aggregate_plot(
-    *,
-    grouped_runs: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]],
-    outpath: Path,
-    title: str,
-    xlabel: str,
-    ylabel: str,
-    baselines: Optional[List[Tuple[str, Dict[int, float]]]] = None,
-) -> None:
-    import numpy as np
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    if not grouped_runs:
-        return
-
-    group_keys = list(grouped_runs.keys())
-    varying_fields = _compute_varying_fields(group_keys)
-
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.grid(True, which="major", alpha=0.3)
-
-    plotted = 0
-    max_x = 0
-
-    for group_key in group_keys:
-        runs = grouped_runs[group_key]
-        if not runs:
-            continue
-
-        # Use intersection so mean/std correspond to the same x positions across seeds.
-        index_sets = [set(run.keys()) for run in runs]
-        common = set.intersection(*index_sets) if len(index_sets) > 1 else index_sets[0]
-        if not common:
-            continue
-        indices = sorted(common)
-        if indices:
-            max_x = max(max_x, indices[-1])
-        values = np.array([[run[i] for i in indices] for run in runs], dtype=float)
-        mean = values.mean(axis=0)
-        std = values.std(axis=0)
-
-        label = _format_group_label(group_key, varying_fields)
-        (line,) = ax.plot(indices, mean, linewidth=2, label=label)
-        ax.fill_between(indices, mean - std, mean + std, alpha=0.2, color=line.get_color())
-        plotted += 1
-
-    if baselines and max_x > 0:
-        # Use black if there's only one baseline, otherwise cycle colors
-        use_black = (len(baselines) == 1)
-
-        for label, trajectory in baselines:
-            indices = sorted([i for i in trajectory.keys() if i <= max_x])
-            if indices:
-                values = [trajectory[i] for i in indices]
-                
-                kwargs = {
-                    "linestyle": "--",
-                    "linewidth": 2,
-                    "label": label,
-                    "alpha": 0.7,
-                }
-                if use_black:
-                    kwargs["color"] = "black"
-
-                ax.plot(indices, values, **kwargs)
-                plotted += 1
-
-    if plotted == 0:
-        plt.close(fig)
-        return
-
-    ax.legend(loc="best", fontsize=9)
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=150)
-    print(f"Wrote aggregate plot to {outpath}")
-    plt.close(fig)
-
-
 def _plot_seed_aggregates(
     *,
     run_configs: Sequence[PicbreederConfig],
     output_dir: Path,
     filename_tag: str,
-    embedding_model: Optional[str] = None,
+    image_embedding_model: Optional[str] = None,
+    text_image_embedding_model: Optional[str] = None,
 ) -> None:
     novelty_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     noun_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     noun_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     mpd_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
-    nounlist_name = Path(DEFAULT_NOUNLIST_PATH).stem
 
-    model_suffix = ""
-    if embedding_model:
-        sanitized = embedding_model.replace("/", "-")
-        model_suffix = f"_{sanitized}"
+    image_model_suffix = ""
+    if image_embedding_model:
+        sanitized = image_embedding_model.replace("/", "-")
+        image_model_suffix = f"_{sanitized}"
+
+    text_image_model_suffix = ""
+    if text_image_embedding_model:
+        sanitized = text_image_embedding_model.replace("/", "-")
+        text_image_model_suffix = f"_{sanitized}"
+
+    # We might have different nounlists across run_configs
+    # We collect all used nounlists to load baselines for them
+    used_nounlists = set()
+    unique_sizes = set()
+
+    if run_configs:
+        unique_sizes = sorted(list({cfg.thumb_size for cfg in run_configs}))
+        for cfg in run_configs:
+            used_nounlists.add(Path(cfg.nounlist).stem)
 
     baselines_novelty: List[Tuple[str, Dict[int, float]]] = []
     baselines_noun: List[Tuple[str, Dict[int, float]]] = []
+    
     if run_configs:
-        unique_sizes = sorted(list({cfg.thumb_size for cfg in run_configs}))
-        # embedding_model = run_configs[0].embedding_model
-        baseline_model_novelty = embedding_model if embedding_model else "ViT-B-32"
-        baseline_model_noun = embedding_model if embedding_model else "ViT-H-14"
+        baseline_model_novelty = image_embedding_model if image_embedding_model else "ViT-B-32"
+        baseline_model_noun = text_image_embedding_model if text_image_embedding_model else "ViT-H-14"
         
         for size in unique_sizes:
             label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
             
-            bn = _load_human_baseline("novelty", size, baseline_model_novelty)
+            bn = load_human_baseline("novelty", size, baseline_model_novelty)
             if bn:
                 baselines_novelty.append((f"Human Baseline{label_suffix}", bn))
             
-            bnn = _load_human_baseline("noun", size, baseline_model_noun, nounlist=nounlist_name)
-            if bnn:
-                baselines_noun.append((f"Human Baseline{label_suffix}", bnn))
+            for nl_name in used_nounlists:
+                 nl_suffix = f" {nl_name}" if len(used_nounlists) > 1 else ""
+                 bnn = load_human_baseline("noun", size, baseline_model_noun, nounlist=nl_name)
+                 if bnn:
+                     baselines_noun.append((f"Human Baseline{label_suffix}{nl_suffix}", bnn))
 
     for run_cfg in run_configs:
         group_key = _group_key_for_aggregate(run_cfg)
         exp_dir = Path(run_cfg.experiment_dir)
+        
+        current_nounlist_name = Path(run_cfg.nounlist).stem
 
         # Try specific model file first
-        novelty_path = exp_dir / f"embedding_mean_pairwise_distance_over_time{model_suffix}.json"
-        if not novelty_path.exists():
+        if image_embedding_model:
+            novelty_path = exp_dir / f"embedding_mean_pairwise_distance_over_time{image_model_suffix}.json"
+        else:
             novelty_path = exp_dir / "embedding_mean_pairwise_distance_over_time.json"
             
         if novelty_path.exists():
@@ -793,24 +747,60 @@ def _plot_seed_aggregates(
             novelty_grouped.setdefault(group_key, []).append(novelty)
 
         # Try specific model file first
-        noun_path = exp_dir / f"noun_similarity_over_time_{nounlist_name}{model_suffix}.json"
-        if not noun_path.exists():
-            noun_path = exp_dir / f"noun_similarity_over_time_{nounlist_name}.json"
+        if text_image_embedding_model:
+            noun_path = exp_dir / f"noun_similarity_over_time_{current_nounlist_name}{text_image_model_suffix}.json"
+        else:
+            noun_path = exp_dir / f"noun_similarity_over_time_{current_nounlist_name}.json"
             
         if noun_path.exists():
             noun = _load_trajectory_metric(noun_path, "mean_max_similarity")
             noun_grouped.setdefault(group_key, []).append(noun)
 
-        noun_scalar = _load_noun_similarity_scalar(exp_dir, model_name=embedding_model)
+        noun_scalar = _load_noun_similarity_scalar(exp_dir, model_name=text_image_embedding_model, nounlist_name=current_nounlist_name)
         if noun_scalar is not None:
             noun_scalar_grouped.setdefault(group_key, []).append(noun_scalar)
 
-        mpd_scalar = _load_embedding_mean_pairwise_distance_scalar(exp_dir, model_name=embedding_model)
+        mpd_scalar = _load_embedding_mean_pairwise_distance_scalar(exp_dir, model_name=image_embedding_model)
         if mpd_scalar is not None:
             mpd_scalar_grouped.setdefault(group_key, []).append(mpd_scalar)
 
-    agg_plot_distance_path = output_dir / f"aggregate_embedding_mean_pairwise_distance_over_time_{filename_tag}{model_suffix}.png"
-    _write_aggregate_plot(
+    # Use image model suffix for novelty plots, text-image model suffix for noun plots
+    # If mixed, we append both or stick to one convention. 
+    # Let's append suffixes specific to the metric.
+
+    def _compute_max_x(grouped_runs: Dict[Any, List[Dict[int, float]]]) -> int:
+        max_x = 0
+        for runs in grouped_runs.values():
+            if not runs:
+                continue
+            index_sets = [set(run.keys()) for run in runs]
+            common = set.intersection(*index_sets) if len(index_sets) > 1 else index_sets[0]
+            if common:
+                max_x = max(max_x, max(common))
+        return max_x
+
+    def _extract_baseline_scalars(baselines: List[Tuple[str, Dict[int, float]]], limit_x: int) -> List[Tuple[str, float]]:
+        scalars = []
+        for label, traj in baselines:
+            valid_indices = [i for i in traj.keys() if i <= limit_x]
+            if valid_indices:
+                idx = max(valid_indices)
+                scalars.append((label, traj[idx]))
+        return scalars
+    
+    max_x_novelty = _compute_max_x(novelty_grouped)
+    baseline_scalars_novelty = _extract_baseline_scalars(baselines_novelty, max_x_novelty) if max_x_novelty > 0 else []
+
+    max_x_noun = _compute_max_x(noun_grouped)
+    baseline_scalars_noun = _extract_baseline_scalars(baselines_noun, max_x_noun) if max_x_noun > 0 else []
+    
+    if len(used_nounlists) == 1:
+        nounlist_name_for_file = list(used_nounlists)[0]
+    else:
+        nounlist_name_for_file = "mixed"
+
+    agg_plot_distance_path = output_dir / f"aggregate_embedding_mean_pairwise_distance_over_time_{filename_tag}{image_model_suffix}.png"
+    write_aggregate_plot(
         grouped_runs=novelty_grouped,
         outpath=agg_plot_distance_path,
         title="Embedding diversity over time (mean±std across seeds)",
@@ -818,8 +808,8 @@ def _plot_seed_aggregates(
         ylabel="Mean pairwise distance",
         baselines=baselines_novelty,
     )
-    agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{nounlist_name}_{filename_tag}{model_suffix}.png"
-    _write_aggregate_plot(
+    agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png"
+    write_aggregate_plot(
         grouped_runs=noun_grouped,
         outpath=agg_plot_noun_path,
         title="Noun similarity over time (mean±std across seeds)",
@@ -828,18 +818,20 @@ def _plot_seed_aggregates(
         baselines=baselines_noun,
     )
 
-    _write_scalar_bar_plot(
+    write_scalar_bar_plot(
         grouped_values=noun_scalar_grouped,
-        outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{nounlist_name}_{filename_tag}{model_suffix}.png",
+        outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png",
         title="Mean max noun similarity (mean±std across seeds)",
         ylabel="Mean of per-noun max cosine similarity",
+        baselines=baseline_scalars_noun,
     )
 
-    _write_scalar_bar_plot(
+    write_scalar_bar_plot(
         grouped_values=mpd_scalar_grouped,
-        outpath=output_dir / f"aggregate_mean_pairwise_distance_mean_bar_{filename_tag}{model_suffix}.png",
+        outpath=output_dir / f"aggregate_mean_pairwise_distance_mean_bar_{filename_tag}{image_model_suffix}.png",
         title="Mean pairwise distance (mean±std across seeds)",
         ylabel="Mean pairwise distance (euclidean)",
+        baselines=baseline_scalars_novelty,
     )
 
 
@@ -915,9 +907,13 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         name="picbreeder-vlm",
     )
     if cfg.gpu:
-        executor.update_parameters(
-            slurm_gres='gpu:1',
-        )
+        # Check if any config uses a Qwen model, which requires specific GPUs (rtx8000)
+        # use_qwen = any("qwen" in run_cfg.model.lower() for run_cfg in configs)
+        gres_params = {'slurm_gres': 'gpu:1'}
+        # if use_qwen:
+        #     gres_params['slurm_constraint'] = 'rtx8000'
+
+        executor.update_parameters(**gres_params)
 
     jobs = [CollaborativeRun(cfg, run_cfg) for run_cfg in configs]
     futures = executor.map_array(_execute_job, jobs)
@@ -946,7 +942,7 @@ def main(cfg: SweepConfig) -> None:
 
     experiment_prefix = Path(run_configs[0].experiment_dir).parent
     cross_eval_dir = Path(os.path.join("cross_eval", cfg.sweep_name))
-    filename_tag = _sanitize_filename_tag(cfg.sweep_name)
+    filename_tag = sanitize_filename_tag(cfg.sweep_name)
 
     if cfg.cross_eval:
         from render_embedding_metrics_table import DEFAULT_METRICS_FILENAME, render_tables
@@ -957,7 +953,8 @@ def main(cfg: SweepConfig) -> None:
             run_configs=run_configs,
             output_dir=cross_eval_dir,
             filename_tag=filename_tag,
-            embedding_model=cfg.embedding_model,
+            image_embedding_model=cfg.image_embedding_model,
+            text_image_embedding_model=cfg.text_image_embedding_model,
         )
 
         metrics_name = DEFAULT_METRICS_FILENAME
@@ -985,11 +982,11 @@ def main(cfg: SweepConfig) -> None:
 
         # Build group labels from config fields (excluding seed) for proper averaging
         group_keys = [_group_key_for_aggregate(run_cfg) for run_cfg in existing_configs]
-        varying_fields = _compute_varying_fields(group_keys)
+        varying_fields = compute_varying_fields(group_keys)
         group_labels: Dict[str, str] = {}
         for run_cfg, group_key in zip(existing_configs, group_keys):
             exp_name = Path(run_cfg.experiment_dir).name
-            label = _format_group_label(group_key, varying_fields)
+            label = format_group_label(group_key, varying_fields)
             group_labels[exp_name] = label
 
         try:
@@ -1021,97 +1018,44 @@ def main(cfg: SweepConfig) -> None:
 
         return
 
-    if cfg.plot:
-        # Match the launch_locally pattern: instantiate the relevant Config objects
-        # and call their main functions directly (no subprocess).
-        from dataclasses import fields as dataclass_fields
+    if cfg.eval:
+        # We run the plotting phases in separate processes to ensure clean memory (especially VRAM/TF) usage.
+        import torch
+        device_str = "cuda" if torch.cuda.is_available() else "cpu"
+        ctx = multiprocessing.get_context("spawn")
+        
+        # Phase 1: Novelty
+        p1 = ctx.Process(
+            target=_run_eval_phase_1,
+            args=(cfg, run_configs, original_cwd, device_str)
+        )
+        p1.start()
+        p1.join()
+        
+        if p1.exitcode != 0:
+            print(f"Phase 1 failed with exit code {p1.exitcode}")
+            return
 
-        previous_cwd = Path.cwd()
-        os.chdir(original_cwd)
-        try:
-            import torch
+        # Phase 2: Noun Similarity
+        p2 = ctx.Process(
+            target=_run_eval_phase_2,
+            args=(cfg, run_configs, original_cwd, device_str)
+        )
+        p2.start()
+        p2.join()
 
-            from plot_novelty_over_time import (
-                PairwiseDistanceConfig,
-                main as novelty_main,
-                prepare_openclip_components as prepare_novelty_clip,
-            )
-            from compute_noun_similarity import (
-                NounSimilarityConfig,
-                main as noun_main,
-                prepare_openclip_components as prepare_noun_clip,
-                prepare_noun_text_embeddings,
-            )
+        if p2.exitcode != 0:
+            print(f"Phase 2 failed with exit code {p2.exitcode}")
+            return
 
-            # Initialize heavy CLIP components once for the entire sweep.
-            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-            print(f"[local-plot] Using device: {device}")
-
-            base_kwargs0 = {
-                field_def.name: getattr(run_configs[0], field_def.name)
-                for field_def in dataclass_fields(PicbreederConfig)
-                if field_def.name != "hydra"
-            }
-            novelty_cfg0 = PairwiseDistanceConfig(**base_kwargs0, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
-            noun_cfg0 = NounSimilarityConfig(**base_kwargs0, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
-
-            novelty_model, novelty_preprocess = prepare_novelty_clip(novelty_cfg0, device)
-            noun_model, noun_preprocess, noun_tokenizer = prepare_noun_clip(noun_cfg0, device)
-            nouns_list, prompts_list, noun_text_embeddings = prepare_noun_text_embeddings(
-                noun_cfg0,
-                original_cwd=original_cwd,
-                device=device,
-                model=noun_model,
-                tokenizer=noun_tokenizer,
-            )
-
-            for run_cfg in run_configs:
-                base_kwargs = {
-                    field_def.name: getattr(run_cfg, field_def.name)
-                    for field_def in dataclass_fields(PicbreederConfig)
-                    if field_def.name != "hydra"
-                }
-
-                novelty_cfg = PairwiseDistanceConfig(**base_kwargs, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
-                novelty_cfg = replace(novelty_cfg, archive_limit=cfg.archive_limit)
-                desc = _format_run_prefix(run_cfg, "[local-plot]")
-                extra = (
-                    f" archive_limit={cfg.archive_limit}"
-                    if cfg.archive_limit is not None
-                    else ""
-                )
-                print(f"{desc} -> plot_novelty_over_time{extra}")
-                _call_hydra_wrapped_main(
-                    novelty_main,
-                    novelty_cfg,
-                    model=novelty_model,
-                    preprocess=novelty_preprocess,
-                )
-
-                noun_cfg = NounSimilarityConfig(**base_kwargs, render_grid=True, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
-                noun_cfg = replace(noun_cfg, archive_limit=cfg.archive_limit)
-                print(f"{desc} -> compute_noun_similarity{extra}")
-                _call_hydra_wrapped_main(
-                    noun_main,
-                    noun_cfg,
-                    model=noun_model,
-                    preprocess=noun_preprocess,
-                    tokenizer=noun_tokenizer,
-                    nouns=nouns_list,
-                    prompts=prompts_list,
-                    noun_embeddings=noun_text_embeddings,
-                )
-
-            # Plot the result across seeds here as well, for convenience.
-            _plot_seed_aggregates(
-                run_configs=run_configs,
-                output_dir=cross_eval_dir,
-                filename_tag=filename_tag,
-                embedding_model=cfg.embedding_model,
-            )
-
-        finally:
-            os.chdir(previous_cwd)
+        # Plot the result across seeds here as well, for convenience.
+        _plot_seed_aggregates(
+            run_configs=run_configs,
+            output_dir=cross_eval_dir,
+            filename_tag=filename_tag,
+            image_embedding_model=cfg.image_embedding_model,
+            text_image_embedding_model=cfg.text_image_embedding_model,
+        )
 
         return
 
@@ -1140,7 +1084,7 @@ def main(cfg: SweepConfig) -> None:
                     for field_def in dataclass_fields(PicbreederConfig)
                     if field_def.name != "hydra"
                 }
-                eval_cfg0 = EmbedVisualizeConfig(**base_kwargs0, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
+                eval_cfg0 = EmbedVisualizeConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
                 eval_model, eval_preprocess = prepare_eval_clip(eval_cfg0, device)
 
                 for run_cfg in run_configs:
@@ -1149,7 +1093,7 @@ def main(cfg: SweepConfig) -> None:
                         for field_def in dataclass_fields(PicbreederConfig)
                         if field_def.name != "hydra"
                     }
-                    eval_cfg = EmbedVisualizeConfig(**base_kwargs, embedding_model=cfg.embedding_model, pretrained=cfg.pretrained)
+                    eval_cfg = EmbedVisualizeConfig(**base_kwargs, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
                     eval_cfg = replace(eval_cfg, archive_limit=cfg.archive_limit)
                     desc = _format_run_prefix(run_cfg, "[local-eval]")
                     extra = (

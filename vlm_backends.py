@@ -669,7 +669,7 @@ class VLLMQwen3VLBackend(VLMBackend):
         tensor_parallel_size: int = 1,
         # max_model_len: int = 4096,
         # max_model_len: int = 8192,
-        max_model_len: int = 10_000,
+        max_model_len: int = 15_000,
         gpu_memory_utilization: float = 0.9,
     ):
         self._model_name = model_name

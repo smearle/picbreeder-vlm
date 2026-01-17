@@ -23,8 +23,6 @@ from tqdm import tqdm
 
 import matplotlib
 
-from constants import DEFAULT_NOUNLIST_PATH
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -40,14 +38,14 @@ except Exception as exc:  # pragma: no cover - import guard
 
 from config import PicbreederConfig, ensure_valid_config
 from rendering import try_load_font, create_captioned_grid
-from utils import _ensure_absolute
+from utils import _ensure_absolute, resolve_nounlist
+from model_loader import prepare_model
 
 
 @dataclass
 class NounSimilarityConfig(PicbreederConfig):
-    noun_file: Path = DEFAULT_NOUNLIST_PATH
-    embedding_model: str = "ViT-H-14"
-    pretrained: str = "laion2b_s32b_b79k"
+    embedding_model: str = "ViT-SO400M-14-SigLIP2"
+    pretrained: str = "webli"
     batch_size: int = 64
     noun_batch_size: int = 512
     device: Optional[str] = None
@@ -69,7 +67,7 @@ class NounSimilarityConfig(PicbreederConfig):
                     "Hydra entry point for noun coverage metrics.\n"
                     "\n"
                     "Common overrides:\n"
-                    "  noun_file          Path to noun list (defaults to noun_lists/imagenet_leaves.txt).\n"
+                    "  nounlist           Noun list name (e.g. imagenet_leaves) or path.\n"
                     "  label_template    Format each noun (must include {label}).\n"
                     "  render_grid       Emit a noun grid sorted by max similarity.\n"
                     "  experiment_dir    Override to target a specific archive directory.\n"
@@ -106,15 +104,7 @@ def prepare_openclip_components(
     device: torch.device,
 ):
     """Create the OpenCLIP model + preprocess + tokenizer for this config."""
-
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        cfg.embedding_model,
-        pretrained=cfg.pretrained,
-    )
-    model.to(device)
-    model.eval()
-    tokenizer = open_clip.get_tokenizer(cfg.embedding_model)
-    return model, preprocess, tokenizer
+    return prepare_model(cfg, device)
 
 
 def prepare_noun_text_embeddings(
@@ -137,7 +127,7 @@ def prepare_noun_text_embeddings(
     _validate_noun_similarity_options(validated_cfg)
 
     if nouns is None:
-        noun_file = _ensure_absolute(Path(validated_cfg.noun_file), original_cwd)
+        noun_file = resolve_nounlist(validated_cfg.nounlist, original_cwd)
         nouns_list = load_nouns(noun_file)
     else:
         nouns_list = [str(noun) for noun in nouns]
@@ -239,7 +229,7 @@ def load_nouns(noun_file: Path) -> List[str]:
         raise FileNotFoundError(f"Noun file not found: {noun_file}")
     nouns: List[str] = []
     for line in noun_file.read_text().splitlines():
-        noun = line.strip()
+        noun = line.strip().replace("_", " ")
         if noun:
             nouns.append(noun)
     if not nouns:
@@ -443,8 +433,17 @@ def main(
     nouns: Optional[Sequence[str]] = None,
     prompts: Optional[Sequence[str]] = None,
     noun_embeddings: Optional[np.ndarray] = None,
+    original_cwd_override: Optional[Path] = None,
 ) -> None:
-    original_cwd = Path(get_original_cwd())
+    if original_cwd_override:
+        original_cwd = original_cwd_override
+    else:
+        try:
+            original_cwd = Path(get_original_cwd())
+        except ValueError:
+            # Fallback if hydra is not initialized (e.g. called directly)
+            original_cwd = Path.cwd()
+            
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
     _validate_noun_similarity_options(validated_cfg)
 
@@ -459,7 +458,7 @@ def main(
         raise RuntimeError("No PNG images found in archive/images.")
 
     if nouns is None:
-        noun_file = _ensure_absolute(Path(validated_cfg.noun_file), original_cwd)
+        noun_file = resolve_nounlist(validated_cfg.nounlist, original_cwd)
         nouns_list = load_nouns(noun_file)
     else:
         nouns_list = [str(noun) for noun in nouns]
@@ -549,7 +548,7 @@ def main(
     print(f"Saved noun similarity metrics to {output_path}")
     print(f"Mean of per-noun max cosine similarity: {mean_similarity:.4f}")
 
-    nounlist_name = DEFAULT_NOUNLIST_PATH.stem
+    nounlist_name = Path(validated_cfg.nounlist).stem
     model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
     trajectory_json = _resolve_optional_path(validated_cfg.output_trajectory_json, original_cwd)
     if trajectory_json is None:

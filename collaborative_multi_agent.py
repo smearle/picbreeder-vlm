@@ -71,10 +71,13 @@ from constants import (
     PERSONALITY_TOTAL,
     RATING_BATCH_SIZE,
     REPO_NAME,
+    REPO_ROOT,
 )
 from picbreeder_reproduction import PicbreederReproduction
 from prompts import GOAL_PROMPTS
 from utils import relative_suffix_after_dir, apply_random_seed
+
+TRAITS_FILE = "personality_traits.json"
 
 from rate_archive_with_vlm import (
     ArchiveEntry as RatingArchiveEntry,
@@ -87,6 +90,13 @@ from vlm_backends import create_vlm_backend, VLMBackend
 
 # Cache for VLM backend used in rating
 _RATING_BACKEND: Optional[VLMBackend] = None
+
+GEMINI_RANDOM_MODELS = [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-3-pro-preview",
+]
 
 
 def _get_rating_backend(model) -> VLMBackend:
@@ -236,10 +246,12 @@ class AgentTask:
     resume: bool
     warm_start_active: bool
     personality_prompt: Optional[str]
+    personality_trait: Optional[str] = None
     temperature: Optional[float] = None
     branching_decision: Optional[Dict[str, Any]] = None
     favorite_selection: Optional[Dict[str, Any]] = None
     archive_entry: Optional[Dict[str, Any]] = None
+    model: Optional[str] = None
 
     def to_message(self) -> Dict[str, Any]:
         return {
@@ -248,10 +260,12 @@ class AgentTask:
             "resume": self.resume,
             "warm_start_active": self.warm_start_active,
             "personality_prompt": self.personality_prompt,
+            "personality_trait": self.personality_trait,
             "temperature": self.temperature,
             "branching_decision": self.branching_decision,
             "favorite_selection": self.favorite_selection,
             "archive_entry": self.archive_entry,
+            "model": self.model,
         }
 
 
@@ -259,6 +273,7 @@ class AgentTask:
 class AgentRecord:
     agent_id: str
     status: str = "in_progress"
+    personality_trait: Optional[str] = None
     temperature: Optional[float] = None
     branching_decision: Optional[Dict[str, Any]] = None
     favorite_selection: Optional[Dict[str, Any]] = None
@@ -270,6 +285,7 @@ class AgentRecord:
     extinct: bool = False
     quit_requested: bool = False
     quit_reason: Optional[str] = None
+    model: Optional[str] = None
 
 
 @dataclass
@@ -406,6 +422,34 @@ class CollaborativeMultiAgentOrchestrator:
             print(
                 f"Loaded {len(self._personality_prompts)} personality prompts from {self.config.personality_path}"
             )
+        
+        self._personality_traits_list: List[str] = []
+        if self.config.n_personality_traits > 0:
+            traits_path = self.experiment_dir.parent / TRAITS_FILE # Or just use repo root?
+            # User said: "we'll hardcode the path as a constant for now".
+            # The script saves to current directory (repo root).
+            traits_path = Path(TRAITS_FILE)
+            if not traits_path.exists():
+                # Try finding it in repo root if experiment dir is nested
+                traits_path = REPO_ROOT / TRAITS_FILE
+            
+            if traits_path.exists():
+                try:
+                    with open(traits_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        full_traits_list = data.get("traits", [])
+                    
+                    if full_traits_list and self.config.n_personality_traits > 0:
+                        count = min(len(full_traits_list), self.config.n_personality_traits)
+                        self._personality_traits_list = random.sample(full_traits_list, count)
+                        print(f"Subsampled {len(self._personality_traits_list)} personality traits from {len(full_traits_list)} loaded traits.")
+                    else:
+                        self._personality_traits_list = []
+                        
+                except Exception as e:
+                    print(f"Error loading personality traits from {traits_path}: {e}")
+            else:
+                 print(f"Warning: Personality traits file not found at {traits_path}, but n_personality_traits > 0.")
 
     def _load_metadata(self) -> Dict[str, Any]:
         if self.metadata_path.exists():
@@ -494,6 +538,7 @@ class CollaborativeMultiAgentOrchestrator:
             "personality_path": personality_path_str,
             "request_rationale": self.config.request_rationale,
             "fixed_session_lengths": self.config.fixed_session_lengths,
+            "n_personality_traits": self.config.n_personality_traits,
         }
         existing = self._metadata.get("run_config")
         if existing is None:
@@ -520,6 +565,8 @@ class CollaborativeMultiAgentOrchestrator:
             missing.append(("enable_crossover", self.enable_crossover))
         if "fixed_session_lengths" not in existing:
             missing.append(("fixed_session_lengths", self.config.fixed_session_lengths))
+        if "n_personality_traits" not in existing:
+            missing.append(("n_personality_traits", self.config.n_personality_traits))
         if missing:
             def mutator(data: Dict[str, Any]) -> None:
                 details = data.setdefault("run_config", {})
@@ -610,13 +657,7 @@ class CollaborativeMultiAgentOrchestrator:
     def _personality_prompt_for_agent(self, agent_id: str) -> Optional[str]:
         if not self._personality_prompts:
             return None
-        index = self._parse_agent_index(agent_id)
-        if index is None:
-            return None
-        persona_index = index % PERSONALITY_TOTAL
-        if persona_index >= len(self._personality_prompts):
-            persona_index = index % len(self._personality_prompts)
-        return self._personality_prompts[persona_index]
+        return random.choice(self._personality_prompts)
 
     def _allocate_agent_id(self) -> str:
         def mutator(metadata: Dict[str, Any]) -> int:
@@ -833,8 +874,24 @@ class CollaborativeMultiAgentOrchestrator:
             record,
             read_write=False,
         )
+        model = self._resolve_agent_model(
+            agent_id,
+            agent_index,
+            record,
+            read_write=False,
+        )
+        
+        final_personality_prompt = personality_prompt
+        if record and record.personality_trait:
+            traits_str = record.personality_trait
+            if final_personality_prompt:
+                final_personality_prompt = f"{final_personality_prompt}\n\n{traits_str}"
+            else:
+                final_personality_prompt = traits_str
+
         config = copy.copy(self.config)
         config.temperature = temperature
+        config.model = model
         return AgentRunner(
             agent_id,
             agent_dir,
@@ -855,7 +912,7 @@ class CollaborativeMultiAgentOrchestrator:
             warm_start_active=self._is_warm_start_agent(agent_id),
             render_genome_diagrams=self.render_genome_diagrams,
             process_index=self.process_index,
-            personality_prompt=personality_prompt,
+            personality_prompt=final_personality_prompt,
         )
 
     def _on_generation_progress(
@@ -1265,6 +1322,25 @@ class CollaborativeMultiAgentOrchestrator:
             quit_reason=quit_reason,
         )
 
+    def _resolve_agent_model(
+        self,
+        agent_id: str,
+        agent_index: int,
+        record: Optional[AgentRecord],
+        read_write: bool,
+    ) -> str:
+        model = self.config.model
+        if model == "gemini-random":
+            if record is not None and record.model:
+                return record.model
+            seed = self.seed if self.seed is not None else 0
+            rng = random.Random(f"{seed}:{agent_id}:{agent_index}:model")
+            resolved = rng.choice(GEMINI_RANDOM_MODELS)
+            if record is not None:
+                self._update_agent_record(agent_id, model=resolved, read_write=read_write)
+            return resolved
+        return model
+
     def _build_new_agent_task(self, agent_id: str, agent_index: int) -> AgentTask:
         # print(f"[{agent_id}] Starting new agent...")
         self._ensure_agent_number_progress(agent_id, read_write=False)
@@ -1280,13 +1356,30 @@ class CollaborativeMultiAgentOrchestrator:
             record,
             read_write=False,
         )
+        model = self._resolve_agent_model(
+            agent_id,
+            agent_index,
+            record,
+            read_write=False,
+        )
+        
+        selected_trait = None
+        if self._personality_traits_list and self.config.n_personality_traits > 0:
+            # Sample exactly ONE trait from the subsampled list
+            trait = random.choice(self._personality_traits_list)
+            selected_trait = trait
+            self._update_agent_record(agent_id, personality_trait=selected_trait, read_write=False)
+            print(f"[{agent_id}] Assigned personality traits: {selected_trait}")
+
         return AgentTask(
             agent_id=agent_id,
             agent_index=agent_index,
             resume=False,
             warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
+            personality_trait=selected_trait,
             temperature=temperature,
+            model=model,
         )
 
     def _build_resume_agent_task(self, record: AgentRecord) -> AgentTask:
@@ -1298,6 +1391,12 @@ class CollaborativeMultiAgentOrchestrator:
         warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
         temperature = self._resolve_agent_temperature(
+            agent_id,
+            agent_index,
+            record,
+            read_write=True,
+        )
+        model = self._resolve_agent_model(
             agent_id,
             agent_index,
             record,
@@ -1316,10 +1415,12 @@ class CollaborativeMultiAgentOrchestrator:
             resume=True,
             warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
+            personality_trait=record.personality_trait,
             temperature=temperature,
             branching_decision=record.branching_decision,
             favorite_selection=record.favorite_selection,
             archive_entry=record.archive_entry,
+            model=model,
         )
 
     def _prepare_parallel_tasks(
@@ -1362,6 +1463,14 @@ class CollaborativeMultiAgentOrchestrator:
             self._ensure_agent_number_progress(agent_id, read_write=True)
         agent_dir = self._agent_dir(agent_id)
         self._register_agent(agent_id, read_write=True)
+        
+        if self._personality_traits_list and self.config.n_personality_traits > 0:
+            # Sample exactly ONE trait from the subsampled list
+            trait = random.choice(self._personality_traits_list)
+            selected_trait = trait
+            self._update_agent_record(agent_id, personality_trait=selected_trait, read_write=True)
+            print(f"[{agent_id}] Assigned personality traits: {selected_trait}")
+
         config = self._build_config()
         runner = self._build_runner(agent_id, agent_dir, config, None, resume=False)
         decision = runner.select_starting_point()
@@ -1392,6 +1501,8 @@ class CollaborativeMultiAgentOrchestrator:
             return False
         self._hydrate_agent_record_from_disk(record)
         agent_id = record.agent_id
+        if record.personality_trait:
+            print(f"[{agent_id}] Resuming with personality traits: {record.personality_trait}")
         agent_dir = self._agent_dir(agent_id)
         # Ensure directory is available (may have been compressed)
         agent_dir = _ensure_agent_directory_available(agent_dir)
@@ -1631,10 +1742,12 @@ def _deserialize_agent_task(payload: Dict[str, Any]) -> AgentTask:
         resume=bool(payload.get("resume")),
         warm_start_active=bool(payload.get("warm_start_active")),
         personality_prompt=payload.get("personality_prompt"),
+        personality_trait=payload.get("personality_trait"),
         temperature=payload.get("temperature"),
         branching_decision=payload.get("branching_decision"),
         favorite_selection=payload.get("favorite_selection"),
         archive_entry=payload.get("archive_entry"),
+        model=payload.get("model"),
     )
 
 
@@ -1704,6 +1817,11 @@ def _perform_rating(
     rand_select_prob: float = 0.0,
     rand_select_mode: str = "select-only",
 ) -> Dict[str, RatingResult]:
+    if model == "gemini-random":
+        model = random.choice(GEMINI_RANDOM_MODELS)
+    
+    print(f"Generating ratings with model: {model}")
+
     if not targets:
         return {}
     
@@ -1881,6 +1999,16 @@ def _execute_agent_task(
     resolved_temperature = _resolve_task_temperature(cfg, task)
     agent_cfg = copy.copy(cfg)
     agent_cfg.temperature = resolved_temperature
+    if task.model:
+        agent_cfg.model = task.model
+    elif agent_cfg.model == "gemini-random":
+        # Fallback if model not in task (e.g. old data), though ideally task has it
+        agent_cfg.model = random.choice(GEMINI_RANDOM_MODELS)
+    
+    # Print and save personality traits
+    if task.personality_trait:
+        action = "Resuming" if task.resume else "Starting"
+        print(f"[{task.agent_id}] {action} with personality traits: {task.personality_trait}")
 
     population: Optional[neat.Population]
     population = None
@@ -1939,6 +2067,14 @@ def _execute_agent_task(
             last_archive_entry_id = entry_id
             _maybe_trigger_auto_rating_after_publish(cfg, archive_client, task_conn)
 
+    final_personality_prompt = task.personality_prompt
+    if task.personality_trait:
+        traits_str = task.personality_trait
+        if final_personality_prompt:
+            final_personality_prompt = f"{final_personality_prompt}\n\n{traits_str}"
+        else:
+            final_personality_prompt = traits_str
+
     runner = AgentRunner(
         task.agent_id,
         agent_dir,
@@ -1959,7 +2095,7 @@ def _execute_agent_task(
         warm_start_active=task.warm_start_active,
         render_genome_diagrams=agent_cfg.render_genome_diagrams,
         process_index=worker_index,
-        personality_prompt=task.personality_prompt,
+        personality_prompt=final_personality_prompt,
     )
 
     if task.resume:

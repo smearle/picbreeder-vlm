@@ -35,16 +35,22 @@ from clip_noun_niche_es import (
 from render_noun_niches_grid import run_render, RenderNounGridConfig
 from clip_noun_niche_shared import build_run_name
 
+from sweep_analysis_utils import (
+    sanitize_filename_tag,
+    normalize_group_value,
+    compute_varying_fields,
+    format_group_label,
+    load_human_baseline,
+    write_aggregate_plot,
+    write_scalar_bar_plot,
+)
+
+SCRIPT_ROOT = Path(__file__).resolve().parent
+
 # Helper to load/validate configs
 def ensure_valid_config(cfg: ClipNounNicheConfig, original_cwd: Path) -> ClipNounNicheConfig:
     # Basic validation if needed
     return cfg
-
-_TAG_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
-
-def _sanitize_filename_tag(tag: str) -> str:
-    cleaned = _TAG_SANITIZE_PATTERN.sub("_", str(tag)).strip("_")
-    return cleaned or "sweep"
 
 class NicheRun:
     """Submitit-compatible callable that executes a configured run."""
@@ -80,6 +86,8 @@ class SweepNicheConfig(RenderNounGridConfig):
     seed: List[int] = field(default_factory=lambda: [0])
     mutation_strength: List[float] = field(default_factory=lambda: [0.5])
     new_random_prob: List[float] = field(default_factory=lambda: [0.05])
+    crossover_strength: List[float] = field(default_factory=lambda: [0.0])
+    nounlist: List[str] = field(default_factory=lambda: ["imagenet_leaves"])
     # ... add other sweepable params as needed
     
     sweep_name: str = "mutation"
@@ -93,7 +101,8 @@ class SweepNicheConfig(RenderNounGridConfig):
     num_proc: int = 15
     gpu: bool = True # ES needs GPU for CLIP usually
     
-    plot: bool = False # If true, run rendering and analysis locally
+    eval: bool = False # If true, run rendering and analysis locally
+    overwrite_evals: bool = True # If false, skip evaluation if output files already exist
     compare: bool = False # If true, run comparison logic
     cross_eval: bool = False # If true, summarize metrics from the configured runs
     collaborative_logs: Optional[str] = None # Path to collaborative logs for comparison
@@ -118,9 +127,18 @@ class MutationSweep(SweepNicheConfig):
     generations: int = 10_000
     render_size: int = 224
 
+@dataclass
+class CrossoverSweep(SweepNicheConfig):
+    mutation_strength: List[float] = field(default_factory=lambda: [0.5])
+    crossover_strength: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7])
+    seed: List[int] = field(default_factory=lambda: [0, 1, 2])
+    generations: int = 10_000
+    render_size: int = 224
+
 _NAMED_SWEEPS: Dict[str, type[SweepNicheConfig]] = {
     "sweep": SweepBasePreset,
     "mutation": MutationSweep,
+    "crossover": CrossoverSweep,
 }
 
 def _extract_overrides_from_preset(preset: SweepNicheConfig) -> Dict[str, Any]:
@@ -236,15 +254,7 @@ _AGGREGATE_EXCLUDE_FIELDS = (
     "gpu", "render", "compare", "cross_eval", "collaborative_logs", "sweep_name"
 )
 
-def _normalize_group_value(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, float):
-        # Keep floats stable-ish in labels/keys.
-        return float(f"{value:.6g}")
-    if isinstance(value, list):
-         return tuple(value)
-    return value
+
 
 def _group_key_for_aggregate(cfg: Any) -> Tuple[Tuple[str, Any], ...]:
     items: List[Tuple[str, Any]] = []
@@ -252,179 +262,18 @@ def _group_key_for_aggregate(cfg: Any) -> Tuple[Tuple[str, Any], ...]:
         name = field_def.name
         if name in _AGGREGATE_EXCLUDE_FIELDS:
             continue
-        items.append((name, _normalize_group_value(getattr(cfg, name))))
+        items.append((name, normalize_group_value(getattr(cfg, name))))
     return tuple(items)
 
-def _compute_varying_fields(group_keys: Sequence[Tuple[Tuple[str, Any], ...]]) -> List[str]:
-    values_by_field: Dict[str, set] = {}
-    for key in group_keys:
-        for name, value in key:
-            values_by_field.setdefault(name, set()).add(value)
-    varying = [name for name, values in values_by_field.items() if len(values) > 1]
-    # Deterministic ordering.
-    varying.sort()
-    return varying
 
-def _format_group_label(group_key: Tuple[Tuple[str, Any], ...], varying_fields: Sequence[str]) -> str:
-    values = dict(group_key)
-    parts = []
-    for name in varying_fields:
-        if name in values:
-            val = values[name]
-            parts.append(f"{name}={val}")
-    if not parts:
-        return "default"
-    return " ".join(parts)
 
-def _effective_numeric_for_sort(name: str, value: Any, values: Dict[str, Any]) -> Optional[float]:
-    try:
-        return float(value)
-    except Exception:
-        return None
 
-def _write_scalar_bar_plot(
-    *,
-    grouped_values: Dict[Tuple[Tuple[str, Any], ...], List[float]],
-    outpath: Path,
-    title: str,
-    ylabel: str,
-) -> None:
-    import numpy as np
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
-    if not grouped_values:
-        return
 
-    group_keys = list(grouped_values.keys())
-    varying_fields = _compute_varying_fields(group_keys)
-    sort_field: Optional[str] = varying_fields[0] if len(varying_fields) == 1 else None
 
-    records: List[Tuple[Optional[float], str, float, float]] = []
 
-    for group_key in group_keys:
-        vals = grouped_values.get(group_key, [])
-        if not vals:
-            continue
-        arr = np.asarray(vals, dtype=float)
-        mean = float(arr.mean())
-        std = float(arr.std())
 
-        values = dict(group_key)
 
-        label = _format_group_label(group_key, varying_fields)
-
-        sort_key: Optional[float] = None
-        if sort_field is not None:
-            raw = values.get(sort_field)
-            if raw is not None:
-                sort_key = _effective_numeric_for_sort(sort_field, raw, values)
-
-        records.append((sort_key, label, mean, std))
-
-    if not records:
-        return
-
-    # Order bars by the swept axis (when numeric), otherwise lexically.
-    numeric = [r for r in records if r[0] is not None]
-    non_numeric = [r for r in records if r[0] is None]
-    numeric.sort(key=lambda r: (r[0], r[1]))
-    non_numeric.sort(key=lambda r: r[1])
-    ordered = numeric + non_numeric
-
-    labels = [r[1] for r in ordered]
-    means = [r[2] for r in ordered]
-    stds = [r[3] for r in ordered]
-
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
-    x = np.arange(len(labels), dtype=float)
-
-    # Distinct colors per bar.
-    cmap = plt.get_cmap("tab20")
-    colors = [cmap(i % cmap.N) for i in range(len(labels))]
-
-    ax.bar(x, means, yerr=stds, capsize=6, color=colors)
-    ax.set_title(title)
-    ax.set_ylabel(ylabel)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.grid(True, axis="y", alpha=0.3)
-
-    # Make small differences easier to see by starting slightly below
-    # the minimum value touched by an error bar.
-    lower = min((m - s) for m, s in zip(means, stds))
-    upper = max((m + s) for m, s in zip(means, stds))
-    span = max(upper - lower, 1e-6)
-    pad = 0.05 * span
-    ax.set_ylim(bottom=lower - pad)
-
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=150)
-    plt.close(fig)
-
-def _write_aggregate_plot(
-    *,
-    grouped_runs: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]],
-    outpath: Path,
-    title: str,
-    xlabel: str,
-    ylabel: str,
-) -> None:
-    # Use local import to avoid display issues if backend not configured
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    if not grouped_runs:
-        return
-
-    group_keys = list(grouped_runs.keys())
-    varying_fields = _compute_varying_fields(group_keys)
-
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.grid(True, which="major", alpha=0.3)
-
-    plotted = 0
-
-    for group_key in group_keys:
-        runs = grouped_runs[group_key]
-        if not runs:
-            continue
-
-        # Use intersection so mean/std correspond to the same x positions across seeds.
-        index_sets = [set(run.keys()) for run in runs]
-        if not index_sets:
-            continue
-            
-        common = set.intersection(*index_sets) if len(index_sets) > 1 else index_sets[0]
-        if not common:
-            continue
-        indices = sorted(common)
-        values = np.array([[run[i] for i in indices] for run in runs], dtype=float)
-        mean = values.mean(axis=0)
-        std = values.std(axis=0)
-
-        label = _format_group_label(group_key, varying_fields)
-        (line,) = ax.plot(indices, mean, linewidth=2, label=label)
-        ax.fill_between(indices, mean - std, mean + std, alpha=0.2, color=line.get_color())
-        plotted += 1
-
-    if plotted == 0:
-        plt.close(fig)
-        return
-
-    ax.legend(loc="best", fontsize=9)
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=150)
-    print(f"Wrote aggregate plot to {outpath}")
-    plt.close(fig)
 
 def _compute_diversity_for_run(rcfg: ClipNounNicheConfig, original_cwd: Path, device: torch.device, clip_model, clip_preprocess) -> None:
     """Compute mean pairwise distance of the niche population over time and final state."""
@@ -438,7 +287,7 @@ def _compute_diversity_for_run(rcfg: ClipNounNicheConfig, original_cwd: Path, de
     scalar_file = run_dir / "embedding_metrics.json"
 
     # 1. Trajectory from history (niches_dir)
-    if niches_dir.exists() and not traj_file.exists():
+    if niches_dir.exists() and (rcfg.overwrite_evals or not traj_file.exists()):
         print(f"Computing diversity trajectory for {run_name}...")
         
         # Parse history from filenames
@@ -609,42 +458,96 @@ def perform_cross_eval(cfg: SweepNicheConfig, run_configs: Sequence[ClipNounNich
         if mpd_val is not None:
              mpd_scalar_grouped.setdefault(group_key, []).append(float(mpd_val))
 
-    sweep_name = _sanitize_filename_tag(getattr(cfg, "sweep_name", "sweep"))
+    sweep_name = sanitize_filename_tag(getattr(cfg, "sweep_name", "sweep"))
     
+    # Load baselines
+    baselines_novelty: List[Tuple[str, Dict[int, float]]] = []
+    baselines_noun: List[Tuple[str, Dict[int, float]]] = []
+    
+    if run_configs:
+         # Assuming homogenous config for these params across sweep except nounlist
+         ref_cfg = run_configs[0]
+         size = ref_cfg.render_size
+         model = ref_cfg.clip_model
+         
+         used_nounlists = set()
+         for rcfg in run_configs:
+             used_nounlists.add(Path(rcfg.nounlist).stem)
+
+         bn = load_human_baseline("novelty", size, model)
+         if bn:
+             baselines_novelty.append(("Human Baseline", bn))
+         
+         for nl_name in used_nounlists:
+             nl_suffix = f" {nl_name}" if len(used_nounlists) > 1 else ""
+             bnn = load_human_baseline("noun", size, model, nounlist=nl_name)
+             if bnn:
+                 baselines_noun.append((f"Human Baseline{nl_suffix}", bnn))
+
+    def _compute_max_x(grouped_runs: Dict[Any, List[Dict[int, float]]]) -> int:
+        max_x = 0
+        for runs in grouped_runs.values():
+            if not runs:
+                continue
+            index_sets = [set(run.keys()) for run in runs]
+            common = set.intersection(*index_sets) if len(index_sets) > 1 else index_sets[0]
+            if common:
+                max_x = max(max_x, max(common))
+        return max_x
+
+    def _extract_baseline_scalars(baselines: List[Tuple[str, Dict[int, float]]], limit_x: int) -> List[Tuple[str, float]]:
+        scalars = []
+        for label, traj in baselines:
+            valid_indices = [i for i in traj.keys() if i <= limit_x]
+            if valid_indices:
+                idx = max(valid_indices)
+                scalars.append((label, traj[idx]))
+        return scalars
+
+    max_x_noun = _compute_max_x(mean_best_grouped)
+    baseline_scalars_noun = _extract_baseline_scalars(baselines_noun, max_x_noun) if max_x_noun > 0 else []
+
+    max_x_novelty = _compute_max_x(mpd_grouped)
+    baseline_scalars_novelty = _extract_baseline_scalars(baselines_novelty, max_x_novelty) if max_x_novelty > 0 else []
+
     # 1. Trajectory Plots
     if mean_best_grouped:
-        _write_aggregate_plot(
+        write_aggregate_plot(
             grouped_runs=mean_best_grouped,
             outpath=output_dir / f"aggregate_noun_similarity_over_time_{sweep_name}.png",
             title="Noun similarity over time (mean±std across seeds)",
             xlabel="Generation",
             ylabel="Mean max cosine similarity",
+            baselines=baselines_noun,
         )
     
     if mpd_grouped:
-        _write_aggregate_plot(
+        write_aggregate_plot(
             grouped_runs=mpd_grouped,
             outpath=output_dir / f"aggregate_embedding_mean_pairwise_distance_over_time_{sweep_name}.png",
             title="Embedding diversity over time (mean±std across seeds)",
             xlabel="Generation",
             ylabel="Mean pairwise distance",
+            baselines=baselines_novelty,
         )
         
     # 2. Bar Plots
     if noun_scalar_grouped:
-        _write_scalar_bar_plot(
+        write_scalar_bar_plot(
             grouped_values=noun_scalar_grouped,
             outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{sweep_name}.png",
             title="Mean max noun similarity (mean±std across seeds)",
             ylabel="Mean of per-noun max cosine similarity",
+            baselines=baseline_scalars_noun,
         )
 
     if mpd_scalar_grouped:
-        _write_scalar_bar_plot(
+        write_scalar_bar_plot(
             grouped_values=mpd_scalar_grouped,
             outpath=output_dir / f"aggregate_mean_pairwise_distance_mean_bar_{sweep_name}.png",
             title="Mean pairwise distance (mean±std across seeds)",
             ylabel="Mean pairwise distance (euclidean)",
+            baselines=baseline_scalars_novelty,
         )
 
 def launch_locally(run_configs: Sequence[ClipNounNicheConfig], original_cwd: Path, mode: str) -> None:
@@ -748,7 +651,11 @@ def launch_slurm(cfg: SweepNicheConfig, run_configs: Sequence[ClipNounNicheConfi
         name="picbreeder-niche",
     )
     if cfg.gpu:
-        executor.update_parameters(slurm_gres='gpu:1')
+        use_siglip = any("siglip2" in rcfg.clip_model.lower() for rcfg in run_configs)
+        gres_params = {'slurm_gres': 'gpu:1'}
+        if use_siglip:
+            gres_params['slurm_constraint'] = 'rtx8000'
+        executor.update_parameters(**gres_params)
 
     if mode == "es":
         jobs = [NicheRun(replace(rcfg, output_dir=Path(rcfg.output_dir)), original_cwd) for rcfg in run_configs]
@@ -781,17 +688,17 @@ def main(cfg: SweepNicheConfig) -> None:
         compare_runs(cfg, configs, original_cwd)
         return
 
-    mode = "render" if cfg.plot else "es"
+    mode = "render" if cfg.eval else "es"
     
     if cfg.slurm:
-        if cfg.plot:
-             print("Warning: plot=True with slurm=True is not supported. Running plot locally.")
-             # Fall through to local plot logic
+        if cfg.eval:
+             print("Warning: eval=True with slurm=True is not supported. Running eval locally.")
+             # Fall through to local eval logic
         else:
             launch_slurm(cfg, configs, original_cwd, mode)
             return
     
-    if cfg.plot:
+    if cfg.eval:
         # Local plotting logic
         # 1. Initialize CLIP once
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -804,13 +711,24 @@ def main(cfg: SweepNicheConfig) -> None:
         
         for rcfg in configs:
             # Run rendering (if needed)
-            print(f"[plot] Rendering: {build_run_name(rcfg)}")
-            run_render(rcfg, original_cwd)
+            run_name = build_run_name(rcfg)
+            output_root = _ensure_absolute(Path(rcfg.output_dir), original_cwd)
+            run_dir = output_root / run_name
+            
+            if not cfg.overwrite_evals and (run_dir / "metrics.png").exists():
+                 print(f"Skipping rendering for {run_name} (already exists)")
+            else:
+                 print(f"[eval] Rendering: {run_name}")
+                 try:
+                     run_render(rcfg, original_cwd)
+                 except Exception as e:
+                     print(f"Error during rendering for {run_name}: {e}")
+                     continue
             
             # Run diversity calc
             _compute_diversity_for_run(rcfg, original_cwd, device, clip.model, clip.preprocess)
             
-    if cfg.plot or cfg.cross_eval:
+    if cfg.eval or cfg.cross_eval:
         # Run aggregation
         perform_cross_eval(cfg, configs, original_cwd)
     else:

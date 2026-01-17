@@ -23,14 +23,14 @@ from archive_manager import ARCHIVE_GRID_MARGIN, ArchiveEntry, ArchiveManager
 from artifacts import render_genome_images, save_neat_genome_diagrams
 from chat import GeminiPromptBlockedError, extract_json_object, query_with_history, reset_chat_session, restore_chat_history_from_metadata, select_parents_from_grid, summarize_genome_structure
 from config import PicbreederConfig
-from constants import DEFAULT_BASELINE_SELECTION_LIMIT, DEFAULT_NOUNLIST_PATH, REPO_ROOT
+from constants import DEFAULT_BASELINE_SELECTION_LIMIT, REPO_ROOT
 
 # Module-level cache so CLIP noun embeddings are computed once per process
 _CLIP_NOUN_CACHE: Dict[str, Any] = {}
 from neat_components import GenerationCheckpointer, LATEST_POPULATION_FILENAME, seed_initial_population, sync_population_node_indexer, sync_population_output_activations
 from prompts import ARCHIVE_BRANCHING_PROMPT, ARCHIVE_NOVELTY_PROMPT, COLOR_PROMPT, GOAL_PROMPTS, MUTATION_STRENGTH_PROMPT, PARENT_SELECTION_PROMPT, DEFAULT_SYSTEM_INSTRUCTION, FIXED_SESSION_SYSTEM_INSTRUCTION, gen_selection_prompt
 from rendering import _draw_dotted_rectangle, create_numbered_grid
-from utils import _ensure_int_list, relative_suffix_after_dir
+from utils import _ensure_int_list, relative_suffix_after_dir, resolve_nounlist
 
 
 BRANCH_TOP_RATED_LIMIT = 20
@@ -839,6 +839,7 @@ class AgentRunner:
             if entry_archive_index is not None:
                 input_parts_metadata[display_index]["archive_index"] = entry_archive_index
 
+        print(f"[{self.agent_id}] Deciding branching with model: {self.config.model}")
         response = query_with_history(
             self.config.model,
             image_caption_pairs,
@@ -1502,7 +1503,7 @@ class AgentRunner:
                             print(f"[{self.agent_id}] Gen {generation_i}: Random intervention set mutation mode to {new_mode}")
                         
                         if random.random() < 0.2:
-                            new_strength = round(random.uniform(0.1, 1.0), 2)
+                            new_strength = random.choice([0.1, 0.25, 0.5, 0.85, 1.0])
                             selection_meta_raw["mutation_strength"] = new_strength
                             print(f"[{self.agent_id}] Gen {generation_i}: Random intervention set mutation strength to {new_strength}")
 
@@ -1530,6 +1531,7 @@ class AgentRunner:
                     break
 
                 else:
+                    print(f"[{self.agent_id}] Selecting parents/publishing with model: {self.config.model}")
                     prompt_with_settings = self._prompt_with_settings(prompt_template)
                     variant_key = "color" if self._color_enabled else "gray"
                     population_images = color_images if self._color_enabled else gray_images
@@ -2461,7 +2463,7 @@ class AgentRunner:
                 "CLIP noun baseline requires torch and open_clip (see compute_noun_similarity.py dependencies)."
             ) from exc
 
-        noun_path = DEFAULT_NOUNLIST_PATH
+        noun_path = resolve_nounlist(self.config.nounlist, REPO_ROOT)
         nouns = load_nouns(noun_path)
         prompts = format_prompts(nouns, "{label}")
 

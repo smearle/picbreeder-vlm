@@ -21,11 +21,12 @@ import torch
 
 from config import PicbreederConfig, ensure_valid_config
 from embed_and_visualize import embed_images
+from model_loader import prepare_model
 
 
 @dataclass
 class PairwiseDistanceConfig(PicbreederConfig):
-    embedding_model: str = "ViT-H-14"
+    embedding_model: str = "SigLIP2-B-alignet"
     pretrained: str = "laion2b_s32b_b79k"
     batch_size: int = 64
     archive_limit: Optional[int] = None
@@ -104,12 +105,7 @@ def infer_archive_order(exp_dir: Path) -> List[Path]:
 
 
 def _prepare_model(cfg: PairwiseDistanceConfig, device: torch.device):
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        cfg.embedding_model,
-        pretrained=cfg.pretrained,
-    )
-    model.to(device)
-    model.eval()
+    model, preprocess, _ = prepare_model(cfg, device)
     return model, preprocess
 
 
@@ -298,8 +294,17 @@ def main(
     *,
     model=None,
     preprocess=None,
+    original_cwd_override: Optional[Path] = None,
 ) -> None:
-    original_cwd = Path(get_original_cwd())
+    if original_cwd_override:
+        original_cwd = original_cwd_override
+    else:
+        try:
+            original_cwd = Path(get_original_cwd())
+        except ValueError:
+            # Fallback if hydra is not initialized (e.g. called directly)
+            original_cwd = Path.cwd()
+            
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
 
     exp_dir = Path(validated_cfg.experiment_dir).resolve()

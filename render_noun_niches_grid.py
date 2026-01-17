@@ -29,6 +29,7 @@ from clip_noun_niche_es import (
 from clip_noun_niche_shared import build_run_name, resolve_path, decompress_run_images
 from neat_components import PicbreederGenome
 from rendering import try_load_font, create_captioned_grid
+from utils import resolve_nounlist
 
 
 @dataclass
@@ -58,7 +59,7 @@ def format_caption(noun: str, score: float | None, include_score: bool) -> str:
 
 
 def run_render(cfg: RenderNounGridConfig, original_cwd: Path) -> None:
-    nounlist_path = resolve_path(cfg.nounlist, original_cwd)
+    nounlist_path = resolve_nounlist(cfg.nounlist, original_cwd)
     config_path = resolve_path(cfg.config, original_cwd)
     output_root = resolve_path(cfg.output_dir, original_cwd)
     run_dir = resolve_path(cfg.run_dir, original_cwd) if cfg.run_dir else output_root / build_run_name(cfg)
@@ -100,13 +101,14 @@ def run_render(cfg: RenderNounGridConfig, original_cwd: Path) -> None:
     render_size = int(signature.get("render_size", cfg.render_size))
     thumb_size = cfg.thumb_size or render_size
     mutation_strength = float(signature.get("mutation_strength", cfg.mutation_strength))
+    crossover_strength = float(signature.get("crossover_strength", cfg.crossover_strength))
     batch_size = int(signature.get("batch_size", cfg.batch_size))
 
     nouns = load_nouns(nounlist_path)
     niche_elites: List[NicheElite | None] = payload["niche_elites"]
     best_scores = payload.get("best_scores")
 
-    config = build_config(config_path, batch_size, mutation_strength)
+    config = build_config(config_path, batch_size, mutation_strength, crossover_strength)
     
     # Identify active niches
     active_indices = [i for i, elite in enumerate(niche_elites) if elite is not None]

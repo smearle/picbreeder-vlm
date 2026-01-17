@@ -29,6 +29,8 @@ from PIL import Image
 import torch
 from tqdm import tqdm
 
+from model_loader import load_model_by_name
+
 from neat_components import (
     InteractiveStagnation,
     PicbreederGenome,
@@ -50,6 +52,7 @@ from clip_noun_niche_shared import (
     compress_run_images,
     decompress_run_images,
 )
+from utils import resolve_nounlist
 
 
 STATE_FILENAME = "state.pkl"
@@ -83,7 +86,7 @@ def ensure_output_dir(base: Path, run_name: str, save_images: bool) -> Path:
     return run_dir
 
 
-def build_config(cfg_path: Path, pop_size: int, mutation_strength: float) -> neat.Config:
+def build_config(cfg_path: Path, pop_size: int, mutation_strength: float, crossover_strength: float) -> neat.Config:
     config = neat.Config(
         PicbreederGenome,
         PicbreederReproduction,
@@ -91,7 +94,7 @@ def build_config(cfg_path: Path, pop_size: int, mutation_strength: float) -> nea
         InteractiveStagnation,
         str(cfg_path),
     )
-    apply_picbreeder_config_defaults(config, enable_output_activations=True, enable_input_activations=False, enable_crossover=False)
+    apply_picbreeder_config_defaults(config, enable_output_activations=True, enable_input_activations=False, enable_crossover=(crossover_strength > 0))
     config.pop_size = pop_size
     config.picbreeder_mutation_strength = mutation_strength
     config.genome_config.picbreeder_mutation_strength = mutation_strength
@@ -198,7 +201,7 @@ def load_nouns(path: Path) -> List[str]:
         raise FileNotFoundError(f"Noun list not found at {path}")
     nouns: List[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
-        noun = line.strip()
+        noun = line.strip().replace("_", " ")
         if noun:
             nouns.append(noun)
     if not nouns:
@@ -231,10 +234,8 @@ def load_clip_components(
     nouns: Sequence[str],
 ) -> ClipComponents:
     device = torch.device(device_override) if device_override else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
-    tokenizer = open_clip.get_tokenizer(model_name)
-    model.to(device)
-    model.eval()
+    model, preprocess, tokenizer = load_model_by_name(model_name, pretrained, device)
+    
     text_embs = _embed_texts_in_batches(model, tokenizer, device, nouns)
     return ClipComponents(model=model, preprocess=preprocess, text_embeddings=text_embs, device=device)
 
@@ -324,6 +325,7 @@ def make_args_signature(
         "batch_size": cfg.batch_size,
         "mutation_strength": cfg.mutation_strength,
         "new_random_prob": cfg.new_random_prob,
+        "crossover_strength": cfg.crossover_strength,
         "nounlist": str(nounlist_path),
         "config": str(config_path),
         "output_dir": str(output_root),
@@ -386,7 +388,7 @@ def _run_es_unsafe(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
         np.random.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
 
-    nounlist_path = resolve_path(cfg.nounlist, Path(original_cwd))
+    nounlist_path = resolve_nounlist(cfg.nounlist, Path(original_cwd))
     config_path = resolve_path(cfg.config, Path(original_cwd))
     output_root = resolve_path(cfg.output_dir, Path(original_cwd))
 
@@ -402,7 +404,7 @@ def _run_es_unsafe(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
     state_path = run_dir / STATE_FILENAME
     args_signature = make_args_signature(cfg, nouns, nounlist_path, config_path, output_root)
 
-    config = build_config(config_path, cfg.batch_size, cfg.mutation_strength)
+    config = build_config(config_path, cfg.batch_size, cfg.mutation_strength, cfg.crossover_strength)
     print(f"Starting CLIP noun-niche ES run: {run_name}")
     clip = load_clip_components(cfg.clip_model, cfg.clip_pretrained, cfg.device, nouns)
     activation_choices = [opt for opt in getattr(config.genome_config, "activation_options", [])]
@@ -476,12 +478,19 @@ def _run_es_unsafe(cfg: ClipNounNicheConfig, original_cwd: Path) -> None:
 
         children: List[PicbreederGenome] = []
         for _ in range(cfg.batch_size):
-            parent = random.choice(parents)
             key, next_key_value = allocate_key(next_key_value)
             if random.random() < cfg.new_random_prob:
                 child = _new_random_genome(config, key, activation_choices)
             else:
-                child = PicbreederReproduction._clone_genome(parent, key)  # type: ignore[attr-defined]
+                # If crossover is enabled, use it with probability crossover_strength (if we have enough parents).
+                if cfg.crossover_strength > 0 and len(parents) > 1 and random.random() < cfg.crossover_strength:
+                    parent1 = random.choice(parents)
+                    parent2 = random.choice(parents)
+                    child = config.genome_type(key)
+                    child.configure_crossover(parent1, parent2, config.genome_config)
+                else:
+                    parent = random.choice(parents)
+                    child = PicbreederReproduction._clone_genome(parent, key)  # type: ignore[attr-defined]
                 child.mutate(config.genome_config)
             children.append(child)
 

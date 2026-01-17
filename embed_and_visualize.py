@@ -44,6 +44,7 @@ from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import rasterfairy
 
 from config import PicbreederConfig, ensure_valid_config
+from model_loader import prepare_model
 
 
 
@@ -66,7 +67,7 @@ _RASTERFAIRY_READY = False
 
 @dataclass
 class EmbedVisualizeConfig(PicbreederConfig):
-    embedding_model: str = "ViT-H-16"
+    embedding_model: str = "SigLIP2-B-alignet"
     pretrained: str = "laion2b_s32b_b79k"
     method: str = "umap"
     batch_size: int = 64
@@ -100,12 +101,7 @@ ConfigStore.instance().store(name="embed_visualize_base", node=EmbedVisualizeCon
 def prepare_openclip_components(cfg: EmbedVisualizeConfig, device: torch.device):
     """Create the OpenCLIP model + preprocess transform for this config."""
 
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        cfg.embedding_model,
-        pretrained=cfg.pretrained,
-    )
-    model.to(device)
-    model.eval()
+    model, preprocess, _ = prepare_model(cfg, device)
     return model, preprocess
 
 

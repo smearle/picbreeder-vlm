@@ -27,7 +27,7 @@ from compute_noun_similarity import (
     save_trajectory_json,
     NounSimilarityConfig,
 )
-from utils import _ensure_absolute, load_human_archive_images
+from utils import _ensure_absolute, load_human_archive_images, resolve_nounlist
 from config import ensure_valid_config
 
 
@@ -59,7 +59,7 @@ def main(
     # Construct archive dir based on render_size
     root_dir = original_cwd
     archive_dir = root_dir / "fer/src" / f"archive_res-{validated_cfg.render_size}"
-    noun_file = _ensure_absolute(Path(validated_cfg.noun_file), original_cwd)
+    noun_file = resolve_nounlist(validated_cfg.nounlist, original_cwd)
     
     print(f"Looking for images in {archive_dir}")
     try:

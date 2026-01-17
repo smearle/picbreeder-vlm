@@ -2,9 +2,11 @@ import json
 import os
 from pathlib import Path
 import random
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 import numpy
+
+from constants import NOUN_LISTS_DIR
 
 
 def apply_random_seed(seed: Optional[int]) -> None:
@@ -110,6 +112,25 @@ def _ensure_absolute(path: Path, base: Path) -> Path:
     if expanded.is_absolute():
         return expanded.resolve()
     return (base / expanded).resolve()
+
+
+def resolve_nounlist(name_or_path: Union[str, Path], original_cwd: Path) -> Path:
+    """Resolve a noun list parameter to an absolute path.
+
+    If the value ends in .txt, it is treated as a path (relative to cwd or absolute).
+    Otherwise, it is treated as a stem name in the noun_lists directory.
+    """
+    if not name_or_path:
+        raise ValueError("Nounlist name or path cannot be empty.")
+    
+    name_or_path = str(name_or_path)
+
+    if name_or_path.endswith(".txt"):
+        path = Path(name_or_path)
+        return _ensure_absolute(path, original_cwd)
+    
+    # It's a name, look in noun_lists
+    return (original_cwd / NOUN_LISTS_DIR / f"{name_or_path}.txt").resolve()
 
 
 def _ensure_int_list(values: Iterable[Any]) -> List[int]:
