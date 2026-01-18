@@ -241,7 +241,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--thumb-size",
         type=int,
-        default=96,
+        default=64,
         help="Pixel size for rendered genome thumbnails embedded in the tree (set to 0 to disable).",
     )
     parser.add_argument(

@@ -221,6 +221,13 @@ def write_aggregate_plot(
                 }
                 if use_black:
                     kwargs["color"] = "black"
+                else:
+                    # Explicit coloring for known baselines
+                    if "human" in label.lower():
+                        kwargs["color"] = "black"
+                    elif "random" in label.lower():
+                        kwargs["color"] = "red"
+                    # Else let it cycle or pick default
 
                 ax.plot(indices, values, **kwargs)
                 plotted += 1
@@ -294,7 +301,7 @@ def write_scalar_bar_plot(
     cmap = plt.get_cmap("tab20")
     colors = [cmap(i % cmap.N) for i in range(len(labels))]
 
-    ax.bar(x, means, yerr=stds, capsize=6, color=colors, width=0.4)
+    ax.bar(x, means, yerr=stds, capsize=6, color=colors)
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
@@ -315,6 +322,13 @@ def write_scalar_bar_plot(
             }
             if use_black:
                 kwargs["color"] = "black"
+            else:
+                # Explicit coloring for known baselines
+                if "human" in label.lower():
+                    kwargs["color"] = "black"
+                elif "random" in label.lower():
+                    kwargs["color"] = "red"
+                # Else let it cycle or pick default
             
             ax.axhline(y=val, **kwargs)
 

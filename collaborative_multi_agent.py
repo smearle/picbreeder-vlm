@@ -405,26 +405,23 @@ class CollaborativeMultiAgentOrchestrator:
         self.agents_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_path = self.experiment_dir / "agents_metadata.json"
         self._metadata = self._load_metadata()
-        self._ensure_run_config()
-        self._parallel_workers_active = False
-
-        self._personality_records: List[Dict[str, Any]] = []
-        self._personality_prompts: List[str] = []
-        if self.config.generate_personalities:
-            self._personality_records = self._load_personality_records()
-            self._personality_prompts = [
-                self._format_personality_prompt(record) for record in self._personality_records
-            ]
-            if not self._personality_prompts:
-                raise ValueError(
-                    "Personality generation is enabled, but no personality prompts were loaded."
-                )
-            print(
-                f"Loaded {len(self._personality_prompts)} personality prompts from {self.config.personality_path}"
-            )
-        
+        # Determine personality traits list (before verifying config, so it can be saved)
         self._personality_traits_list: List[str] = []
-        if self.config.n_personality_traits > 0:
+        
+        # Check metadata first
+        existing_run_config = self._metadata.get("run_config") or {}
+        saved_traits = existing_run_config.get("sampled_personality_traits")
+        
+        if saved_traits and isinstance(saved_traits, list):
+            self._personality_traits_list = saved_traits
+            print(f"Loaded {len(self._personality_traits_list)} personality traits from metadata.")
+        elif self.config.n_personality_traits > 0:
+            if self._metadata.get("agents"):
+                raise RuntimeError(
+                    "Resuming an experiment that has existing agents, but 'sampled_personality_traits' "
+                    "is missing from metadata. Cannot ensure consistency with a new random sample."
+                )
+
             traits_path = self.experiment_dir.parent / TRAITS_FILE # Or just use repo root?
             # User said: "we'll hardcode the path as a constant for now".
             # The script saves to current directory (repo root).
@@ -450,6 +447,24 @@ class CollaborativeMultiAgentOrchestrator:
                     print(f"Error loading personality traits from {traits_path}: {e}")
             else:
                  print(f"Warning: Personality traits file not found at {traits_path}, but n_personality_traits > 0.")
+
+        self._ensure_run_config()
+        self._parallel_workers_active = False
+
+        self._personality_records: List[Dict[str, Any]] = []
+        self._personality_prompts: List[str] = []
+        if self.config.generate_personalities:
+            self._personality_records = self._load_personality_records()
+            self._personality_prompts = [
+                self._format_personality_prompt(record) for record in self._personality_records
+            ]
+            if not self._personality_prompts:
+                raise ValueError(
+                    "Personality generation is enabled, but no personality prompts were loaded."
+                )
+            print(
+                f"Loaded {len(self._personality_prompts)} personality prompts from {self.config.personality_path}"
+            )
 
     def _load_metadata(self) -> Dict[str, Any]:
         if self.metadata_path.exists():
@@ -561,6 +576,7 @@ class CollaborativeMultiAgentOrchestrator:
             "request_rationale": self.config.request_rationale,
             "fixed_session_lengths": self.config.fixed_session_lengths,
             "n_personality_traits": self.config.n_personality_traits,
+            "sampled_personality_traits": self._personality_traits_list,
         }
         existing = self._metadata.get("run_config")
         if existing is None:
@@ -589,6 +605,8 @@ class CollaborativeMultiAgentOrchestrator:
             missing.append(("fixed_session_lengths", self.config.fixed_session_lengths))
         if "n_personality_traits" not in existing:
             missing.append(("n_personality_traits", self.config.n_personality_traits))
+        if "sampled_personality_traits" not in existing:
+            missing.append(("sampled_personality_traits", self._personality_traits_list))
         if missing:
             def mutator(data: Dict[str, Any]) -> None:
                 details = data.setdefault("run_config", {})
@@ -914,28 +932,60 @@ class CollaborativeMultiAgentOrchestrator:
         config = copy.copy(self.config)
         config.temperature = temperature
         config.model = model
-        return AgentRunner(
-            agent_id,
-            agent_dir,
-            config=config,
-            neat_config=neat_config,
-            archive_manager=self.archive_manager,
-            generations=self.agent_generations,
-            rows=self.rows,
-            cols=self.cols,
-            thumb_size=self.thumb_size,
-            scheme=self.scheme,
-            select_k=self.select_k,
-            chat_history_turns=self.chat_history_turns,
-            selection_baseline=self.selection_baseline,
-            population=population,
-            progress_callback=callback,
-            resume_mode=resume,
-            warm_start_active=self._is_warm_start_agent(agent_id),
-            render_genome_diagrams=self.render_genome_diagrams,
-            process_index=self.process_index,
-            personality_prompt=final_personality_prompt,
-        )
+        
+        try:
+            return AgentRunner(
+                agent_id,
+                agent_dir,
+                config=config,
+                neat_config=neat_config,
+                archive_manager=self.archive_manager,
+                generations=self.agent_generations,
+                rows=self.rows,
+                cols=self.cols,
+                thumb_size=self.thumb_size,
+                scheme=self.scheme,
+                select_k=self.select_k,
+                chat_history_turns=self.chat_history_turns,
+                selection_baseline=self.selection_baseline,
+                population=population,
+                progress_callback=callback,
+                resume_mode=resume,
+                warm_start_active=self._is_warm_start_agent(agent_id),
+                render_genome_diagrams=self.render_genome_diagrams,
+                process_index=self.process_index,
+                personality_prompt=final_personality_prompt,
+            )
+        except ValueError as e:
+            if "Could not restore image for chat history" in str(e):
+                print(f"[{agent_id}] Encountered corruption during initialization: {e}. Cleaning up agent directory and restarting from scratch.")
+                if agent_dir.exists():
+                    shutil.rmtree(agent_dir)
+                agent_dir.mkdir(parents=True, exist_ok=True)
+
+                return AgentRunner(
+                    agent_id,
+                    agent_dir,
+                    config=config,
+                    neat_config=neat_config,
+                    archive_manager=self.archive_manager,
+                    generations=self.agent_generations,
+                    rows=self.rows,
+                    cols=self.cols,
+                    thumb_size=self.thumb_size,
+                    scheme=self.scheme,
+                    select_k=self.select_k,
+                    chat_history_turns=self.chat_history_turns,
+                    selection_baseline=self.selection_baseline,
+                    population=None,
+                    progress_callback=callback,
+                    resume_mode=False,
+                    warm_start_active=self._is_warm_start_agent(agent_id),
+                    render_genome_diagrams=self.render_genome_diagrams,
+                    process_index=self.process_index,
+                    personality_prompt=final_personality_prompt,
+                )
+            raise e
 
     def _on_generation_progress(
         self,
@@ -1287,7 +1337,14 @@ class CollaborativeMultiAgentOrchestrator:
         goal_prompt = self.archive_manager.goal_prompt
         archive_dir = self.archive_manager.archive_dir
         try:
-            results = _perform_rating(targets, goal_prompt, archive_dir, model=self.config.model)
+            results = _perform_rating(
+                targets,
+                goal_prompt,
+                archive_dir,
+                model=self.config.model,
+                rand_select_prob=self.config.rand_select_prob,
+                rand_select_mode=getattr(self.config, "rand_select_mode", "select-only"),
+            )
         except Exception as exc:  # pylint: disable=broad-except
             print(f"Auto-rating failed: {exc}")
             self.archive_manager.mark_auto_rating_failed(trigger_entry_count)
@@ -2005,6 +2062,8 @@ def _maybe_trigger_auto_rating_after_publish(
         goal_prompt=goal_prompt,
         archive_dir=archive_dir,
         model=cfg.model,
+        rand_select_prob=cfg.rand_select_prob,
+        rand_select_mode=getattr(cfg, "rand_select_mode", "select-only"),
     )
 
 
@@ -2097,28 +2156,60 @@ def _execute_agent_task(
         else:
             final_personality_prompt = traits_str
 
-    runner = AgentRunner(
-        task.agent_id,
-        agent_dir,
-        config=agent_cfg,
-        neat_config=config,
-        archive_manager=archive_client,
-        generations=agent_cfg.agent_generations,
-        rows=agent_cfg.rows,
-        cols=agent_cfg.cols,
-        thumb_size=agent_cfg.thumb_size,
-        scheme=agent_cfg.scheme,
-        select_k=agent_cfg.select_k,
-        chat_history_turns=agent_cfg.chat_history_turns,
-        selection_baseline=agent_cfg.selection_baseline,
-        population=population,
-        progress_callback=progress_callback,
-        resume_mode=task.resume,
-        warm_start_active=task.warm_start_active,
-        render_genome_diagrams=agent_cfg.render_genome_diagrams,
-        process_index=worker_index,
-        personality_prompt=final_personality_prompt,
-    )
+    try:
+        runner = AgentRunner(
+            task.agent_id,
+            agent_dir,
+            config=agent_cfg,
+            neat_config=config,
+            archive_manager=archive_client,
+            generations=agent_cfg.agent_generations,
+            rows=agent_cfg.rows,
+            cols=agent_cfg.cols,
+            thumb_size=agent_cfg.thumb_size,
+            scheme=agent_cfg.scheme,
+            select_k=agent_cfg.select_k,
+            chat_history_turns=agent_cfg.chat_history_turns,
+            selection_baseline=agent_cfg.selection_baseline,
+            population=population,
+            progress_callback=progress_callback,
+            resume_mode=task.resume,
+            warm_start_active=task.warm_start_active,
+            render_genome_diagrams=agent_cfg.render_genome_diagrams,
+            process_index=worker_index,
+            personality_prompt=final_personality_prompt,
+        )
+    except ValueError as e:
+        if "Could not restore image for chat history" in str(e):
+            print(f"[{task.agent_id}] Encountered corruption during initialization: {e}. Cleaning up agent directory and restarting from scratch.")
+            if agent_dir.exists():
+                shutil.rmtree(agent_dir)
+            agent_dir.mkdir(parents=True, exist_ok=True)
+
+            runner = AgentRunner(
+                task.agent_id,
+                agent_dir,
+                config=agent_cfg,
+                neat_config=config,
+                archive_manager=archive_client,
+                generations=agent_cfg.agent_generations,
+                rows=agent_cfg.rows,
+                cols=agent_cfg.cols,
+                thumb_size=agent_cfg.thumb_size,
+                scheme=agent_cfg.scheme,
+                select_k=agent_cfg.select_k,
+                chat_history_turns=agent_cfg.chat_history_turns,
+                selection_baseline=agent_cfg.selection_baseline,
+                population=None,
+                progress_callback=progress_callback,
+                resume_mode=False,
+                warm_start_active=task.warm_start_active,
+                render_genome_diagrams=agent_cfg.render_genome_diagrams,
+                process_index=worker_index,
+                personality_prompt=final_personality_prompt,
+            )
+        else:
+            raise e
 
     if task.resume:
         decision = task.branching_decision
@@ -2182,6 +2273,7 @@ def _continual_agent_worker(
 ) -> None:
     cfg = _deserialize_config_for_worker(cfg_payload)
     worker_seed = None if cfg.seed is None else cfg.seed + worker_index
+    print(f"[Worker {worker_index}] Applying random seed: {worker_seed}")
     apply_random_seed(worker_seed)
     if cfg.selection_baseline == "none":
         ensure_gemini_key()

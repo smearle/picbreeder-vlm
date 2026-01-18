@@ -28,5 +28,6 @@ mutation_logs
 cross_eval
 clip_noun_niche_es_logs/*
 fer/src/archive*
+fer/src/lineages*
 cross_eval_clip_niches/*
 SigLIP2-B-alignet*

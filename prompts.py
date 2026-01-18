@@ -18,7 +18,7 @@ GOAL_PROMPTS = {
 }
 
 # DEBUG_PROMPT = (
-#     "(Also, for debugging, please tell me how many images you see in the current prompt; add this to the `rationale` text.) "
+#     "(Also, for debugging, please tell me how many images in total you see in your context, if you see them; add this to the `rationale` text.) "
 # )
 
 DEFAULT_SYSTEM_INSTRUCTION = (

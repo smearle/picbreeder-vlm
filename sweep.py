@@ -8,6 +8,7 @@ import re
 import sys
 import json
 import multiprocessing
+import numpy as np
 from dataclasses import dataclass, field, replace, fields, asdict
 from itertools import product
 from pathlib import Path
@@ -176,7 +177,7 @@ class RandSelectProbSweep(SweepConfig):
 
 @dataclass
 class FullRandSelectProbSweep(SweepConfig):
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0, 2.0])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0])
     rand_select_mode: str = 'all'
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
@@ -184,7 +185,19 @@ class FullRandSelectProbSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     thumb_size: List[int] = field(default_factory=lambda: [128,])
-    num_agents: int = 500
+    num_agents: int = 1_000
+
+@dataclass
+class RandBaselineSweep(SweepConfig):
+    rand_select_prob: List[float] = field(default_factory=lambda: [2.0])
+    rand_select_mode: str = 'all'
+    chat_history_turns: List[int] = field(default_factory=lambda: [1])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    thumb_size: List[int] = field(default_factory=lambda: [128,])
+    num_agents: int = 9_586
 
 @dataclass
 class ModelSweep(SweepConfig):
@@ -216,7 +229,7 @@ class LongSweep(SweepConfig):
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3])
-    num_agents: int = 10_000
+    num_agents: int = 9_586
 
 @dataclass
 class LongSweep2(SweepConfig):
@@ -227,7 +240,7 @@ class LongSweep2(SweepConfig):
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [5])
-    num_agents: int = 10_000
+    num_agents: int = 9_586
 
 
 _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
@@ -237,6 +250,7 @@ _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "temperature": TemperatureSweep,
     "rand_select_prob": RandSelectProbSweep,
     "full_rand_select_prob": FullRandSelectProbSweep,
+    "rand_baseline": RandBaselineSweep,
     "model": ModelSweep,
     "traits": TraitsSweep,
     "long_sweep": LongSweep,
@@ -676,6 +690,122 @@ def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path, model_name: Opt
     return None
 
 
+def _get_random_baseline_configs(
+    num_agents: int,
+    thumb_size: int,
+    nounlist: str,
+    original_cwd: Path
+) -> List[PicbreederConfig]:
+    """Generate run configs for the Random Baseline (rand_select_prob=2.0)."""
+    base = RandBaselineSweep()
+    base.num_agents = num_agents
+    base.thumb_size = [thumb_size]
+    base.nounlist = [nounlist]
+    
+    configs = _expand_sweep_configs(base)
+    
+    existing = []
+    for cfg in configs:
+        run_cfg = _build_run_config(cfg, original_cwd)
+        if Path(run_cfg.experiment_dir).exists():
+            existing.append(run_cfg)
+            
+    return existing
+
+def _compute_mean_trajectory(
+    run_configs: List[PicbreederConfig],
+    metric_type: str,
+    model_name: Optional[str] = None,
+    nounlist_name: Optional[str] = None,
+) -> Optional[Dict[int, float]]:
+    trajectories = []
+    for run_cfg in run_configs:
+        exp_dir = Path(run_cfg.experiment_dir)
+        limit = run_cfg.num_agents
+        
+        if metric_type == "novelty":
+            suffix = ""
+            if model_name:
+                sanitized = model_name.replace("/", "-")
+                suffix = f"_{sanitized}"
+            
+            path = exp_dir / f"embedding_mean_pairwise_distance_over_time{suffix}.json"
+            if path.exists():
+                traj = _load_trajectory_metric(path, "mean_pairwise_distance")
+                traj = {k: v for k, v in traj.items() if k <= limit}
+                if traj:
+                    trajectories.append(traj)
+                    
+        elif metric_type == "noun":
+            if not nounlist_name:
+                continue
+            suffix = ""
+            if model_name:
+                sanitized = model_name.replace("/", "-")
+                suffix = f"_{sanitized}"
+            
+            path = exp_dir / f"noun_similarity_over_time_{nounlist_name}{suffix}.json"
+            if path.exists():
+                traj = _load_trajectory_metric(path, "mean_max_similarity")
+                traj = {k: v for k, v in traj.items() if k <= limit}
+                if traj:
+                    trajectories.append(traj)
+
+    if not trajectories:
+        return None
+
+    # Compute mean per step
+    all_steps = set()
+    for t in trajectories:
+        all_steps.update(t.keys())
+    
+    mean_traj = {}
+    sorted_steps = sorted(all_steps)
+    for step in sorted_steps:
+        values = [t[step] for t in trajectories if step in t]
+        if values:
+            mean_traj[step] = float(np.mean(values))
+            
+    return mean_traj
+
+def _compute_mean_scalar(
+    run_configs: List[PicbreederConfig],
+    metric_type: str,
+    model_name: Optional[str] = None,
+    nounlist_name: Optional[str] = None,
+) -> Optional[float]:
+    values = []
+    for run_cfg in run_configs:
+        exp_dir = Path(run_cfg.experiment_dir)
+        val = None
+        
+        if metric_type == "novelty":
+            val = _load_embedding_mean_pairwise_distance_scalar(exp_dir, model_name)
+        elif metric_type == "noun":
+            val = _load_noun_similarity_scalar(exp_dir, model_name, nounlist_name)
+        elif metric_type in ("sackin", "colless", "depth"):
+             metrics_path = exp_dir / "archive" / "phylogeny_metrics.json"
+             if metrics_path.exists():
+                 try:
+                    m = json.loads(metrics_path.read_text(encoding="utf-8"))
+                    if metric_type == "sackin":
+                        val = m.get("sackin_index")
+                    elif metric_type == "colless":
+                        val = m.get("colless_index")
+                    elif metric_type == "depth":
+                        val = m.get("max_depth")
+                 except Exception:
+                     pass
+        
+        if val is not None:
+            values.append(float(val))
+            
+    if not values:
+        return None
+        
+    return float(np.mean(values))
+
+
 def _plot_seed_aggregates(
     *,
     run_configs: Sequence[PicbreederConfig],
@@ -712,6 +842,10 @@ def _plot_seed_aggregates(
     baselines_novelty: List[Tuple[str, Dict[int, float]]] = []
     baselines_noun: List[Tuple[str, Dict[int, float]]] = []
     
+    # Store random baseline scalars separately to merge later
+    extra_scalars_novelty: List[Tuple[str, float]] = []
+    extra_scalars_noun: List[Tuple[str, float]] = []
+    
     if run_configs:
         baseline_model_novelty = image_embedding_model if image_embedding_model else "ViT-B-32"
         baseline_model_noun = text_image_embedding_model if text_image_embedding_model else "ViT-H-14"
@@ -728,6 +862,38 @@ def _plot_seed_aggregates(
                  bnn = load_human_baseline("noun", size, baseline_model_noun, nounlist=nl_name)
                  if bnn:
                      baselines_noun.append((f"Human Baseline{label_suffix}{nl_suffix}", bnn))
+            
+            # Random Baseline
+            for nl_name in used_nounlists:
+                nl_suffix = f" {nl_name}" if len(used_nounlists) > 1 else ""
+                
+                # Fetch random baseline runs
+                # Using run_configs[0].num_agents assuming constant limit
+                limit = run_configs[0].num_agents if run_configs else 0
+                if limit > 0:
+                     rb_configs = _get_random_baseline_configs(limit, size, nl_name, Path(get_original_cwd()))
+                     if rb_configs:
+                         # Novelty
+                         traj_nov = _compute_mean_trajectory(rb_configs, "novelty", image_embedding_model)
+                         if traj_nov:
+                             baselines_novelty.append((f"Random Baseline{label_suffix}", traj_nov))
+                             scalar_nov = _compute_mean_scalar(rb_configs, "novelty", image_embedding_model)
+                             if scalar_nov is not None:
+                                 extra_scalars_novelty.append((f"Random Baseline{label_suffix}", scalar_nov))
+
+                         # Noun
+                         traj_noun = _compute_mean_trajectory(rb_configs, "noun", text_image_embedding_model, nl_name)
+                         if traj_noun:
+                             baselines_noun.append((f"Random Baseline{label_suffix}{nl_suffix}", traj_noun))
+                             scalar_noun = _compute_mean_scalar(rb_configs, "noun", text_image_embedding_model, nl_name)
+                             if scalar_noun is not None:
+                                 extra_scalars_noun.append((f"Random Baseline{label_suffix}{nl_suffix}", scalar_noun))
+                         
+                         # Avoid adding novelty baseline multiple times if we loop over nounlists 
+                         # (though directories might differ, novelty is same concept).
+                         # But since we look up runs by nounlist, we might find different runs.
+                         # If multiple nounlists are used in current sweep, we might have multiple random baselines?
+                         # Let's just keep them all for now, labeled by nounlist if necessary.
 
     for run_cfg in run_configs:
         group_key = _group_key_for_aggregate(run_cfg)
@@ -805,9 +971,11 @@ def _plot_seed_aggregates(
     
     max_x_novelty = _compute_max_x(novelty_grouped)
     baseline_scalars_novelty = _extract_baseline_scalars(baselines_novelty, max_x_novelty) if max_x_novelty > 0 else []
+    baseline_scalars_novelty.extend(extra_scalars_novelty)
 
     max_x_noun = _compute_max_x(noun_grouped)
     baseline_scalars_noun = _extract_baseline_scalars(baselines_noun, max_x_noun) if max_x_noun > 0 else []
+    baseline_scalars_noun.extend(extra_scalars_noun)
     
     if len(used_nounlists) == 1:
         nounlist_name_for_file = list(used_nounlists)[0]
@@ -850,6 +1018,123 @@ def _plot_seed_aggregates(
     )
 
 
+def _plot_tree_metrics_aggregates(
+    *,
+    run_configs: Sequence[PicbreederConfig],
+    output_dir: Path,
+    filename_tag: str,
+) -> None:
+    sackin_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+    colless_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+    depth_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+
+    missing_metrics = []
+
+    for run_cfg in run_configs:
+        group_key = _group_key_for_aggregate(run_cfg)
+        metrics_path = Path(run_cfg.experiment_dir) / "archive" / "phylogeny_metrics.json"
+        
+        if metrics_path.exists():
+            try:
+                m = json.loads(metrics_path.read_text(encoding="utf-8"))
+                if m.get("sackin_index") is not None:
+                    sackin_grouped.setdefault(group_key, []).append(float(m["sackin_index"]))
+                if m.get("colless_index") is not None:
+                    colless_grouped.setdefault(group_key, []).append(float(m["colless_index"]))
+                if m.get("max_depth") is not None:
+                    depth_grouped.setdefault(group_key, []).append(float(m["max_depth"]))
+            except Exception as e:
+                print(f"Error reading metrics from {metrics_path}: {e}")
+        else:
+            missing_metrics.append(metrics_path)
+
+    if missing_metrics:
+        print(f"Warning: Missing tree metrics for {len(missing_metrics)} runs (out of {len(run_configs)}).")
+        # Only print specific paths if just a few are missing, to avoid spam
+        if len(missing_metrics) < 5:
+            for p in missing_metrics:
+                print(f"  Missing: {p}")
+
+    # Load human baseline if available
+    human_metrics_path = Path("figures/lineages/lineage_phylogeny_metrics.json")
+    human_baselines_sackin = []
+    human_baselines_colless = []
+    human_baselines_depth = []
+
+    if run_configs:
+         # Random Baseline
+         # Check unique thumb sizes and nounlists
+         unique_sizes = sorted(list({cfg.thumb_size for cfg in run_configs}))
+         used_nounlists = sorted(list({Path(cfg.nounlist).stem for cfg in run_configs}))
+         limit = run_configs[0].num_agents
+         
+         for size in unique_sizes:
+             label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
+             
+             for nl_name in used_nounlists:
+                 nl_suffix = f" {nl_name}" if len(used_nounlists) > 1 else ""
+                 
+                 rb_configs = _get_random_baseline_configs(limit, size, nl_name, Path(get_original_cwd()))
+                 if rb_configs:
+                     # Tree Metrics
+                     val = _compute_mean_scalar(rb_configs, "sackin")
+                     if val is not None:
+                         human_baselines_sackin.append((f"Random Baseline{label_suffix}", val))
+                     
+                     val = _compute_mean_scalar(rb_configs, "colless")
+                     if val is not None:
+                         human_baselines_colless.append((f"Random Baseline{label_suffix}", val))
+                         
+                     val = _compute_mean_scalar(rb_configs, "depth")
+                     if val is not None:
+                         human_baselines_depth.append((f"Random Baseline{label_suffix}", val))
+
+    if human_metrics_path.exists() and run_configs:
+         try:
+            hm = json.loads(human_metrics_path.read_text(encoding="utf-8"))
+            # hm is keyed by limit string "500", "750", etc.
+            target_limit = str(run_configs[0].num_agents)
+            
+            if target_limit in hm:
+                m = hm[target_limit]
+                if m.get("sackin_index") is not None:
+                    human_baselines_sackin.append(("Human Baseline", float(m["sackin_index"])))
+                if m.get("colless_index") is not None:
+                    human_baselines_colless.append(("Human Baseline", float(m["colless_index"])))
+                if m.get("max_depth") is not None:
+                    human_baselines_depth.append(("Human Baseline", float(m["max_depth"])))
+         except Exception as e:
+             print(f"Error reading human baseline metrics: {e}")
+
+    # Plot aggregates
+    if any(len(v) > 0 for v in sackin_grouped.values()):
+        write_scalar_bar_plot(
+            grouped_values=sackin_grouped,
+            outpath=output_dir / f"aggregate_sackin_index_{filename_tag}.png",
+            title="Sackin Index (Tree Balance) (mean±std across seeds)",
+            ylabel="Sackin Index (lower is more balanced)",
+            baselines=human_baselines_sackin,
+        )
+    
+    if any(len(v) > 0 for v in colless_grouped.values()):
+        write_scalar_bar_plot(
+            grouped_values=colless_grouped,
+            outpath=output_dir / f"aggregate_colless_index_{filename_tag}.png",
+            title="Colless Index (Tree Balance) (mean±std across seeds)",
+            ylabel="Colless Index (lower is more balanced)",
+            baselines=human_baselines_colless,
+        )
+        
+    if any(len(v) > 0 for v in depth_grouped.values()):
+        write_scalar_bar_plot(
+            grouped_values=depth_grouped,
+            outpath=output_dir / f"aggregate_tree_depth_{filename_tag}.png",
+            title="Max Tree Depth (mean±std across seeds)",
+            ylabel="Max Depth",
+            baselines=human_baselines_depth,
+        )
+
+
 def _expand_sweep_configs(cfg: SweepConfig) -> List[SweepConfig]:
     """Produce one config per cartesian product of list-valued fields."""
     pic_fields = {field_def.name for field_def in fields(PicbreederConfig) if field_def.name != "hydra"}
@@ -873,10 +1158,15 @@ def _expand_sweep_configs(cfg: SweepConfig) -> List[SweepConfig]:
         return []
 
     configs: List[SweepConfig] = []
-    cfg = {k: v for k, v in cfg.items() if hasattr(PicbreederConfig, k)}
+    
+    if hasattr(cfg, "items"):
+        cfg_dict = {k: v for k, v in cfg.items() if hasattr(PicbreederConfig, k)}
+    else:
+        cfg_dict = {k: v for k, v in asdict(cfg).items() if hasattr(PicbreederConfig, k)}
+
     for combo in product(*(values for _, values in sweep_axes)):
         updates = {name: value for (name, _), value in zip(sweep_axes, combo)}
-        configs.append(replace(SweepConfig(**cfg), **updates))
+        configs.append(replace(SweepConfig(**cfg_dict), **updates))
     return configs
 
 
@@ -970,6 +1260,12 @@ def main(cfg: SweepConfig) -> None:
             filename_tag=filename_tag,
             image_embedding_model=cfg.image_embedding_model,
             text_image_embedding_model=cfg.text_image_embedding_model,
+        )
+
+        _plot_tree_metrics_aggregates(
+            run_configs=run_configs,
+            output_dir=cross_eval_dir,
+            filename_tag=filename_tag,
         )
 
         metrics_name = DEFAULT_METRICS_FILENAME
@@ -1189,6 +1485,13 @@ def main(cfg: SweepConfig) -> None:
                         print(f"Copied {src_file.name} -> {dest_dir / dest_name}")
                     else:
                         print(f"Warning: Expected output {src_file} not found.")
+
+                # Plot aggregates
+                _plot_tree_metrics_aggregates(
+                    run_configs=run_configs,
+                    output_dir=cross_eval_dir,
+                    filename_tag=filename_tag,
+                )
 
         finally:
             os.chdir(previous_cwd)
