@@ -44,7 +44,7 @@ from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import rasterfairy
 
 from config import PicbreederConfig, ensure_valid_config
-from model_loader import prepare_model
+from model_loader import prepare_model, embed_images
 
 
 
@@ -109,40 +109,13 @@ def prepare_openclip_components(cfg: EmbedVisualizeConfig, device: torch.device)
 
 def load_image_paths(experiment_dir: Path):
     images_dir = experiment_dir / "archive" / "images"
-    if not images_dir.exists():
-        raise FileNotFoundError(f"Images directory not found: {images_dir}")
     imgs = sorted(images_dir.glob("*.png"))
+    if not images_dir.exists():
+        print(f"Warning: Images directory not found: {images_dir}. Searching experiment directory directly...")
+        imgs = sorted(experiment_dir.glob("*.png"))
+        if not imgs:
+            raise FileNotFoundError(f"No PNG images found in {experiment_dir} or its parent directory.")
     return imgs
-
-
-def batch(iterable, n=32):
-    l = len(iterable)
-    for i in range(0, l, n):
-        yield iterable[i : i + n]
-
-
-def embed_images(model, preprocess, image_paths, device, batch_size=64):
-    model.eval()
-    embeddings = []
-    filenames = []
-    with torch.no_grad():
-        for chunk in batch(image_paths, batch_size):
-            tensors = []
-            for p in chunk:
-                img = Image.open(p).convert("RGB")
-                t = preprocess(img)
-                tensors.append(t)
-                filenames.append(str(p.name))
-            x = torch.stack(tensors, dim=0).to(device)
-            emb = model.encode_image(x)
-            emb = emb.cpu().numpy()
-            # L2 normalize
-            norm = np.linalg.norm(emb, axis=1, keepdims=True)
-            norm[norm == 0] = 1.0
-            emb = emb / norm
-            embeddings.append(emb)
-    embeddings = np.vstack(embeddings)
-    return filenames, embeddings
 
 
 def reduce_embeddings(embeddings, method="umap"):
@@ -193,149 +166,6 @@ def plot_coords(coords, image_paths, outpath: Path, thumbs_limit=200):
     fig.tight_layout()
     fig.savefig(outpath, dpi=150)
     plt.close(fig)
-
-
-# def _direction_priority(vec):
-#     """Return the cardinal direction order that best aligns with the embedding offset."""
-#     direction_vectors = {
-#         (0, 1): np.array([1.0, 0.0]),
-#         (0, -1): np.array([-1.0, 0.0]),
-#         (-1, 0): np.array([0.0, 1.0]),
-#         (1, 0): np.array([0.0, -1.0]),
-#     }
-#     base_order = [(0, 1), (0, -1), (-1, 0), (1, 0)]
-#     norm = np.linalg.norm(vec)
-#     if norm < 1e-9:
-#         return base_order
-#     vec_unit = vec / norm
-#     return sorted(base_order, key=lambda d: -float(np.dot(vec_unit, direction_vectors[d])))
-
-
-# def _find_grid_position(neighbor_pos, direction_order, occupied):
-#     """Breadth-first search for the nearest free grid cell, honoring a direction priority."""
-#     visited = set()
-#     queue = deque()
-#     visited.add(neighbor_pos)
-#     for direction in direction_order:
-#         target = (neighbor_pos[0] + direction[0], neighbor_pos[1] + direction[1])
-#         queue.append(target)
-
-#     default_dirs = direction_order
-#     safety_cap = 100000  # guard against unexpected infinite loops
-#     iterations = 0
-
-#     while queue:
-#         iterations += 1
-#         if iterations > safety_cap:
-#             raise RuntimeError("Grid placement search exceeded safety cap; layout may be stuck.")
-
-#         pos = queue.popleft()
-#         if pos in visited:
-#             continue
-#         visited.add(pos)
-
-#         if pos not in occupied:
-#             return pos
-
-#         for direction in default_dirs:
-#             next_pos = (pos[0] + direction[0], pos[1] + direction[1])
-#             if next_pos not in visited:
-#                 queue.append(next_pos)
-
-#     raise RuntimeError("Failed to find an empty grid position for image placement.")
-
-
-# def layout_embeddings_to_grid(coords: np.ndarray):
-#     """Assign each embedding to an integer grid coordinate while preserving locality."""
-#     coords = np.asarray(coords, dtype=float)
-#     n = coords.shape[0]
-#     if n == 0:
-#         return {}, (0, 0, 0, 0)
-
-#     centroid = coords.mean(axis=0)
-#     center_idx = int(np.argmin(np.linalg.norm(coords - centroid, axis=1)))
-
-#     assignments = {center_idx: (0, 0)}
-#     occupied = {(0, 0)}
-
-#     unassigned = [idx for idx in range(n) if idx != center_idx]
-#     if not unassigned:
-#         return assignments, (0, 0, 0, 0)
-
-#     unassigned_arr = np.array(unassigned, dtype=int)
-#     best_dist = np.abs(coords[unassigned_arr] - coords[center_idx]).sum(axis=1)
-#     best_neighbor = [center_idx for _ in unassigned]
-
-#     while unassigned:
-#         min_pos = int(np.argmin(best_dist))
-#         idx = unassigned.pop(min_pos)
-#         neighbor_idx = best_neighbor.pop(min_pos)
-#         best_dist = np.delete(best_dist, min_pos)
-
-#         neighbor_pos = assignments[neighbor_idx]
-#         vec = coords[idx] - coords[neighbor_idx]
-#         direction_order = _direction_priority(vec)
-#         new_pos = _find_grid_position(neighbor_pos, direction_order, occupied)
-
-#         assignments[idx] = new_pos
-#         occupied.add(new_pos)
-
-#         if unassigned:
-#             unassigned_arr = np.array(unassigned, dtype=int)
-#             new_dists = np.abs(coords[unassigned_arr] - coords[idx]).sum(axis=1)
-#             mask = new_dists < best_dist
-#             best_dist[mask] = new_dists[mask]
-#             for i, use_new in enumerate(mask.tolist()):
-#                 if use_new:
-#                     best_neighbor[i] = idx
-
-#     rows = [pos[0] for pos in assignments.values()]
-#     cols = [pos[1] for pos in assignments.values()]
-#     bounds = (min(rows), max(rows), min(cols), max(cols))
-#     return assignments, bounds
-
-
-# def render_grid(assignments, bounds, image_paths, outpath: Path):
-#     """Render the grid-aligned images to disk."""
-#     if not assignments:
-#         return
-
-#     min_row, max_row, min_col, max_col = bounds
-#     rows = max_row - min_row + 1
-#     cols = max_col - min_col + 1
-
-#     fig_w = min(30.0, max(4.0, cols * 1.6))
-#     fig_h = min(30.0, max(4.0, rows * 1.6))
-#     fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h))
-
-#     if rows == 1 and cols == 1:
-#         axes = np.array([[axes]])
-#     elif rows == 1:
-#         axes = axes.reshape(1, cols)
-#     elif cols == 1:
-#         axes = axes.reshape(rows, 1)
-
-#     for r in range(rows):
-#         for c in range(cols):
-#             ax = axes[r, c]
-#             ax.set_xticks([])
-#             ax.set_yticks([])
-#             ax.axis("off")
-
-#     for idx, (row, col) in assignments.items():
-#         rr = row - min_row
-#         cc = col - min_col
-#         ax = axes[rr, cc]
-#         try:
-#             with Image.open(image_paths[idx]) as img:
-#                 img_rgb = img.convert("RGB")
-#             ax.imshow(img_rgb)
-#         except Exception:
-#             continue
-
-#     fig.tight_layout()
-#     fig.savefig(outpath, dpi=150)
-#     plt.close(fig)
 
 
 def _ensure_rasterfairy_ready():
@@ -634,7 +464,7 @@ def compute_embedding_metrics(
     *,
     random_state: int = 0,
     pairwise_sample_limit: int = 2000,
-    k_values=None,
+    # k_values=None,
 ):
     """Compute comprehensive metrics for embedding space coverage.
     
@@ -649,8 +479,8 @@ def compute_embedding_metrics(
     - Low coefficient of variation in k-center distances = even global coverage
     - Low cluster size CV = centers cover roughly equal numbers of points
     """
-    if k_values is None:
-        k_values = [1, 5, 10, 20]
+    # if k_values is None:
+    #     k_values = [1, 5, 10, 20]
 
     n = embeddings.shape[0]
     metrics = {
@@ -678,22 +508,22 @@ def compute_embedding_metrics(
         metrics["nearest_neighbor"] = nn_stats
 
     # K-center metrics for various k values
-    k_center_metrics = {}
-    for k in k_values:
-        result = _compute_k_center_metrics(embeddings, k)
-        if result is not None:
-            k_center_metrics[str(k)] = result
-    metrics["k_center"] = k_center_metrics
+    # k_center_metrics = {}
+    # for k in k_values:
+    #     result = _compute_k_center_metrics(embeddings, k)
+    #     if result is not None:
+    #         k_center_metrics[str(k)] = result
+    # metrics["k_center"] = k_center_metrics
 
     return metrics
-def _parse_k_center_values(raw: str) -> list[int]:
-    try:
-        values = [int(value.strip()) for value in raw.split(",") if value.strip()]
-    except ValueError as exc:  # pragma: no cover - validation guard
-        raise ValueError("k_center_values must be a comma-separated list of integers") from exc
-    if not values or any(value <= 0 for value in values):
-        raise ValueError("k_center_values must contain positive integers")
-    return values
+# def _parse_k_center_values(raw: str) -> list[int]:
+#     try:
+#         values = [int(value.strip()) for value in raw.split(",") if value.strip()]
+#     except ValueError as exc:  # pragma: no cover - validation guard
+#         raise ValueError("k_center_values must be a comma-separated list of integers") from exc
+#     if not values or any(value <= 0 for value in values):
+#         raise ValueError("k_center_values must contain positive integers")
+#     return values
 
 
 @hydra.main(version_base="1.3", config_path=None, config_name="embed_visualize_base")
@@ -726,34 +556,67 @@ def main(
     if (model is None) ^ (preprocess is None):
         raise ValueError("Provide both model and preprocess, or neither.")
 
-    if model is None:
-        print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
-        model, preprocess = prepare_openclip_components(validated_cfg, device)
-    else:
-        model.to(device)
-        model.eval()
-
-    print(f"Embedding {len(image_paths)} images (batch_size={validated_cfg.batch_size})...")
-    filenames, embeddings = embed_images(
-        model,
-        preprocess,
-        image_paths,
-        device,
-        batch_size=validated_cfg.batch_size,
-    )
-
     model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
+    pretrained_sanitized = str(validated_cfg.pretrained).replace("/", "-")
+    embeddings_cache_path = exp_dir / f"image_embeddings_cache_{model_name_sanitized}_{pretrained_sanitized}.npy"
+
+    cached_image_embeddings = None
+    existing_count = 0
+    if embeddings_cache_path.exists():
+        try:
+            print(f"Loading cached embeddings from {embeddings_cache_path}...")
+            cached_image_embeddings = np.load(embeddings_cache_path)
+            existing_count = cached_image_embeddings.shape[0]
+            print(f"Loaded {existing_count} cached embeddings.")
+        except Exception as e:
+            print(f"Failed to load cached embeddings: {e}")
+            cached_image_embeddings = None
+            existing_count = 0
+    
+    images_fully_cached = (existing_count >= len(image_paths))
+
+    if not images_fully_cached:
+        if model is None:
+            print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
+            model, preprocess = prepare_openclip_components(validated_cfg, device)
+        else:
+            model.to(device)
+            model.eval()
+
+        paths_to_compute = image_paths[existing_count:]
+        print(f"Embedding {len(paths_to_compute)} new images (found {existing_count} cached)...")
+        
+        _, new_embeddings = embed_images(
+            model,
+            preprocess,
+            paths_to_compute,
+            device,
+            batch_size=validated_cfg.batch_size,
+        )
+        
+        if existing_count > 0:
+            embeddings = np.vstack([cached_image_embeddings, new_embeddings])
+        else:
+            embeddings = new_embeddings
+
+        print(f"Saving {embeddings.shape[0]} embeddings to {embeddings_cache_path}")
+        np.save(embeddings_cache_path, embeddings)
+    else:
+        print(f"Using {len(image_paths)} cached image embeddings.")
+        embeddings = cached_image_embeddings[:len(image_paths)]
+
+    filenames = [p.name for p in image_paths]
     emb_out = exp_dir / f"embeddings_openclip_{model_name_sanitized}.npz"
     np.savez_compressed(emb_out, filenames=np.array(filenames), embeddings=embeddings)
     print(f"Saved embeddings to {emb_out}")
 
-    k_values = _parse_k_center_values(validated_cfg.k_center_values)
+    # k_values = _parse_k_center_values(validated_cfg.k_center_values)
 
     metrics = compute_embedding_metrics(
         embeddings,
         random_state=0,
         pairwise_sample_limit=validated_cfg.pairwise_sample_limit,
-        k_values=k_values,
+        # k_values=k_values,
     )
     metrics_out = exp_dir / f"embedding_metrics_{model_name_sanitized}.json"
     with metrics_out.open("w") as f:

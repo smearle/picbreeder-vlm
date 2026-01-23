@@ -266,15 +266,6 @@ def _group_key_for_aggregate(cfg: Any) -> Tuple[Tuple[str, Any], ...]:
     return tuple(items)
 
 
-
-
-
-
-
-
-
-
-
 def _compute_diversity_for_run(rcfg: ClipNounNicheConfig, original_cwd: Path, device: torch.device, clip_model, clip_preprocess) -> None:
     """Compute mean pairwise distance of the niche population over time and final state."""
     run_name = build_run_name(rcfg)

@@ -154,6 +154,7 @@ def collect_metrics(
     metrics_name: str,
     *,
     experiment_dirs: Optional[Sequence[Path]] = None,
+    agent_limits: Optional[Dict[str, int]] = None,
 ) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     if experiment_dirs is None:
@@ -175,10 +176,42 @@ def collect_metrics(
             print(f"[warn] Metrics file missing: {metrics_path}", file=sys.stderr)
             continue
         try:
-            metrics_data = json.loads(metrics_path.read_text())
+            raw_data = json.loads(metrics_path.read_text())
         except json.JSONDecodeError as exc:
             print(f"[warn] Failed to parse {metrics_path}: {exc}", file=sys.stderr)
             continue
+
+        metrics_data: Dict[str, Any] = {}
+        if isinstance(raw_data, list):
+            # Handle trajectory format (list of dicts)
+            if raw_data:
+                target_entry = None
+                
+                # Try to find entry matching agent limit
+                if agent_limits:
+                    exp_path_str = str(metrics_path.parent.expanduser().resolve())
+                    limit = agent_limits.get(exp_path_str)
+                    if limit is not None:
+                        for entry in raw_data:
+                            if isinstance(entry, dict) and entry.get("index") == limit:
+                                target_entry = entry
+                                break
+                
+                # Fallback to last entry if no specific limit found or matched
+                if target_entry is None:
+                    target_entry = raw_data[-1]
+
+                if isinstance(target_entry, dict):
+                    # For embedding_mean_pairwise_distance_over_time*.json
+                    if "mean_pairwise_distance" in target_entry:
+                        metrics_data["mean_pairwise_distance"] = target_entry["mean_pairwise_distance"]
+                    metrics_data.update(target_entry)
+        elif isinstance(raw_data, dict):
+            metrics_data = raw_data
+        
+        if not metrics_data:
+             print(f"[warn] No valid metrics data found in {metrics_path}", file=sys.stderr)
+             continue
 
         flattened = flatten_metrics(metrics_data)
         experiment_dir = metrics_path.parent
@@ -432,6 +465,7 @@ def render_tables(
     experiment_dirs: Optional[Sequence[Path]] = None,
     filename_tag: Optional[str] = None,
     group_labels: Optional[Dict[str, str]] = None,
+    agent_limits: Optional[Dict[str, int]] = None,
 ) -> Tuple[str, str, Path, Path, Path]:
     """Render per-experiment and aggregated metrics tables.
 
@@ -444,6 +478,8 @@ def render_tables(
         filename_tag: Tag appended to output filenames.
         group_labels: Mapping from experiment paths to group labels for aggregation.
             If provided, experiments with the same label are aggregated together.
+        agent_limits: Mapping from experiment path (str) to agent limit (int).
+            Used to extract metrics at a specific step from trajectory files.
 
     Returns:
         Tuple of (per_experiment_table, aggregated_table, per_csv_path, agg_csv_path, latex_path).
@@ -452,6 +488,7 @@ def render_tables(
         root,
         metrics_name,
         experiment_dirs=experiment_dirs,
+        agent_limits=agent_limits,
     )
     if not records:
         raise ValueError("No embedding metrics found.")

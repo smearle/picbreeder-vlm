@@ -28,6 +28,7 @@ class PicbreederConfig:
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = 200  # Generations executed for each agent
+    negative_anchors: Optional[str] = "negative_anchors"  # Filename for negative anchors list (in noun_lists/)
     num_agents: int = 200  # How many agents run sequentially in this session
     neat_config_path: Optional[Path] = None  # Path to NEAT config file (uses default if None)
     num_proc: int = 1  # Number of parallel agent processes

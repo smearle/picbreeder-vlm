@@ -2,6 +2,10 @@ import torch
 import numpy as np
 import open_clip
 import os
+import math
+from typing import List, Tuple, Sequence
+from PIL import Image
+from tqdm import tqdm
 from pathlib import Path
 import logging
 
@@ -140,3 +144,51 @@ def prepare_model(cfg, device):
     Load model, preprocess, and tokenizer from config.
     """
     return load_model_by_name(cfg.embedding_model, cfg.pretrained, device)
+
+def batch(iterable, n=32):
+    l = len(iterable)
+    for i in range(0, l, n):
+        yield iterable[i : i + n]
+
+def embed_images(
+    model: torch.nn.Module,
+    preprocess,
+    image_paths: Sequence[Path],
+    device: torch.device,
+    batch_size: int = 64,
+) -> Tuple[List[str], np.ndarray]:
+    """Return filenames and L2-normalized CLIP embeddings for a list of image paths."""
+    model.eval()
+    embeddings = []
+    filenames = []
+    total = math.ceil(len(image_paths) / batch_size)
+    
+    with torch.no_grad():
+        for chunk in tqdm(
+            batch(image_paths, batch_size),
+            total=total,
+            desc="Embedding images",
+        ):
+            tensors = []
+            chunk_filenames = []
+            for p in chunk:
+                img = Image.open(p).convert("RGB")
+                t = preprocess(img)
+                tensors.append(t)
+                chunk_filenames.append(p.name)
+
+            x = torch.stack(tensors, dim=0).to(device)
+            emb = model.encode_image(x)
+            emb = emb.cpu().numpy()
+            
+            # L2 normalize
+            norm = np.linalg.norm(emb, axis=1, keepdims=True)
+            norm[norm == 0] = 1.0
+            emb = emb / norm
+            
+            embeddings.append(emb)
+            filenames.extend(chunk_filenames)
+            
+    embeddings = np.vstack(embeddings)
+        
+    return filenames, embeddings

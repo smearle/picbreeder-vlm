@@ -230,7 +230,11 @@ class AgentRunner:
                 selection_json_suffix=selection_json_suffix,
                 publish_reason_suffix=publish_reason_suffix,
             )
-        if 'qwen' in config.model:
+        # For some reason this doesn't show up during multiprocessing... or qwen3-vl-80b or... something? We'll just... ignore this
+        # And from now on, always be running qwen in multi_proc>0 anyway.
+        # (I think qwen3-vl-8b chat history turns sweep ran for 500 agents with this enabled, which I suspect caused it to be all but incapable of branching,
+        # since it would instead opt to try to activate color on this step. In any case, we should probably leave this and re-run qwen3-vl-8b sweep with multi_proc>0)
+        if 'qwen3' in config.model:
             instruction_body += """ NOTE: You have a bad habit of only evolving grayscale images. PLEASE, spend AT LEAST SOME time evolving in color. In this case: if `Color: OFF`, then respond `{"color": "true"}` to turn it back on."""
 
         if self.personality_prompt:
@@ -2457,7 +2461,7 @@ class AgentRunner:
         try:
             import torch  # type: ignore
             import open_clip  # type: ignore
-            from compute_noun_similarity import embed_texts, format_prompts, load_nouns
+            from compute_noun_coverage import embed_texts, format_prompts, load_nouns
         except Exception as exc:  # pragma: no cover - import guard
             raise RuntimeError(
                 "CLIP noun baseline requires torch and open_clip (see compute_noun_similarity.py dependencies)."

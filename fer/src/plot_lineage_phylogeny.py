@@ -403,7 +403,7 @@ def parse_args() -> argparse.Namespace:
         "--checkpoints",
         type=int,
         nargs="+",
-        default=[500, 750, 1000, 10000],
+        default=[500, 750, 1000, 1500, 2000, 10000],
         help="Checkpoints (number of lineages) to compute metrics for.",
     )
     parser.add_argument(

@@ -21,14 +21,18 @@ Usage:
 """
 
 import importlib.util
+import json
 import os
 import re
+import requests
 import time
 from abc import ABC, abstractmethod
 from io import BytesIO
 from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union
 
 import PIL.Image
+
+from constants import MAX_MODEL_LEN
 
 # Type aliases
 ImageCaptionInput = Tuple[bytes, Optional[str]]
@@ -669,7 +673,7 @@ class VLLMQwen3VLBackend(VLMBackend):
         tensor_parallel_size: int = 1,
         # max_model_len: int = 4096,
         # max_model_len: int = 8192,
-        max_model_len: int = 15_000,
+        max_model_len: int = MAX_MODEL_LEN,
         gpu_memory_utilization: float = 0.9,
     ):
         self._model_name = model_name
@@ -1227,6 +1231,266 @@ class VLLMQwen3VLChatSession(VLMChatSession):
         return VLMResponse(text=response_text, raw_response=outputs)
 
 
+class VLLMClientChatSession(VLMChatSession):
+    """Chat session for remote vLLM server (OpenAI-compatible)."""
+
+    def __init__(
+        self,
+        client_backend: "VLLMClientBackend",
+        max_turns: Optional[int] = None,
+    ):
+        self._client = client_backend
+        self._turn_history: List[StoredTurn] = []
+        self._max_turns = max_turns if (max_turns is None or max_turns >= 0) else None
+
+    @property
+    def turn_history(self) -> List[StoredTurn]:
+        return self._turn_history
+
+    def _resolve_requested_turns(self, history_turns: Optional[int]) -> Optional[int]:
+        requested = history_turns if history_turns is not None else self._max_turns
+        if requested is not None and requested < 0:
+            return None
+        return requested
+
+    def load_history(self, turns: Iterable[HistoryTurnInput]) -> int:
+        normalised: List[StoredTurn] = []
+        for turn in turns:
+            try:
+                image_payload, trailing_prompt, response_text = turn
+            except (TypeError, ValueError):
+                continue
+            trailing_prompt_value = str(trailing_prompt or "")
+            response_value = str(response_text or "")
+            image_pairs: List[ImageCaptionPair] = []
+            for pair in image_payload:
+                try:
+                    image_bytes, caption_text = pair
+                except (TypeError, ValueError):
+                    continue
+                if image_bytes is None:
+                    continue
+                caption_value = caption_text if caption_text is not None else ""
+                if not isinstance(caption_value, str):
+                    caption_value = str(caption_value)
+                image_pairs.append((bytes(image_bytes), caption_value))
+            if not image_pairs:
+                continue
+            normalised.append((image_pairs, trailing_prompt_value, response_value))
+
+        if self._max_turns is None:
+            self._turn_history = normalised
+        elif self._max_turns <= 0:
+            self._turn_history = []
+        else:
+            self._turn_history = normalised[-self._max_turns:]
+        return len(self._turn_history)
+
+    def send(
+        self,
+        image_caption_pairs: Sequence[ImageCaptionInput],
+        prompt: Optional[str] = "",
+        history_turns: Optional[int] = 0,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+        temperature: Optional[float] = None,
+        thinking_budget: int = -1,
+        max_new_tokens: int = 2048,
+    ) -> VLMResponse:
+        import base64
+
+        requested_turns = self._resolve_requested_turns(history_turns)
+        if requested_turns is None:
+            start_index = 0
+        else:
+            start_index = max(len(self._turn_history) - requested_turns, 0)
+
+        # Build messages
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+
+        # Add history
+        for image_pairs, trailing_prompt, response_text in self._turn_history[start_index:]:
+            content = []
+            for img_bytes, caption in image_pairs:
+                if caption:
+                    content.append({"type": "text", "text": caption})
+                b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}
+                })
+            if trailing_prompt:
+                content.append({"type": "text", "text": trailing_prompt})
+
+            messages.append({"role": "user", "content": content})
+            if response_text:
+                messages.append({"role": "assistant", "content": response_text})
+
+        # Current turn
+        pair_list = list(image_caption_pairs or ())
+        if not pair_list:
+            raise ValueError("image_caption_pairs must include at least one entry.")
+
+        content = []
+        stored_pairs: List[ImageCaptionPair] = []
+        for pair in pair_list:
+            try:
+                img_bytes, caption = pair
+            except (TypeError, ValueError):
+                continue
+            if img_bytes is None:
+                continue
+            caption_val = str(caption or "")
+
+            if caption_val:
+                content.append({"type": "text", "text": caption_val})
+            b64_img = base64.b64encode(img_bytes).decode("utf-8")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}
+            })
+            stored_pairs.append((bytes(img_bytes), caption_val))
+
+        prompt_val = str(prompt or "")
+        if prompt_val:
+            content.append({"type": "text", "text": prompt_val})
+
+        messages.append({"role": "user", "content": content})
+
+        # Send request via backend
+        response_text = self._client._send_request(
+            messages,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature
+        )
+
+        # Update history
+        if start_index > 0:
+            self._turn_history = self._turn_history[start_index:]
+        self._turn_history.append((stored_pairs, prompt_val, response_text))
+        if self._max_turns is not None:
+            if self._max_turns == 0:
+                self._turn_history.clear()
+            else:
+                self._turn_history = self._turn_history[-self._max_turns:]
+
+        return VLMResponse(text=response_text)
+
+
+class VLLMClientBackend(VLMBackend):
+    """Client for a remote vLLM server (OpenAI-compatible)."""
+
+    def __init__(self, model_name: str, base_url: str = "http://localhost:8000/v1"):
+        env_url = os.environ.get("VLLM_BASE_URL")
+        if env_url:
+            base_url = env_url
+        self._model_name = model_name
+        self._base_url = base_url.rstrip("/")
+        self._api_key = "EMPTY"  # vLLM usually doesn't require a key by default
+
+    @property
+    def name(self) -> str:
+        return f"remote:{self._model_name}"
+
+    def _send_request(
+        self, 
+        messages: List[dict], 
+        max_new_tokens: int = 2048,
+        temperature: Optional[float] = None
+    ) -> str:
+        payload = {
+            "model": self._model_name,
+            "messages": messages,
+            "max_tokens": max_new_tokens,
+            "temperature": 0.7 if temperature is None else float(temperature),
+        }
+        
+        # Retry logic for connection errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=payload,
+                    timeout=300 # 5 minutes timeout for large model processing
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    print(f"VLLM Client Error (Final Attempt): {e}")
+                    raise
+                print(f"VLLM Client Error (Attempt {attempt+1}/{max_retries}): {e}. Retrying in 2s...")
+                time.sleep(2)
+        return "" # Should not reach here
+
+    def query(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+        max_new_tokens: int = 2048,
+    ) -> VLMResponse:
+        import base64
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        image_url = f"data:{mime_type};base64,{b64_image}"
+
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ]
+        })
+
+        text = self._send_request(messages, max_new_tokens=max_new_tokens)
+        return VLMResponse(text=text)
+
+    def query_multiple(
+        self,
+        image_bytes_list: Sequence[bytes],
+        captions: Sequence[str],
+        prompt: str,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+        max_new_tokens: int = 2048,
+    ) -> VLMResponse:
+        import base64
+
+        content = []
+        for img_bytes, caption in zip(image_bytes_list, captions):
+            if caption:
+                content.append({"type": "text", "text": caption})
+            b64_img = base64.b64encode(img_bytes).decode("utf-8")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}
+            })
+
+        if prompt:
+            content.append({"type": "text", "text": prompt})
+
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": content})
+
+        text = self._send_request(messages, max_new_tokens=max_new_tokens)
+        return VLMResponse(text=text)
+
+    def create_chat_session(self, max_turns: Optional[int] = None) -> "VLLMClientChatSession":
+        return VLLMClientChatSession(client_backend=self, max_turns=max_turns)
+
+
 # Registry of available backends
 _BACKEND_REGISTRY = {
     # Gemini models
@@ -1237,6 +1501,7 @@ _BACKEND_REGISTRY = {
     "qwen3-vl-8b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-8B-Instruct"),
     "qwen3-vl-4b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-4B-Instruct"),
     "qwen3-vl-2b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-2B-Instruct"),
+    "qwen3-vl-30b-fp8": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"),
 }
 
 
@@ -1249,6 +1514,8 @@ def _resolve_qwen_model_name(model: str) -> str:
         "qwen3-vl-8b": "Qwen/Qwen3-VL-8B-Instruct",
         "qwen3-vl-4b": "Qwen/Qwen3-VL-4B-Instruct",
         "qwen3-vl-2b": "Qwen/Qwen3-VL-2B-Instruct",
+        "qwen3-vl-30b-fp8": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+
     }
     return model_map.get(model, model)
 
@@ -1270,21 +1537,29 @@ def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> V
         >>> backend = create_vlm_backend("qwen3-vl-8b", backend="hf", use_flash_attention=True)
     """
     backend_choice = (backend or "auto").lower()
-    if backend_choice not in {"auto", "vllm", "hf"}:
-        raise ValueError("backend must be one of: auto, vllm, hf")
+    if backend_choice not in {"auto", "vllm", "hf", "remote"}:
+        raise ValueError("backend must be one of: auto, vllm, hf, remote")
+
+    if model.startswith("remote:"):
+        actual_model = model[7:]
+        return VLLMClientBackend(actual_model, **kwargs)
 
     # Check registry first
     if model in _BACKEND_REGISTRY:
         if model.startswith("gemini"):
             if kwargs:
+                if 'max_model_len' in kwargs:
+                    kwargs.pop('max_model_len')
                 return GeminiBackend(model, **kwargs)
             return _BACKEND_REGISTRY[model]()
         if model.startswith("qwen"):
             resolved_model = _resolve_qwen_model_name(model)
+            if backend_choice == "remote":
+                return VLLMClientBackend(resolved_model, **kwargs)
             if backend_choice == "vllm":
                 return VLLMQwen3VLBackend(resolved_model, **kwargs)
-            if backend_choice == "auto" and not kwargs and _vllm_available():
-                return VLLMQwen3VLBackend(resolved_model)
+            if backend_choice == "auto" and _vllm_available():
+                return VLLMQwen3VLBackend(resolved_model, **kwargs)
             return Qwen3VLBackend(resolved_model, **kwargs)
         return _BACKEND_REGISTRY[model]()
     
@@ -1294,11 +1569,17 @@ def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> V
         return GeminiBackend(model, **kwargs)
     elif "qwen" in model_lower:
         resolved_model = _resolve_qwen_model_name(model)
+        if backend_choice == "remote":
+            return VLLMClientBackend(resolved_model, **kwargs)
         if backend_choice == "vllm":
             return VLLMQwen3VLBackend(resolved_model, **kwargs)
         if backend_choice == "auto" and not kwargs and _vllm_available():
             return VLLMQwen3VLBackend(resolved_model)
         return Qwen3VLBackend(resolved_model, **kwargs)
+    
+    # Allow remote backend for unknown models too (might be custom model on server)
+    if backend_choice == "remote":
+        return VLLMClientBackend(model, **kwargs)
     
     raise ValueError(
         f"Unknown model: {model}. "

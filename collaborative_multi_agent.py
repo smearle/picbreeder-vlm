@@ -30,6 +30,11 @@ import random
 import shutil
 import traceback
 import time
+import sys
+import socket
+import subprocess
+import requests
+import atexit
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -67,6 +72,7 @@ from neat_components import (
 from constants import (
     ARCHIVE_DIR_NAME,
     AGENT_DIR_PREFIX,
+    MAX_MODEL_LEN,
     PERSONALITY_BATCH_SIZE,
     PERSONALITY_TOTAL,
     RATING_BATCH_SIZE,
@@ -86,7 +92,7 @@ from rate_archive_with_vlm import (
     format_rating_entry_label,
     parse_rating_batch_response,
 )
-from vlm_backends import create_vlm_backend, VLMBackend
+from vlm_backends import create_vlm_backend, VLMBackend, is_local_model, _resolve_qwen_model_name
 
 # Cache for VLM backend used in rating
 _RATING_BACKEND: Optional[VLMBackend] = None
@@ -168,6 +174,48 @@ def _resolve_task_temperature(cfg: PicbreederConfig, task: AgentTask) -> float:
         rng = random.Random(f"{seed}:{task.agent_id}:{task.agent_index}")
         return rng.uniform(0.0, 2.0)
     return float(temperature)
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_vlm_server(base_url: str, timeout: int = 600) -> bool:
+    print(f"Waiting for vLLM server at {base_url}...")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            response = requests.get(f"{base_url}/models", timeout=5)
+            if response.status_code == 200:
+                print("vLLM server is ready.")
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(5)
+    return False
+
+
+def _start_vlm_server(model: str, port: int) -> subprocess.Popen:
+    full_model_names = {
+        'qwen3-vl-8b': 'qwen/qwen3-vl-8b-instruct'
+    }
+    full_model_name = full_model_names.get(model, model)
+    cmd = [
+        sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+        "--model", full_model_name,
+        "--port", str(port),
+        "--trust-remote-code",
+        "--gpu-memory-utilization", "0.9",
+        "--max-model-len", f"{MAX_MODEL_LEN}",
+    ]
+    print(f"Starting vLLM server: {' '.join(cmd)}")
+    log_path = f"vllm_server_{port}.log"
+    log_file = open(log_path, "w")
+    process = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+    return process
+
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +442,8 @@ class CollaborativeMultiAgentOrchestrator:
         self.seed = seed
         self.render_genome_diagrams = render_genome_diagrams
         self.process_index = process_index
+        self.global_generation_count = 0
+        self.start_time = 0.0
         self.keep_query_images = bool(getattr(self.config, "keep_query_images", False))
         self.compress_completed_agents = bool(getattr(self.config, "compress_completed_agents", True))
         self.archive_manager = ArchiveManager(
@@ -994,6 +1044,13 @@ class CollaborativeMultiAgentOrchestrator:
         favorite_payload: Optional[Dict[str, Any]],
         archive_payload: Optional[Dict[str, Any]],
     ) -> None:
+        self.global_generation_count += 1
+        if self.start_time > 0:
+            elapsed = time.time() - self.start_time
+            rate = self.global_generation_count / elapsed if elapsed > 0 else 0.0
+            sys.stderr.write(f"\rGlobal Generations: {self.global_generation_count} ({rate:.2f} gen/s)")
+            sys.stderr.flush()
+
         is_new_archive_entry = False
         if archive_payload:
             entry_id = archive_payload.get("id")
@@ -1060,12 +1117,15 @@ class CollaborativeMultiAgentOrchestrator:
         using_parallel = num_workers > 1
         previous_mode = self._parallel_workers_active
         self._parallel_workers_active = using_parallel
+        self.global_generation_count = 0
+        self.start_time = time.time()
         try:
             if not using_parallel:
                 self._run_agents_serial(total_agents, resume, resume_agent_id)
             else:
                 self._run_agents_parallel(total_agents, resume, resume_agent_id, num_workers)
         finally:
+            sys.stderr.write("\n")
             self._parallel_workers_active = previous_mode
 
     def _run_agents_serial(
@@ -1109,6 +1169,46 @@ class CollaborativeMultiAgentOrchestrator:
 
         ctx = multiprocessing.get_context("spawn")
         config_payload = _serialize_config_for_worker(self.config)
+        
+        # Setup vLLM server if needed
+        vllm_process = None
+        if num_workers > 1 and is_local_model(self.config.model):
+            try:
+                # Resolve model name to ensure consistency between server and client
+                resolved_model = _resolve_qwen_model_name(self.config.model)
+                port = _find_free_port()
+                vllm_process = _start_vlm_server(resolved_model, port)
+                base_url = f"http://localhost:{port}/v1"
+                if not _wait_for_vlm_server(base_url):
+                    raise RuntimeError("Failed to start vLLM server.")
+                
+                # Wrap config payload
+                # Note: We need to modify the config to use 'remote:' prefix for the model
+                # But self.config is immutable (sort of).
+                # We can modify the payload dict.
+                # However, _deserialize_config_for_worker might complain if we change values?
+                # Usually it just loads data.
+                
+                # We tell the worker to use the remote backend via the environment variable
+                # AND by prefixing the model name so create_vlm_backend uses VLLMClientBackend.
+                
+                # Modify the serialized payload directly
+                if "model" in config_payload:
+                    config_payload["model"] = f"remote:{resolved_model}"
+                
+                # Wrap in the special structure we defined in _continual_agent_worker
+                config_payload = {
+                    "__vlm_config__": {"base_url": base_url},
+                    "config": config_payload
+                }
+                
+                atexit.register(vllm_process.kill)
+            except Exception as e:
+                print(f"Error starting vLLM server: {e}")
+                if vllm_process:
+                    vllm_process.kill()
+                raise e
+
         worker_states: List[WorkerState] = []
         conn_to_worker: Dict[Connection, WorkerState] = {}
         errors: List[str] = []
@@ -1207,6 +1307,14 @@ class CollaborativeMultiAgentOrchestrator:
                     else:
                         continue
         finally:
+            if vllm_process:
+                print("Stopping vLLM server...")
+                vllm_process.terminate()
+                try:
+                    vllm_process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    vllm_process.kill()
+                    
             for state in worker_states:
                 try:
                     state.task_conn.close()
@@ -2081,7 +2189,16 @@ def _execute_agent_task(
     agent_cfg = copy.copy(cfg)
     agent_cfg.temperature = resolved_temperature
     if task.model:
-        agent_cfg.model = task.model
+        # If the worker config uses a remote model and the task model matches (ignoring prefix),
+        # preserve the remote prefix so the backend client is used.
+        # We must verify against the resolved name since the parallel runner resolves it.
+        resolved_task_model = _resolve_qwen_model_name(task.model) if is_local_model(task.model) else task.model
+        remote_cfg_model = cfg.model[7:] if cfg.model.startswith("remote:") else cfg.model
+        
+        if cfg.model.startswith("remote:") and resolved_task_model == remote_cfg_model:
+            agent_cfg.model = cfg.model
+        else:
+            agent_cfg.model = task.model
     elif agent_cfg.model == "gemini-random":
         # Fallback if model not in task (e.g. old data), though ideally task has it
         agent_cfg.model = random.choice(GEMINI_RANDOM_MODELS)
@@ -2271,7 +2388,17 @@ def _continual_agent_worker(
     cfg_payload: Dict[str, Any],
     worker_index: int,
 ) -> None:
-    cfg = _deserialize_config_for_worker(cfg_payload)
+    # Handle wrapped payload for vLLM support
+    if "__vlm_config__" in cfg_payload:
+        vlm_config = cfg_payload["__vlm_config__"]
+        base_url = vlm_config.get("base_url")
+        if base_url:
+            os.environ["VLLM_BASE_URL"] = base_url
+        real_cfg_payload = cfg_payload.get("config", {})
+    else:
+        real_cfg_payload = cfg_payload
+
+    cfg = _deserialize_config_for_worker(real_cfg_payload)
     worker_seed = None if cfg.seed is None else cfg.seed + worker_index
     print(f"[Worker {worker_index}] Applying random seed: {worker_seed}")
     apply_random_seed(worker_seed)

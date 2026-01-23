@@ -14,3 +14,4 @@ REPO_ROOT = Path(__file__).resolve().parent
 REPO_NAME = REPO_ROOT.name
 SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes", "clip-nouns")
 NOUN_LISTS_DIR = Path("noun_lists")
+MAX_MODEL_LEN = 50_000

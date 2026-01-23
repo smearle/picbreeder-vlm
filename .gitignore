@@ -31,3 +31,6 @@ fer/src/archive*
 fer/src/lineages*
 cross_eval_clip_niches/*
 SigLIP2-B-alignet*
+figures/*
+human_baseline/*
+noun_lists/embeddings/*

@@ -67,6 +67,40 @@ def _text_size(text: str, font: ImageFont.ImageFont) -> Tuple[int, int]:
     return width, height
 
 
+
+def _wrap_text_pixel(text: str, font: ImageFont.ImageFont, max_width: int) -> List[str]:
+    """Wrap text to fit within max_width pixels."""
+    if not text:
+        return []
+    
+    words = text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        # Check width of current line + word
+        test_line_words = current_line + [word]
+        test_line = ' '.join(test_line_words)
+        w, _ = _text_size(test_line, font)
+        
+        if w <= max_width:
+            current_line.append(word)
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+                current_line = [word]
+            else:
+                # Word itself is wider than max_width, force split? 
+                # For now just put it on its own line
+                lines.append(word)
+                current_line = []
+                
+    if current_line:
+        lines.append(' '.join(current_line))
+        
+    return lines
+
+
 def create_captioned_grid(
     images: Sequence[Image.Image],
     captions: Sequence[str],
@@ -80,15 +114,28 @@ def create_captioned_grid(
 
     cols = max(1, int(math.ceil(math.sqrt(len(images)))))
     rows = int(math.ceil(len(images) / cols))
-    label_height = max(_text_size(caption, font)[1] for caption in captions) if captions else 0
+    
+    # Calculate wrapped lines for all captions
+    wrapped_captions = [_wrap_text_pixel(cap, font, thumb_size) for cap in captions]
+    
+    # Determine max lines needed (or just max height)
+    # We want uniform grid cells? Or variable?
+    # Usually grid implies uniform cells. Let's find max lines.
+    max_lines = max((len(lines) for lines in wrapped_captions), default=0)
+    
+    # Calculate line height
+    _, line_h = _text_size("Mg", font) # Sample text for height
+    line_spacing = 2
+    
+    text_block_height = max_lines * (line_h + line_spacing) if max_lines > 0 else 0
 
-    cell_height = thumb_size + label_height + 6
+    cell_height = thumb_size + text_block_height + 6
     width = (cols * thumb_size) + ((cols + 1) * margin)
     height = (rows * cell_height) + ((rows + 1) * margin)
     canvas = Image.new("RGB", (width, height), (16, 16, 20))
     draw = ImageDraw.Draw(canvas)
 
-    for i, (img, caption) in enumerate(zip(images, captions)):
+    for i, (img, lines) in enumerate(zip(images, wrapped_captions)):
         row = i // cols
         col = i % cols
         x = margin + col * (thumb_size + margin)
@@ -100,10 +147,13 @@ def create_captioned_grid(
         if img:
             canvas.paste(img, (x, y))
 
-        text_w, text_h = _text_size(caption, font)
-        text_x = x + max(0, (thumb_size - text_w) // 2)
-        text_y = y + thumb_size + 2
-        draw.text((text_x, text_y), caption, font=font, fill=(255, 255, 0))
+        # Draw wrapped text
+        current_y = y + thumb_size + 2
+        for line in lines:
+            text_w, _ = _text_size(line, font)
+            text_x = x + max(0, (thumb_size - text_w) // 2)
+            draw.text((text_x, current_y), line, font=font, fill=(255, 255, 0))
+            current_y += (line_h + line_spacing)
 
     return canvas
 

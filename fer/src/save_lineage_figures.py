@@ -316,7 +316,7 @@ def parse_args():
 def main():
     args = parse_args()
     pb_dir = args.pb_dir.expanduser().resolve()
-    ouput_dir = Path(str(args.output_dir) + f"res-{args.res}")
+    ouput_dir = Path(str(args.output_dir) + f"res-{args.res}" / "images")
     output_dir = ouput_dir.expanduser().resolve()
     archive_dir = Path(str(args.archive_dir) + f"_res-{args.res}")
     archive_dir = archive_dir.expanduser().resolve()

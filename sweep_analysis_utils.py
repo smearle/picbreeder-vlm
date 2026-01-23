@@ -117,46 +117,136 @@ def load_human_baseline(
     metric: str,
     render_size: int,
     model: str,
-    nounlist: Optional[str] = None
+    nounlist: Optional[str] = None,
+    k: Optional[int] = None,
+    strict: bool = True,
+    negative_anchors: Optional[str] = None,
 ) -> Optional[Dict[int, float]]:
     """Load human baseline trajectory for the given metric."""
     baseline_dir = SCRIPT_ROOT / "human_baseline"
     if not baseline_dir.exists():
-        print(f"Human baseline directory not found: {baseline_dir}")
+        msg = f"Human baseline directory not found: {baseline_dir}"
+        if strict:
+            raise FileNotFoundError(msg)
+        print(msg)
         return None
         
     model_name = model.replace("/", "-")
+    neg_suffix = f"_{Path(negative_anchors).stem}" if negative_anchors else ""
     
+    key_extractor = None
+
     if metric == "novelty":
         filename = f"novelty_res{render_size}_{model_name}.json"
         key = "mean_pairwise_distance"
     elif metric == "noun":
         if not nounlist:
-            print("Nounlist name must be provided to load noun similarity baseline.")
+            msg = "Nounlist name must be provided to load noun similarity baseline."
+            if strict:
+                raise ValueError(msg)
+            print(msg)
             return None
         filename = f"noun_similarity_res{render_size}_{model_name}_{nounlist}.json"
         key = "mean_max_similarity"
+    elif metric == "noun_contrastive":
+        if not nounlist:
+            msg = "Nounlist name must be provided to load noun contrastive baseline."
+            if strict:
+                raise ValueError(msg)
+            print(msg)
+            return None
+        filename = f"noun_similarity_res{render_size}_{model_name}_{nounlist}.json"
+        key = f"mean_max_contrastive{neg_suffix}"
+    elif metric == "visual_k_covering":
+        if k is None:
+            msg = "k must be provided for visual_k_covering baseline."
+            if strict:
+                raise ValueError(msg)
+            print(msg)
+            return None
+        filename = f"novelty_res{render_size}_{model_name}.json"
+        def key_extractor(row):
+            radii = row.get("k_covering_radii")
+            if isinstance(radii, dict):
+                return radii.get(str(k))
+            return None
+        key = f"k_covering_radii[k={k}]"
+    elif metric == "caption_diversity":
+        filename = f"caption_metrics_res{render_size}_{model_name}.json"
+        key = "mean_pairwise_distance"
+    elif metric == "caption_k_covering":
+        if k is None:
+            msg = "k must be provided for caption_k_covering baseline."
+            if strict:
+                raise ValueError(msg)
+            print(msg)
+            return None
+        filename = f"caption_metrics_res{render_size}_{model_name}.json"
+        def key_extractor(row):
+            radii = row.get("k_covering_radii")
+            if isinstance(radii, dict):
+                return radii.get(str(k))
+            return None
+        key = f"k_covering_radii[k={k}]"
     else:
-        print(f"Unknown metric for human baseline: {metric}")
+        msg = f"Unknown metric for human baseline: {metric}"
+        if strict:
+            raise ValueError(msg)
+        print(msg)
         return None
         
     path = baseline_dir / filename
     if not path.exists():
-        print(f"Human baseline file not found: {path}")
+        msg = f"Human baseline file not found: {path}"
+        if strict:
+            raise FileNotFoundError(msg)
+        print(msg)
         return None
         
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         trajectory = {}
-        for row in data:
-            idx = row.get("index")
-            val = row.get(key)
-            if idx is not None and val is not None:
-                trajectory[int(idx)] = float(val)
+        
+        # Handle both list-of-dicts and dict-of-dicts
+        if isinstance(data, dict):
+            for k_idx, row in data.items():
+                idx = row.get("index")
+                if idx is None:
+                    # Attempt to use key as index
+                    try:
+                        idx = int(k_idx)
+                    except ValueError:
+                        pass
+
+                if key_extractor:
+                    val = key_extractor(row)
+                else:
+                    val = row.get(key)
+                
+                if idx is not None and val is not None:
+                    trajectory[int(idx)] = float(val)
+        else:
+            for row in data:
+                idx = row.get("index")
+                if key_extractor:
+                    val = key_extractor(row)
+                else:
+                    val = row.get(key)
+                
+                if idx is not None and val is not None:
+                    trajectory[int(idx)] = float(val)
+        
+        if not trajectory and strict:
+            raise ValueError(f"No valid data found for key '{key}' in {path}")
+
         return trajectory
     except Exception as e:
-        print(f"Failed to load human baseline from {path}: {e}")
+        msg = f"Failed to load human baseline from {path}: {e}"
+        if strict:
+            raise RuntimeError(msg) from e
+        print(msg)
         return None
+
 
 def write_aggregate_plot(
     *,
@@ -166,6 +256,7 @@ def write_aggregate_plot(
     xlabel: str,
     ylabel: str,
     baselines: Optional[List[Tuple[str, Dict[int, float]]]] = None,
+    ylim: Optional[Tuple[float, float]] = None,
 ) -> None:
     if not grouped_runs:
         return
@@ -177,6 +268,8 @@ def write_aggregate_plot(
     ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    if ylim is not None:
+        ax.set_ylim(ylim)
     ax.grid(True, which="major", alpha=0.3)
 
     plotted = 0
@@ -197,11 +290,11 @@ def write_aggregate_plot(
             max_x = max(max_x, indices[-1])
         values = np.array([[run[i] for i in indices] for run in runs], dtype=float)
         mean = values.mean(axis=0)
-        std = values.std(axis=0)
+        sem = values.std(axis=0) / np.sqrt(values.shape[0])
 
         label = format_group_label(group_key, varying_fields)
         (line,) = ax.plot(indices, mean, linewidth=2, label=label)
-        ax.fill_between(indices, mean - std, mean + std, alpha=0.2, color=line.get_color())
+        ax.fill_between(indices, mean - sem, mean + sem, alpha=0.2, color=line.get_color())
         plotted += 1
 
     if baselines and max_x > 0:
@@ -266,7 +359,7 @@ def write_scalar_bar_plot(
             continue
         arr = np.asarray(vals, dtype=float)
         mean = float(arr.mean())
-        std = float(arr.std())
+        std = float(arr.std()) / np.sqrt(len(arr))
 
         values = dict(group_key)
 

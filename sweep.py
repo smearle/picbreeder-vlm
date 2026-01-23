@@ -9,21 +9,22 @@ import sys
 import json
 import multiprocessing
 import numpy as np
-from dataclasses import dataclass, field, replace, fields, asdict
+from dataclasses import replace, fields, asdict
 from itertools import product
 from pathlib import Path
+import sys
 from typing import Dict, List, Sequence, Optional, Tuple, Any, Union
 
 import hydra
 from hydra.core.config_store import ConfigStore
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import get_original_cwd
-from hydra.conf import HelpConf, HydraConf
 import omegaconf
 import submitit  # Do not remove this.
 
 from collaborative_multi_agent import run as run_collaborative
 from config import PicbreederConfig, ensure_valid_config
+from sweep_configs import _NAMED_SWEEPS, RandBaselineSweep, SweepConfig
 from utils import resolve_nounlist
 from sweep_analysis_utils import (
     sanitize_filename_tag,
@@ -57,205 +58,6 @@ class CollaborativeRun:
 
 def _execute_job(job: CollaborativeRun) -> int:
     return job()
-
-
-@dataclass
-class SweepConfig(PicbreederConfig):
-    seed: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])  # Chat history lengths to evaluate
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])  # Probability of random parent selection
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])  # Sampling temperature values to evaluate
-    thumb_size: List[int] = field(default_factory=lambda: [128])  # Thumbnail sizes to evaluate
-    goal: List[str] = field(default_factory=lambda: [  # Goals to sweep over
-        "familiar_objects",
-        # "fun",
-        # "lizards", 
-        # "fish", 
-        # "skulls", 
-        # "butterflies"
-    ])
-    model: List[str] = field(default_factory=lambda: [  # VLM models to evaluate
-        # "gemini-3-pro-preview",
-        "gemini-2.5-pro",
-        # "gemini-2.5-flash",
-        # "gemini-2.5-flash-lite",
-    ])
-    n_personality_traits: List[int] = field(default_factory=lambda: [0])  # Number of personality traits to use
-    image_embedding_model: str = "SigLIP2-B-alignet"
-    image_pretrained: str = "laion2b_s32b_b79k"
-    text_image_embedding_model: str = "ViT-SO400M-14-SigLIP2"
-    text_image_pretrained: str = "webli"
-    sweep_name: str = "rand_select_prob"  # Base directory for experiment outputs
-    log_dir: str = "sweep_logs"
-    submitit_log_dir: str = "submitit_logs"
-    slurm: bool = True  # Enable SLURM submission via Submitit
-    partition: str = "cpu"  # SLURM partition name
-    gpu: bool = False
-    # account: Optional[str] = None  # Optional SLURM account override
-    account: Optional[str] = "pr_174_tandon_advanced"  # Optional SLURM account override
-    timeout_hours: int = 24  # Wall-time limit in hours
-    mem_gb: int = 30  # Memory requested per task (GB)
-    num_proc: int = 10  # Number of parallel processes per task
-    render_archive: bool = False  # If true, run evaluation instead of training
-    render_tree: bool = False  # If true, run phylogeny visualization instead of training
-    eval: bool = False  # If true, run plotting/analysis scripts instead of training
-    overwrite_evals: bool = True  # If false, skip evaluation if output files already exist
-    cross_eval: bool = False  # If true, summarize embedding metrics from the configured runs
-    archive_limit: Optional[int] = None  # Limit the number of archive images passed to analysis scripts
-    nounlist: List[str] = field(default_factory=lambda: ["imagenet21k"])  # Noun list(s) to evaluate
-    hydra: HydraConf = field(
-        default_factory=lambda: HydraConf(
-            help=HelpConf(                app_name="sweep",
-                header=(
-                    "Submitit/Hydra sweep launcher for collaborative_multi_agent.\n"
-                    "\n"
-                    "Common overrides:\n"
-                    "  seeds                 List of random seeds to evaluate.\n"
-                    "  chat_history_turns    Values swept for chat context length (-1 keeps all turns).\n"
-                    "  sweep_name            Named sweep preset (also used as output directory name).\n"
-                    "  slurm                 true to submit jobs to a SLURM cluster.\n"
-                    "  partition / account   SLURM resource parameters appended to submissions.\n"
-                    "  cross_eval            true to summarize embedding metrics for the configured runs.\n"
-                ),
-                footer="Hydra overrides (e.g. +option=value) are supported. Use --cfg=job to inspect merged configs.",
-            )
-        )
-    )
-
-
-@dataclass
-class SweepBasePreset(SweepConfig):
-    """No-op preset: preserves whatever list-valued axes you pass explicitly."""
-
-
-@dataclass
-class ChatHistoryTurnsSweep(SweepConfig):
-    chat_history_turns: List[int] = field(default_factory=lambda: [-1, 10, 2, 1, 0])
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 750
-
-
-@dataclass
-class ChatHistoryTurnsQwenSweep(SweepConfig):
-    chat_history_turns: List[int] = field(default_factory=lambda: [0, 1, 2, 3])
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["qwen3-vl-8b"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 500
-    num_proc: int = 1
-    gpu: bool = True
-
-
-@dataclass
-class TemperatureSweep(SweepConfig):
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [0.0, 1.0, 2.0, "random"])
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 500
-
-
-@dataclass
-class RandSelectProbSweep(SweepConfig):
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0])
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    # thumb_size: List[int] = field(default_factory=lambda: [128, 224])
-    thumb_size: List[int] = field(default_factory=lambda: [128,])
-    num_agents: int = 500
-
-@dataclass
-class FullRandSelectProbSweep(SweepConfig):
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0])
-    rand_select_mode: str = 'all'
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    thumb_size: List[int] = field(default_factory=lambda: [128,])
-    num_agents: int = 1_000
-
-@dataclass
-class RandBaselineSweep(SweepConfig):
-    rand_select_prob: List[float] = field(default_factory=lambda: [2.0])
-    rand_select_mode: str = 'all'
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    thumb_size: List[int] = field(default_factory=lambda: [128,])
-    num_agents: int = 9_586
-
-@dataclass
-class ModelSweep(SweepConfig):
-    model: List[str] = field(default_factory=lambda: [
-        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro-preview",
-        "gemini-random",
-        # "qwen3-vl-8b",
-    ])
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 1_000
-
-@dataclass
-class TraitsSweep(SweepConfig):
-    n_personality_traits: List[int] = field(default_factory=lambda: [
-        0,
-        10, 100, 1_000
-    ])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 500
-
-@dataclass
-class LongSweep(SweepConfig):
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3])
-    num_agents: int = 9_586
-
-@dataclass
-class LongSweep2(SweepConfig):
-    rand_select_prob: List[float] = field(default_factory=lambda: [0.25])
-    rand_select_mode: str = 'all'
-    chat_history_turns: List[int] = field(default_factory=lambda: [1])
-    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
-    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
-    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [5])
-    num_agents: int = 9_586
-
-
-_NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
-    "sweep": SweepBasePreset,
-    "chat_history_turns": ChatHistoryTurnsSweep,
-    "chat_history_turns_qwen": ChatHistoryTurnsQwenSweep,
-    "temperature": TemperatureSweep,
-    "rand_select_prob": RandSelectProbSweep,
-    "full_rand_select_prob": FullRandSelectProbSweep,
-    "rand_baseline": RandBaselineSweep,
-    "model": ModelSweep,
-    "traits": TraitsSweep,
-    "long_sweep": LongSweep,
-    "long_sweep_2": LongSweep2,
-}
 
 
 def _extract_overrides_from_preset(preset: SweepConfig) -> Dict[str, Any]:
@@ -341,12 +143,12 @@ def _call_hydra_wrapped_main(main_func, cfg_obj, **kwargs) -> None:
     wrapped(cfg_obj, **kwargs)
 
 
-def _run_eval_phase_1(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str):
+def _run_eval_visual_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str):
     import torch
     import os
     from pathlib import Path
     from dataclasses import fields as dataclass_fields, replace
-    from plot_novelty_over_time import (
+    from compute_visual_coverage import (
         PairwiseDistanceConfig,
         main as novelty_main,
         prepare_openclip_components as prepare_novelty_clip,
@@ -367,7 +169,7 @@ def _run_eval_phase_1(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig],
 
     os.chdir(original_cwd)
     device = torch.device(device_str)
-    print(f"[Phase 1 Worker] Using device: {device}")
+    print(f"[Visual Coverage Worker] Using device: {device}")
 
     base_kwargs0 = {
         field_def.name: getattr(run_configs[0], field_def.name)
@@ -375,7 +177,7 @@ def _run_eval_phase_1(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig],
         if field_def.name != "hydra"
     }
     
-    print("\n[Phase 1] Evaluating visual novelty...")
+    print("\n[Visual Coverage] Evaluating visual novelty...")
     novelty_cfg0 = PairwiseDistanceConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
     novelty_model, novelty_preprocess = prepare_novelty_clip(novelty_cfg0, device)
 
@@ -413,13 +215,13 @@ def _run_eval_phase_1(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig],
         )
 
 
-def _run_eval_phase_2(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str):
+def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str):
     import torch
     import os
     from pathlib import Path
     from collections import defaultdict
     from dataclasses import fields as dataclass_fields, replace
-    from compute_noun_similarity import (
+    from compute_noun_coverage import (
         NounSimilarityConfig,
         main as noun_main,
         prepare_openclip_components as prepare_noun_clip,
@@ -441,7 +243,7 @@ def _run_eval_phase_2(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig],
 
     os.chdir(original_cwd)
     device = torch.device(device_str)
-    print(f"[Phase 2 Worker] Using device: {device}")
+    print(f"[Noun Coverage Worker] Using device: {device}")
 
     base_kwargs0 = {
         field_def.name: getattr(run_configs[0], field_def.name)
@@ -449,7 +251,7 @@ def _run_eval_phase_2(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig],
         if field_def.name != "hydra"
     }
 
-    print("\n[Phase 2] Evaluating noun similarity...")
+    print("\n[Noun Coverage] Evaluating noun similarity...")
     # Initialize model once (assuming embedding model is constant across sweep)
     noun_cfg_template = NounSimilarityConfig(**base_kwargs0, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
     noun_model, noun_preprocess, noun_tokenizer = prepare_noun_clip(noun_cfg_template, device)
@@ -472,7 +274,7 @@ def _run_eval_phase_2(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig],
         noun_cfg_group = NounSimilarityConfig(**base_kwargs_group, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
         noun_cfg_group.nounlist = nounlist
 
-        nouns_list, prompts_list, noun_text_embeddings = prepare_noun_text_embeddings(
+        nouns_list, prompts_list, noun_text_embeddings, neg_embeddings = prepare_noun_text_embeddings(
             noun_cfg_group,
             original_cwd=original_cwd,
             device=device,
@@ -517,8 +319,101 @@ def _run_eval_phase_2(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig],
                 nouns=nouns_list,
                 prompts=prompts_list,
                 noun_embeddings=noun_text_embeddings,
+                neg_embeddings=neg_embeddings,
                 original_cwd_override=original_cwd,
             )
+
+
+def _run_eval_captions(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path):
+    import os
+    import gc
+    import torch
+    from pathlib import Path
+    from dataclasses import fields as dataclass_fields
+    from caption_and_embed_archive import (
+        CaptionEmbedConfig,
+        run_captioning_phase,
+        run_embedding_phase,
+        load_embedding_model,
+    )
+    from vlm_backends import create_vlm_backend
+    from config import PicbreederConfig
+
+    os.chdir(original_cwd)
+    print("\n[Phase 3] Captioning and embedding archives...")
+    
+    # 1. Captioning Phase
+    print(f"Initializing Caption Model ({cfg.caption_model})...")
+    # Note: create_vlm_backend usually wraps API clients, but for local models (e.g. Qwen) it might load weights.
+    # If it loads weights, doing it once here is beneficial.
+    # However, create_vlm_backend returns a VLMBackend instance.
+    caption_backend = create_vlm_backend(cfg.caption_model, max_model_len=10_000)
+    
+    for run_cfg in run_configs:
+        exp_dir = Path(run_cfg.experiment_dir)
+        archive_path = exp_dir / "archive"
+        
+        # Build config
+        base_kwargs = {
+            field_def.name: getattr(run_cfg, field_def.name)
+            for field_def in dataclass_fields(PicbreederConfig)
+            if field_def.name != "hydra"
+        }
+        
+        caption_cfg = CaptionEmbedConfig(
+            **base_kwargs,
+            archive_path=str(archive_path),
+            caption_model=cfg.caption_model,
+            embedding_model=cfg.caption_embedding_model,
+            embedding_pretrained=cfg.caption_embedding_pretrained,
+            max_images=cfg.archive_limit if cfg.archive_limit is not None else run_cfg.num_agents,
+            render_grid=True,
+            grid_thumb_size=128
+        )
+        
+        desc = _format_run_prefix(run_cfg, "[captioning]")
+        print(f"{desc}")
+        try:
+            run_captioning_phase(caption_cfg, backend=caption_backend)
+        except Exception as e:
+            print(f"Error in captioning phase for {exp_dir}: {e}")
+
+    # Unload caption model
+    del caption_backend
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    # 2. Embedding Phase
+    print(f"Initializing Embedding Model ({cfg.caption_embedding_model})...")
+    try:
+        embed_model_dict = load_embedding_model(cfg.caption_embedding_model, cfg.caption_embedding_pretrained)
+    except Exception as e:
+        print(f"Failed to load embedding model: {e}")
+        return
+
+    for run_cfg in run_configs:
+        exp_dir = Path(run_cfg.experiment_dir)
+        archive_path = exp_dir / "archive"
+        
+        base_kwargs = {
+            field_def.name: getattr(run_cfg, field_def.name)
+            for field_def in dataclass_fields(PicbreederConfig)
+            if field_def.name != "hydra"
+        }
+        
+        caption_cfg = CaptionEmbedConfig(
+            **base_kwargs,
+            archive_path=str(archive_path),
+            caption_model=cfg.caption_model,
+            embedding_model=cfg.caption_embedding_model,
+            embedding_pretrained=cfg.caption_embedding_pretrained,
+            max_images=cfg.archive_limit if cfg.archive_limit is not None else run_cfg.num_agents,
+        )
+        
+        desc = _format_run_prefix(run_cfg, "[embedding]")
+        print(f"{desc}")
+        run_embedding_phase(caption_cfg, embed_model=embed_model_dict)
 
 
 _AGGREGATE_EXCLUDE_FIELDS: Tuple[str, ...] = (
@@ -555,7 +450,12 @@ def _group_key_for_aggregate(cfg: PicbreederConfig) -> Tuple[Tuple[str, Any], ..
 def _load_trajectory_metric(path: Path, metric_key: str) -> Dict[int, float]:
     data = json.loads(path.read_text(encoding="utf-8"))
     result: Dict[int, float] = {}
-    for row in data:
+    
+    iterator = data.values() if isinstance(data, dict) else data
+    
+    for row in iterator:
+        if not isinstance(row, dict):
+            continue
         idx = row.get("index")
         value = row.get(metric_key)
         if idx is None or value is None:
@@ -643,8 +543,6 @@ def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path, model_name: Opt
     candidates_metrics = []
     if model_name:
          candidates_metrics.append(exp_dir / f"embedding_metrics{model_suffix}.json")
-    else:
-         candidates_metrics.append(exp_dir / "embedding_metrics.json")
 
     for metrics_path in candidates_metrics:
         if metrics_path.exists():
@@ -676,10 +574,21 @@ def _load_embedding_mean_pairwise_distance_scalar(exp_dir: Path, model_name: Opt
             continue
         try:
             traj = json.loads(traj_path.read_text(encoding="utf-8"))
-            if not isinstance(traj, list) or not traj:
-                continue
-            last = traj[-1]
-            if not isinstance(last, dict):
+            last = None
+            if isinstance(traj, list) and traj:
+                 last = traj[-1]
+            elif isinstance(traj, dict) and traj:
+                 max_k = -1
+                 for k, v in traj.items():
+                     try:
+                        ki = int(k)
+                        if ki > max_k:
+                            max_k = ki
+                            last = v
+                     except ValueError:
+                        continue
+            
+            if last is None or not isinstance(last, dict):
                 continue
             value = last.get("mean_pairwise_distance")
             if value is not None:
@@ -717,13 +626,17 @@ def _compute_mean_trajectory(
     metric_type: str,
     model_name: Optional[str] = None,
     nounlist_name: Optional[str] = None,
+    k: Optional[int] = None,
+    caption_model_name: Optional[str] = None,
+    caption_embedding_model: Optional[str] = None,
+    negative_anchors_name: Optional[str] = None,
 ) -> Optional[Dict[int, float]]:
     trajectories = []
     for run_cfg in run_configs:
         exp_dir = Path(run_cfg.experiment_dir)
         limit = run_cfg.num_agents
         
-        if metric_type == "novelty":
+        if metric_type == "novelty" or metric_type == "visual_k_covering":
             suffix = ""
             if model_name:
                 sanitized = model_name.replace("/", "-")
@@ -731,11 +644,36 @@ def _compute_mean_trajectory(
             
             path = exp_dir / f"embedding_mean_pairwise_distance_over_time{suffix}.json"
             if path.exists():
-                traj = _load_trajectory_metric(path, "mean_pairwise_distance")
-                traj = {k: v for k, v in traj.items() if k <= limit}
-                if traj:
-                    trajectories.append(traj)
-                    
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    iterator = data.values() if isinstance(data, dict) else data
+                    traj = {}
+                    for row in iterator:
+                        if not isinstance(row, dict): continue
+                        idx = row.get("index")
+                        if idx is None: continue
+                        try:
+                            idx_int = int(idx)
+                        except ValueError: continue
+                        
+                        if idx_int > limit: continue
+                        
+                        if metric_type == "novelty":
+                            val = row.get("mean_pairwise_distance")
+                            if val is not None:
+                                traj[idx_int] = float(val)
+                        elif metric_type == "visual_k_covering":
+                            if k is None: continue
+                            radii = row.get("k_covering_radii")
+                            if isinstance(radii, dict):
+                                val = radii.get(str(k))
+                                if val is not None:
+                                    traj[idx_int] = float(val)
+                    if traj:
+                        trajectories.append(traj)
+                except Exception:
+                    pass
+
         elif metric_type == "noun":
             if not nounlist_name:
                 continue
@@ -747,9 +685,78 @@ def _compute_mean_trajectory(
             path = exp_dir / f"noun_similarity_over_time_{nounlist_name}{suffix}.json"
             if path.exists():
                 traj = _load_trajectory_metric(path, "mean_max_similarity")
-                traj = {k: v for k, v in traj.items() if k <= limit}
+                traj = {key: val for key, val in traj.items() if key <= limit}
                 if traj:
                     trajectories.append(traj)
+
+        elif metric_type == "noun_contrastive":
+            suffix = ""
+            sanitized = model_name.replace("/", "-")
+            suffix = f"_{sanitized}"
+            
+            path = exp_dir / f"noun_similarity_over_time_{nounlist_name}{suffix}.json"
+            traj = _load_trajectory_metric(path, f"mean_max_contrastive_{negative_anchors_name}")
+            traj = {key: val for key, val in traj.items() if key <= limit}
+            if traj:
+                trajectories.append(traj)
+
+        elif metric_type == "caption_diversity":
+             if not caption_model_name or not caption_embedding_model:
+                 continue
+             
+             embed_sanitized = caption_embedding_model.replace("/", "-")
+             caption_suffix = f"_{caption_model_name}_{embed_sanitized}"
+             path = exp_dir / "archive" / f"metrics{caption_suffix}.json"
+             
+             if path.exists():
+                 try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    traj = {}
+                    for idx_str, info in data.items():
+                        try:
+                            idx_int = int(idx_str)
+                        except ValueError: continue
+                        if idx_int > limit: continue
+                        
+                        val = info.get("mean_pairwise_distance")
+                        if val is not None:
+                             traj[idx_int] = float(val)
+                    if traj:
+                        trajectories.append(traj)
+                 except Exception:
+                     pass
+        
+        elif metric_type == "caption_k_covering":
+             if k is None or not caption_model_name or not caption_embedding_model:
+                 continue
+             
+             embed_sanitized = caption_embedding_model.replace("/", "-")
+             caption_suffix = f"_{caption_model_name}_{embed_sanitized}"
+             path = exp_dir / "archive" / f"metrics{caption_suffix}.json"
+             
+             if path.exists():
+                 try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    # data format: { "1": { "mean_pairwise_distance": ..., "k_covering_radii": { "10": ... } }, ... }
+                    traj = {}
+                    for idx_str, info in data.items():
+                        try:
+                            idx_int = int(idx_str)
+                        except ValueError: continue
+                        if idx_int > limit: continue
+                        
+                        radii = info.get("k_covering_radii")
+                        if isinstance(radii, dict):
+                            val = radii.get(str(k))
+                            if val is not None:
+                                traj[idx_int] = float(val)
+                    if traj:
+                        trajectories.append(traj)
+                 except Exception:
+                     pass
+
+    if not trajectories:
+        return None
 
     if not trajectories:
         return None
@@ -807,16 +814,25 @@ def _compute_mean_scalar(
 
 
 def _plot_seed_aggregates(
-    *,
     run_configs: Sequence[PicbreederConfig],
     output_dir: Path,
     filename_tag: str,
-    image_embedding_model: Optional[str] = None,
-    text_image_embedding_model: Optional[str] = None,
+    image_embedding_model: str,
+    text_image_embedding_model: str,
+    caption_model: str,
+    caption_embedding_model: str,
+    negative_anchors: str,
+    novelty_ylim: Optional[List[float]] = None,
+    noun_ylim: Optional[List[float]] = None,
 ) -> None:
     novelty_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     noun_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
+    noun_contrastive_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
+    caption_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
+    caption_k_covering_grouped: Dict[str, Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]]] = {}
+    visual_k_covering_grouped: Dict[str, Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]]] = {}
     noun_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+    noun_contrastive_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     mpd_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
 
     image_model_suffix = ""
@@ -828,6 +844,11 @@ def _plot_seed_aggregates(
     if text_image_embedding_model:
         sanitized = text_image_embedding_model.replace("/", "-")
         text_image_model_suffix = f"_{sanitized}"
+        
+    caption_suffix = ""
+    if caption_model and caption_embedding_model:
+        embed_sanitized = caption_embedding_model.replace("/", "-")
+        caption_suffix = f"_{caption_model}_{embed_sanitized}"
 
     # We might have different nounlists across run_configs
     # We collect all used nounlists to load baselines for them
@@ -841,6 +862,8 @@ def _plot_seed_aggregates(
 
     baselines_novelty: List[Tuple[str, Dict[int, float]]] = []
     baselines_noun: List[Tuple[str, Dict[int, float]]] = []
+    baselines_noun_contrastive: List[Tuple[str, Dict[int, float]]] = []
+    baselines_caption_diversity: List[Tuple[str, Dict[int, float]]] = []
     
     # Store random baseline scalars separately to merge later
     extra_scalars_novelty: List[Tuple[str, float]] = []
@@ -850,6 +873,8 @@ def _plot_seed_aggregates(
         baseline_model_novelty = image_embedding_model if image_embedding_model else "ViT-B-32"
         baseline_model_noun = text_image_embedding_model if text_image_embedding_model else "ViT-H-14"
         
+        neg_anchors = negative_anchors
+
         for size in unique_sizes:
             label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
             
@@ -859,10 +884,20 @@ def _plot_seed_aggregates(
             
             for nl_name in used_nounlists:
                  nl_suffix = f" {nl_name}" if len(used_nounlists) > 1 else ""
-                 bnn = load_human_baseline("noun", size, baseline_model_noun, nounlist=nl_name)
+                 bnn = load_human_baseline("noun", size, baseline_model_noun, nounlist=nl_name, negative_anchors=neg_anchors)
                  if bnn:
                      baselines_noun.append((f"Human Baseline{label_suffix}{nl_suffix}", bnn))
+                 
+                 bnnc = load_human_baseline("noun_contrastive", size, baseline_model_noun, nounlist=nl_name, strict=False, negative_anchors=neg_anchors)
+                 if bnnc:
+                     baselines_noun_contrastive.append((f"Human Baseline{label_suffix}{nl_suffix}", bnnc))
             
+            # Human Baseline for Caption Diversity
+            if caption_model:
+                 hbc = load_human_baseline("caption_diversity", size, caption_model, strict=False)
+                 if hbc:
+                     baselines_caption_diversity.append((f"Human Baseline{label_suffix}", hbc))
+
             # Random Baseline
             for nl_name in used_nounlists:
                 nl_suffix = f" {nl_name}" if len(used_nounlists) > 1 else ""
@@ -873,27 +908,46 @@ def _plot_seed_aggregates(
                 if limit > 0:
                      rb_configs = _get_random_baseline_configs(limit, size, nl_name, Path(get_original_cwd()))
                      if rb_configs:
-                         # Novelty
-                         traj_nov = _compute_mean_trajectory(rb_configs, "novelty", image_embedding_model)
-                         if traj_nov:
-                             baselines_novelty.append((f"Random Baseline{label_suffix}", traj_nov))
-                             scalar_nov = _compute_mean_scalar(rb_configs, "novelty", image_embedding_model)
-                             if scalar_nov is not None:
-                                 extra_scalars_novelty.append((f"Random Baseline{label_suffix}", scalar_nov))
+                        # Novelty
+                        traj_nov = _compute_mean_trajectory(rb_configs, "novelty", image_embedding_model)
+                        baselines_novelty.append((f"Random Baseline{label_suffix}", traj_nov))
+                        # else:
+                        #     scalar_nov = _compute_mean_scalar(rb_configs, "novelty", image_embedding_model)
+                        #     if scalar_nov is not None:
+                        #         extra_scalars_novelty.append((f"Random Baseline{label_suffix}", scalar_nov))
 
-                         # Noun
-                         traj_noun = _compute_mean_trajectory(rb_configs, "noun", text_image_embedding_model, nl_name)
-                         if traj_noun:
-                             baselines_noun.append((f"Random Baseline{label_suffix}{nl_suffix}", traj_noun))
-                             scalar_noun = _compute_mean_scalar(rb_configs, "noun", text_image_embedding_model, nl_name)
-                             if scalar_noun is not None:
-                                 extra_scalars_noun.append((f"Random Baseline{label_suffix}{nl_suffix}", scalar_noun))
-                         
-                         # Avoid adding novelty baseline multiple times if we loop over nounlists 
-                         # (though directories might differ, novelty is same concept).
-                         # But since we look up runs by nounlist, we might find different runs.
-                         # If multiple nounlists are used in current sweep, we might have multiple random baselines?
-                         # Let's just keep them all for now, labeled by nounlist if necessary.
+                        # Caption Diversity
+                        if caption_model and caption_embedding_model:
+                             traj_cd = _compute_mean_trajectory(
+                                 rb_configs, 
+                                 "caption_diversity", 
+                                 caption_model_name=caption_model, 
+                                 caption_embedding_model=caption_embedding_model
+                             )
+                             if traj_cd:
+                                 baselines_caption_diversity.append((f"Random Baseline{label_suffix}", traj_cd))
+
+                        # Noun
+                        traj_noun = _compute_mean_trajectory(rb_configs, "noun", text_image_embedding_model, nl_name, negative_anchors_name=negative_anchors)
+                        if traj_noun:
+                            baselines_noun.append((f"Random Baseline{label_suffix}{nl_suffix}", traj_noun))
+
+                        # Noun Contrastive
+                        neg_stem = Path(neg_anchors).stem if neg_anchors else None
+                        if neg_stem:
+                            traj_noun_cont = _compute_mean_trajectory(rb_configs, "noun_contrastive", text_image_embedding_model, nl_name, negative_anchors_name=neg_stem)
+                            if traj_noun_cont:
+                                baselines_noun_contrastive.append((f"Random Baseline{label_suffix}{nl_suffix}", traj_noun_cont))
+                        # else:
+                        #     scalar_noun = _compute_mean_scalar(rb_configs, "noun", text_image_embedding_model, nl_name)
+                        #     if scalar_noun is not None:
+                        #         extra_scalars_noun.append((f"Random Baseline{label_suffix}{nl_suffix}", scalar_noun))
+                        
+                        # Avoid adding novelty baseline multiple times if we loop over nounlists 
+                        # (though directories might differ, novelty is same concept).
+                        # But since we look up runs by nounlist, we might find different runs.
+                        # If multiple nounlists are used in current sweep, we might have multiple random baselines?
+                        # Let's just keep them all for now, labeled by nounlist if necessary.
 
     for run_cfg in run_configs:
         group_key = _group_key_for_aggregate(run_cfg)
@@ -909,13 +963,56 @@ def _plot_seed_aggregates(
             novelty_path = exp_dir / "embedding_mean_pairwise_distance_over_time.json"
             
         if novelty_path.exists():
-            novelty = _load_trajectory_metric(novelty_path, "mean_pairwise_distance")
-            # Truncate at num_agents
-            novelty = {k: v for k, v in novelty.items() if k <= limit}
-            if novelty:
-                novelty_grouped.setdefault(group_key, []).append(novelty)
+            try:
+                raw_data = json.loads(novelty_path.read_text(encoding="utf-8"))
+                iterator = raw_data.values() if isinstance(raw_data, dict) else raw_data
+                
+                mpd_traj = {}
+                k_covering_trajs = {} # k -> {index -> radius}
+
+                for row in iterator:
+                    if not isinstance(row, dict): continue
+                    idx_str = row.get("index")
+                    if idx_str is None: continue
+                    try:
+                        idx = int(idx_str)
+                    except ValueError: continue
+                    
+                    if idx > limit: continue
+
+                    # MPD
+                    mpd = row.get("mean_pairwise_distance")
+                    if mpd is not None:
+                        mpd_traj[idx] = float(mpd)
+                    
+                    # K-Covering
+                    radii = row.get("k_covering_radii")
+                    if isinstance(radii, dict):
+                        for k, r in radii.items():
+                            try:
+                                k_int = int(k)
+                                if k_int not in k_covering_trajs:
+                                    k_covering_trajs[k_int] = {}
+                                k_covering_trajs[k_int][idx] = float(r)
+                            except ValueError: pass
+
+                if mpd_traj:
+                    novelty_grouped.setdefault(group_key, []).append(mpd_traj)
+                
+                for k, traj in k_covering_trajs.items():
+                    k_str = str(k)
+                    if k_str not in visual_k_covering_grouped:
+                        visual_k_covering_grouped[k_str] = {}
+                    visual_k_covering_grouped[k_str].setdefault(group_key, []).append(traj)
+
+            except Exception as e:
+                print(f"Error reading/parsing {novelty_path}: {e}")
 
         # Try specific model file first
+        neg_suffix = ""
+        if hasattr(run_cfg, "negative_anchors") and run_cfg.negative_anchors:
+             neg_suffix = f"_{Path(run_cfg.negative_anchors).stem}"
+             
         if text_image_embedding_model:
             noun_path = exp_dir / f"noun_similarity_over_time_{current_nounlist_name}{text_image_model_suffix}.json"
         else:
@@ -927,7 +1024,48 @@ def _plot_seed_aggregates(
             noun = {k: v for k, v in noun.items() if k <= limit}
             if noun:
                 noun_grouped.setdefault(group_key, []).append(noun)
+            
+            noun_cont = _load_trajectory_metric(noun_path, f"mean_max_contrastive{neg_suffix}")
+            noun_cont = {k: v for k, v in noun_cont.items() if k <= limit}
+            if noun_cont:
+                noun_contrastive_grouped.setdefault(group_key, []).append(noun_cont)
+            elif noun:
+                raise ValueError(f"Missing contrastive noun similarity in {noun_path} (eval_noun_coverage was likely run with an old version or incomplete data)")
 
+        # Try caption metrics
+        if caption_model and caption_embedding_model:
+            cap_metrics_path = exp_dir / "archive" / f"metrics{caption_suffix}.json"
+            if cap_metrics_path.exists():
+                trajectory = json.loads(cap_metrics_path.read_text(encoding="utf-8"))
+                traj_points_mpd = {}
+                traj_points_k = {} # Map k -> {n -> val}
+                
+                for n in trajectory:
+                    if int(n) <= limit:
+                        n_int = int(n)
+                        # MPD
+                        val = trajectory[n].get("mean_pairwise_distance")
+
+                        if val is not None:
+                            traj_points_mpd[n_int] = float(val)
+                            
+                        # K-Covering
+                        k_radii = trajectory[n].get("k_covering_radii", {})
+                        for k, radius in k_radii.items():
+                            k_key = int(k)
+
+                            if k_key not in traj_points_k:
+                                traj_points_k[k_key] = {}
+                            traj_points_k[k_key][n_int] = float(radius)
+                            
+                if traj_points_mpd:
+                        caption_grouped.setdefault(group_key, []).append(traj_points_mpd)
+                        
+                for k, traj in traj_points_k.items():
+                    if k not in caption_k_covering_grouped:
+                        caption_k_covering_grouped[k] = {}
+                    caption_k_covering_grouped[k].setdefault(group_key, []).append(traj)
+                            
     # Derive scalars strictly from the truncated trajectories
     for group_key, runs in novelty_grouped.items():
         scalars = []
@@ -944,6 +1082,14 @@ def _plot_seed_aggregates(
                 scalars.append(run[max(run.keys())])
         if scalars:
             noun_scalar_grouped[group_key] = scalars
+
+    for group_key, runs in noun_contrastive_grouped.items():
+        scalars = []
+        for run in runs:
+            if run:
+                scalars.append(run[max(run.keys())])
+        if scalars:
+            noun_contrastive_scalar_grouped[group_key] = scalars
 
     # Use image model suffix for novelty plots, text-image model suffix for noun plots
     # If mixed, we append both or stick to one convention. 
@@ -977,45 +1123,186 @@ def _plot_seed_aggregates(
     baseline_scalars_noun = _extract_baseline_scalars(baselines_noun, max_x_noun) if max_x_noun > 0 else []
     baseline_scalars_noun.extend(extra_scalars_noun)
     
+    max_x_noun_cont = _compute_max_x(noun_contrastive_grouped)
+    baseline_scalars_noun_contrastive = _extract_baseline_scalars(baselines_noun_contrastive, max_x_noun_cont) if max_x_noun_cont > 0 else []
+    
     if len(used_nounlists) == 1:
         nounlist_name_for_file = list(used_nounlists)[0]
     else:
         nounlist_name_for_file = "mixed"
 
+    neg_anchors_for_file = ""
+    # We need to collect used negative anchors from run_configs if available
+    used_neg_anchors = set()
+    if run_configs:
+         for rc in run_configs:
+             if hasattr(rc, "negative_anchors") and rc.negative_anchors:
+                 used_neg_anchors.add(Path(rc.negative_anchors).stem)
+    
+    if len(used_neg_anchors) == 1:
+        neg_anchors_for_file = f"_{list(used_neg_anchors)[0]}"
+    elif len(used_neg_anchors) > 1:
+        neg_anchors_for_file = "_mixed_neg"
+
     agg_plot_distance_path = output_dir / f"aggregate_embedding_mean_pairwise_distance_over_time_{filename_tag}{image_model_suffix}.png"
     write_aggregate_plot(
         grouped_runs=novelty_grouped,
         outpath=agg_plot_distance_path,
-        title="Embedding diversity over time (mean±std across seeds)",
+        title="Embedding diversity over time (mean±sem across seeds)",
         xlabel="Archive insertion order",
         ylabel="Mean pairwise distance",
         baselines=baselines_novelty,
+        ylim=tuple(novelty_ylim) if novelty_ylim else None,
     )
     agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png"
     write_aggregate_plot(
         grouped_runs=noun_grouped,
         outpath=agg_plot_noun_path,
-        title="Noun similarity over time (mean±std across seeds)",
+        title="Noun similarity over time (mean±sem across seeds)",
         xlabel="Archive insertion order",
         ylabel="Mean max cosine similarity",
         baselines=baselines_noun,
+        ylim=tuple(noun_ylim) if noun_ylim else None,
     )
 
     write_scalar_bar_plot(
         grouped_values=noun_scalar_grouped,
         outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png",
-        title="Mean max noun similarity (mean±std across seeds)",
+        title="Mean max noun similarity (mean±sem across seeds)",
         ylabel="Mean of per-noun max cosine similarity",
         baselines=baseline_scalars_noun,
+    )
+
+    agg_plot_noun_cont_path = output_dir / f"aggregate_noun_contrastive_over_time_{nounlist_name_for_file}{neg_anchors_for_file}_{filename_tag}{text_image_model_suffix}.png"
+    write_aggregate_plot(
+        grouped_runs=noun_contrastive_grouped,
+        outpath=agg_plot_noun_cont_path,
+        title="Contrastive noun similarity over time (mean±sem across seeds)",
+        xlabel="Archive insertion order",
+        ylabel="Mean max contrastive similarity",
+        baselines=baselines_noun_contrastive,
+        ylim=None,
+    )
+
+    write_scalar_bar_plot(
+        grouped_values=noun_contrastive_scalar_grouped,
+        outpath=output_dir / f"aggregate_noun_contrastive_mean_bar_{nounlist_name_for_file}{neg_anchors_for_file}_{filename_tag}{text_image_model_suffix}.png",
+        title="Mean max contrastive noun similarity (mean±sem across seeds)",
+        ylabel="Mean of per-noun max contrastive similarity",
+        baselines=baseline_scalars_noun_contrastive,
     )
 
     write_scalar_bar_plot(
         grouped_values=mpd_scalar_grouped,
         outpath=output_dir / f"aggregate_mean_pairwise_distance_mean_bar_{filename_tag}{image_model_suffix}.png",
-        title="Mean pairwise distance (mean±std across seeds)",
+        title="Mean pairwise distance (mean±sem across seeds)",
         ylabel="Mean pairwise distance (euclidean)",
         baselines=baseline_scalars_novelty,
     )
+
+    for k, grouped_data in visual_k_covering_grouped.items():
+        k_int = int(k)
+        current_baselines = []
+        
+        if run_configs:
+            baseline_model_novelty = image_embedding_model if image_embedding_model else "ViT-B-32"
+            
+            # Human Baselines
+            for size in unique_sizes:
+                label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
+                # Strict=True will raise Exception if baseline missing
+                hb = load_human_baseline("visual_k_covering", size, baseline_model_novelty, k=k_int, strict=True)
+                if hb:
+                    current_baselines.append((f"Human Baseline{label_suffix}", hb))
+            
+            # Random Baselines
+            limit = run_configs[0].num_agents
+            for size in unique_sizes:
+                label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
+                # We iterate used_nounlists to find the correct random baseline run
+                # (Assuming random baseline was run with one of these nounlists)
+                for nl_name in used_nounlists:
+                    rb_configs = _get_random_baseline_configs(limit, size, nl_name, Path(get_original_cwd()))
+                    if not rb_configs:
+                        raise ValueError(f"Random Baseline experiments not found for size={size}, nounlist={nl_name}")
+                    
+                    traj = _compute_mean_trajectory(rb_configs, "visual_k_covering", image_embedding_model, k=k_int)
+                    if not traj:
+                        raise ValueError(f"Missing visual_k_covering stats (k={k}) for Random Baseline (size={size})")
+                    
+                    current_baselines.append((f"Random Baseline{label_suffix}", traj))
+                    # Only add one random baseline per size (assuming nounlist doesn't affect visual random baseline significantly)
+                    break
+
+        agg_plot_k_path = output_dir / f"aggregate_visual_k_covering_k{k}_over_time_{filename_tag}{image_model_suffix}.png"
+        write_aggregate_plot(
+            grouped_runs=grouped_data,
+            outpath=agg_plot_k_path,
+            title=f"Visual K-Covering Radius (k={k}) over time",
+            xlabel="Archive insertion order",
+            ylabel=f"Covering Radius (k={k})",
+            baselines=current_baselines,
+            ylim=None,
+        )
+
+    if caption_grouped:
+        agg_plot_caption_path = output_dir / f"aggregate_caption_diversity_over_time_{filename_tag}{caption_suffix}.png"
+        write_aggregate_plot(
+            grouped_runs=caption_grouped,
+            outpath=agg_plot_caption_path,
+            title=f"Caption Diversity (MPD) over time ({caption_model}/{caption_embedding_model})",
+            xlabel="Archive insertion order",
+            ylabel="Mean pairwise distance",
+            baselines=baselines_caption_diversity,
+            ylim=None,
+        )
+
+    for k, grouped_data in caption_k_covering_grouped.items():
+        k_int = int(k)
+        current_baselines = []
+        
+        if run_configs and caption_model:
+            # Human Baselines
+            for size in unique_sizes:
+                label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
+                # Strict=True will raise Exception if baseline missing
+                hb = load_human_baseline("caption_k_covering", size, caption_model, k=k_int, strict=True)
+                if hb:
+                    current_baselines.append((f"Human Baseline{label_suffix}", hb))
+            
+            # Random Baselines
+            limit = run_configs[0].num_agents
+            for size in unique_sizes:
+                label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
+                for nl_name in used_nounlists:
+                    rb_configs = _get_random_baseline_configs(limit, size, nl_name, Path(get_original_cwd()))
+                    if not rb_configs:
+                        raise ValueError(f"Random Baseline experiments not found for size={size}, nounlist={nl_name}")
+                    
+                    traj = _compute_mean_trajectory(
+                        rb_configs, 
+                        "caption_k_covering", 
+                        k=k_int, 
+                        caption_model_name=caption_model,
+                        caption_embedding_model=caption_embedding_model
+                    )
+                    
+                    if not traj:
+                         raise ValueError(f"Missing caption_k_covering stats (k={k}) for Random Baseline")
+                    
+                    current_baselines.append((f"Random Baseline{label_suffix}", traj))
+                    break
+
+        agg_plot_k_path = output_dir / f"aggregate_caption_k_covering_k{k}_over_time_{filename_tag}{caption_suffix}.png"
+        write_aggregate_plot(
+            grouped_runs=grouped_data,
+            outpath=agg_plot_k_path,
+            title=f"Caption K-Covering Radius (k={k}) over time",
+            xlabel="Archive insertion order",
+            ylabel=f"Covering Radius (k={k})",
+            baselines=current_baselines,
+            ylim=None,
+        )
 
 
 def _plot_tree_metrics_aggregates(
@@ -1111,7 +1398,7 @@ def _plot_tree_metrics_aggregates(
         write_scalar_bar_plot(
             grouped_values=sackin_grouped,
             outpath=output_dir / f"aggregate_sackin_index_{filename_tag}.png",
-            title="Sackin Index (Tree Balance) (mean±std across seeds)",
+            title="Sackin Index (Tree Balance) (mean±sem across seeds)",
             ylabel="Sackin Index (lower is more balanced)",
             baselines=human_baselines_sackin,
         )
@@ -1120,7 +1407,7 @@ def _plot_tree_metrics_aggregates(
         write_scalar_bar_plot(
             grouped_values=colless_grouped,
             outpath=output_dir / f"aggregate_colless_index_{filename_tag}.png",
-            title="Colless Index (Tree Balance) (mean±std across seeds)",
+            title="Colless Index (Tree Balance) (mean±sem across seeds)",
             ylabel="Colless Index (lower is more balanced)",
             baselines=human_baselines_colless,
         )
@@ -1129,7 +1416,7 @@ def _plot_tree_metrics_aggregates(
         write_scalar_bar_plot(
             grouped_values=depth_grouped,
             outpath=output_dir / f"aggregate_tree_depth_{filename_tag}.png",
-            title="Max Tree Depth (mean±std across seeds)",
+            title="Max Tree Depth (mean±sem across seeds)",
             ylabel="Max Depth",
             baselines=human_baselines_depth,
         )
@@ -1191,6 +1478,145 @@ def _format_run_prefix(cfg: PicbreederConfig, prefix: str) -> str:
         f"goal={cfg.goal} scheme={cfg.scheme} resume={cfg.resume} -> {cfg.experiment_dir}"
     )
 
+def _run_render_archive(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, cross_eval_dir: Path):
+    import torch
+    import shutil
+    import os
+    from pathlib import Path
+    from dataclasses import fields as dataclass_fields, replace
+    from embed_and_visualize import (
+        EmbedVisualizeConfig,
+        main as embed_main,
+        prepare_openclip_components as prepare_eval_clip,
+    )
+    from config import PicbreederConfig
+
+    # Helper to compute group label for a run (used for organization)
+    group_keys = [_group_key_for_aggregate(rc) for rc in run_configs]
+    varying_fields = compute_varying_fields(group_keys)
+
+    previous_cwd = Path.cwd()
+    os.chdir(original_cwd)
+    try:
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        print(f"[local-eval] Using device: {device}")
+
+        base_kwargs0 = {
+            field_def.name: getattr(run_configs[0], field_def.name)
+            for field_def in dataclass_fields(PicbreederConfig)
+            if field_def.name != "hydra"
+        }
+        eval_cfg0 = EmbedVisualizeConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
+        eval_model, eval_preprocess = prepare_eval_clip(eval_cfg0, device)
+
+        for run_cfg, group_key in zip(run_configs, group_keys):
+            base_kwargs = {
+                field_def.name: getattr(run_cfg, field_def.name)
+                for field_def in dataclass_fields(PicbreederConfig)
+                if field_def.name != "hydra"
+            }
+            eval_cfg = EmbedVisualizeConfig(**base_kwargs, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
+            
+            # Enforce archive limit = num_agents
+            eval_cfg = replace(eval_cfg, archive_limit=run_cfg.num_agents)
+            
+            desc = _format_run_prefix(run_cfg, "[local-eval]")
+            print(f"{desc} -> embed_and_visualize limit={eval_cfg.archive_limit}")
+            
+            _call_hydra_wrapped_main(
+                embed_main,
+                eval_cfg,
+                model=eval_model,
+                preprocess=eval_preprocess,
+            )
+
+            # Copy results to cross_eval
+            label = format_group_label(group_key, varying_fields)
+            # Sanitize label for directory usage
+            sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
+            dest_dir = cross_eval_dir / sanitized_label
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            
+            model_name_sanitized = cfg.image_embedding_model.replace("/", "-")
+            
+            # Files to copy
+            src_files = [
+                Path(run_cfg.experiment_dir) / f"embed_viz_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                Path(run_cfg.experiment_dir) / f"embed_grid_rect_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                Path(run_cfg.experiment_dir) / f"embed_grid_representative_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                Path(run_cfg.experiment_dir) / f"embed_grid_representative_simple_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                Path(run_cfg.experiment_dir) / f"embed_grid_uniform_interval_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                Path(run_cfg.experiment_dir) / f"embed_grid_uniform_random_{model_name_sanitized}_{eval_cfg.method}.pdf",
+            ]
+            
+            for src in src_files:
+                if src.exists():
+                    # Append seed to filename
+                    dest_name = f"{src.stem}_seed{run_cfg.seed}{src.suffix}"
+                    shutil.copy2(src, dest_dir / dest_name)
+                    print(f"Copied {src.name} -> {dest_dir / dest_name}")
+    finally:
+        os.chdir(previous_cwd)
+
+
+def _run_eval_tree(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, cross_eval_dir: Path, filename_tag: str):
+    import shutil
+    import os
+    from pathlib import Path
+    from dataclasses import fields as dataclass_fields, replace
+    from visualize_archive_phylogeny import ArchivePhylogenyConfig, main as viz_main
+    from config import PicbreederConfig
+
+    # Helper to compute group label for a run (used for organization)
+    group_keys = [_group_key_for_aggregate(rc) for rc in run_configs]
+    varying_fields = compute_varying_fields(group_keys)
+
+    previous_cwd = Path.cwd()
+    os.chdir(original_cwd)
+    try:
+        for run_cfg, group_key in zip(run_configs, group_keys):
+            base_kwargs = {
+                field_def.name: getattr(run_cfg, field_def.name)
+                for field_def in dataclass_fields(PicbreederConfig)
+                if field_def.name != "hydra"
+            }
+            viz_cfg = ArchivePhylogenyConfig(**base_kwargs)
+            
+            # Enforce archive limit = num_agents
+            viz_cfg = replace(viz_cfg, archive_limit=run_cfg.num_agents)
+            
+            desc = _format_run_prefix(run_cfg, "[local-viz]")
+            print(f"{desc} -> visualize_archive_phylogeny limit={viz_cfg.archive_limit}")
+            
+            _call_hydra_wrapped_main(viz_main, viz_cfg)
+
+            # Copy results to cross_eval
+            label = format_group_label(group_key, varying_fields)
+            # Sanitize label for directory usage
+            sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
+            dest_dir = cross_eval_dir / sanitized_label
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Files to copy (default format is pdf)
+            src_file = Path(run_cfg.experiment_dir) / "archive" / f"archive_phylogeny.{viz_cfg.format}"
+            
+            if src_file.exists():
+                dest_name = f"archive_phylogeny_seed{run_cfg.seed}.{viz_cfg.format}"
+                shutil.copy2(src_file, dest_dir / dest_name)
+                print(f"Copied {src_file.name} -> {dest_dir / dest_name}")
+            else:
+                print(f"Warning: Expected output {src_file} not found.")
+
+        # Plot aggregates
+        _plot_tree_metrics_aggregates(
+            run_configs=run_configs,
+            output_dir=cross_eval_dir,
+            filename_tag=filename_tag,
+        )
+    finally:
+        os.chdir(previous_cwd)
+
+
 def launch_locally(configs: Sequence[PicbreederConfig]) -> None:
     for run_cfg in configs:
         print(_format_run_prefix(run_cfg, "[local]"))
@@ -1209,7 +1635,7 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         cpus_per_task=cfg.num_proc,
         # slurm_partition=cfg.partition,
         slurm_account=cfg.account,
-        name="picbreeder-vlm",
+        name=cfg.sweep_name,
     )
     if cfg.gpu:
         # Check if any config uses a Qwen model, which requires specific GPUs (rtx8000)
@@ -1260,6 +1686,11 @@ def main(cfg: SweepConfig) -> None:
             filename_tag=filename_tag,
             image_embedding_model=cfg.image_embedding_model,
             text_image_embedding_model=cfg.text_image_embedding_model,
+            caption_model=cfg.caption_model,
+            caption_embedding_model=cfg.caption_embedding_model,
+            novelty_ylim=cfg.novelty_ylim,
+            noun_ylim=cfg.noun_ylim,
+            negative_anchors=cfg.negative_anchors,
         )
 
         _plot_tree_metrics_aggregates(
@@ -1329,173 +1760,71 @@ def main(cfg: SweepConfig) -> None:
 
         return
 
-    if cfg.eval:
-        # We run the plotting phases in separate processes to ensure clean memory (especially VRAM/TF) usage.
+    any_eval_or_render = (
+        cfg.eval_visual_coverage or
+        cfg.eval_noun_coverage or
+        cfg.eval_captions or
+        cfg.render_archive or
+        cfg.eval_tree
+    )
+
+    if any_eval_or_render:
+        import multiprocessing
         import torch
-        device_str = "cuda" if torch.cuda.is_available() else "cpu"
         ctx = multiprocessing.get_context("spawn")
-        
-        # Phase 1: Novelty
-        p1 = ctx.Process(
-            target=_run_eval_phase_1,
-            args=(cfg, run_configs, original_cwd, device_str)
-        )
-        p1.start()
-        p1.join()
-        
-        if p1.exitcode != 0:
-            print(f"Phase 1 failed with exit code {p1.exitcode}")
-            return
+        device_str = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Phase 2: Noun Similarity
-        p2 = ctx.Process(
-            target=_run_eval_phase_2,
-            args=(cfg, run_configs, original_cwd, device_str)
-        )
-        p2.start()
-        p2.join()
+        if cfg.eval_visual_coverage:
+            p1 = ctx.Process(
+                target=_run_eval_visual_coverage,
+                args=(cfg, run_configs, original_cwd, device_str)
+            )
+            p1.start()
+            p1.join()
+            if p1.exitcode != 0:
+                print(f"Visual coverage eval failed with exit code {p1.exitcode}")
 
-        if p2.exitcode != 0:
-            print(f"Phase 2 failed with exit code {p2.exitcode}")
-            return
+        if cfg.eval_noun_coverage:
+            p2 = ctx.Process(
+                target=_run_eval_noun_coverage,
+                args=(cfg, run_configs, original_cwd, device_str)
+            )
+            p2.start()
+            p2.join()
+            if p2.exitcode != 0:
+                print(f"Noun coverage eval failed with exit code {p2.exitcode}")
 
-        # Plot the result across seeds here as well, for convenience.
+        if cfg.eval_captions:
+            p3 = ctx.Process(
+                target=_run_eval_captions,
+                args=(cfg, run_configs, original_cwd)
+            )
+            p3.start()
+            p3.join()
+            if p3.exitcode != 0:
+                print(f"Caption eval failed with exit code {p3.exitcode}")
+
+        if cfg.render_archive:
+            _run_render_archive(cfg, run_configs, original_cwd, cross_eval_dir)
+
+        if cfg.eval_tree:
+            _run_eval_tree(cfg, run_configs, original_cwd, cross_eval_dir, filename_tag)
+        # Plot aggregates for whatever was run
         _plot_seed_aggregates(
             run_configs=run_configs,
             output_dir=cross_eval_dir,
             filename_tag=filename_tag,
             image_embedding_model=cfg.image_embedding_model,
             text_image_embedding_model=cfg.text_image_embedding_model,
+            caption_model=cfg.caption_model,
+            caption_embedding_model=cfg.caption_embedding_model,
+            novelty_ylim=cfg.novelty_ylim,
+            noun_ylim=cfg.noun_ylim,
+            negative_anchors=cfg.negative_anchors,
         )
-
         return
 
-    if cfg.render_archive or cfg.render_tree:
-        # Match the launch_locally pattern: instantiate the relevant Config objects
-        # and call their main functions directly (no subprocess).
-        from dataclasses import fields as dataclass_fields
-        import shutil
-
-        # Helper to compute group label for a run (used for organization)
-        group_keys = [_group_key_for_aggregate(rc) for rc in run_configs]
-        varying_fields = compute_varying_fields(group_keys)
-
-        previous_cwd = Path.cwd()
-        os.chdir(original_cwd)
-        try:
-            if cfg.render_archive:
-                import torch
-
-                from embed_and_visualize import (
-                    EmbedVisualizeConfig,
-                    main as embed_main,
-                    prepare_openclip_components as prepare_eval_clip,
-                )
-
-                device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-                print(f"[local-eval] Using device: {device}")
-
-                base_kwargs0 = {
-                    field_def.name: getattr(run_configs[0], field_def.name)
-                    for field_def in dataclass_fields(PicbreederConfig)
-                    if field_def.name != "hydra"
-                }
-                eval_cfg0 = EmbedVisualizeConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
-                eval_model, eval_preprocess = prepare_eval_clip(eval_cfg0, device)
-
-                for run_cfg, group_key in zip(run_configs, group_keys):
-                    base_kwargs = {
-                        field_def.name: getattr(run_cfg, field_def.name)
-                        for field_def in dataclass_fields(PicbreederConfig)
-                        if field_def.name != "hydra"
-                    }
-                    eval_cfg = EmbedVisualizeConfig(**base_kwargs, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
-                    
-                    # Enforce archive limit = num_agents
-                    eval_cfg = replace(eval_cfg, archive_limit=run_cfg.num_agents)
-                    
-                    desc = _format_run_prefix(run_cfg, "[local-eval]")
-                    print(f"{desc} -> embed_and_visualize limit={eval_cfg.archive_limit}")
-                    
-                    _call_hydra_wrapped_main(
-                        embed_main,
-                        eval_cfg,
-                        model=eval_model,
-                        preprocess=eval_preprocess,
-                    )
-
-                    # Copy results to cross_eval
-                    label = format_group_label(group_key, varying_fields)
-                    # Sanitize label for directory usage
-                    sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
-                    dest_dir = cross_eval_dir / sanitized_label
-                    dest_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    model_name_sanitized = cfg.image_embedding_model.replace("/", "-")
-                    
-                    # Files to copy
-                    src_files = [
-                        Path(run_cfg.experiment_dir) / f"embed_viz_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                        Path(run_cfg.experiment_dir) / f"embed_grid_rect_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                        Path(run_cfg.experiment_dir) / f"embed_grid_representative_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                        Path(run_cfg.experiment_dir) / f"embed_grid_representative_simple_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                        Path(run_cfg.experiment_dir) / f"embed_grid_uniform_interval_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                        Path(run_cfg.experiment_dir) / f"embed_grid_uniform_random_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                    ]
-                    
-                    for src in src_files:
-                        if src.exists():
-                            # Append seed to filename
-                            dest_name = f"{src.stem}_seed{run_cfg.seed}{src.suffix}"
-                            shutil.copy2(src, dest_dir / dest_name)
-                            print(f"Copied {src.name} -> {dest_dir / dest_name}")
-
-            else:
-                from visualize_archive_phylogeny import ArchivePhylogenyConfig, main as viz_main
-
-                for run_cfg, group_key in zip(run_configs, group_keys):
-                    base_kwargs = {
-                        field_def.name: getattr(run_cfg, field_def.name)
-                        for field_def in dataclass_fields(PicbreederConfig)
-                        if field_def.name != "hydra"
-                    }
-                    viz_cfg = ArchivePhylogenyConfig(**base_kwargs)
-                    
-                    # Enforce archive limit = num_agents
-                    viz_cfg = replace(viz_cfg, archive_limit=run_cfg.num_agents)
-                    
-                    desc = _format_run_prefix(run_cfg, "[local-viz]")
-                    print(f"{desc} -> visualize_archive_phylogeny limit={viz_cfg.archive_limit}")
-                    
-                    _call_hydra_wrapped_main(viz_main, viz_cfg)
-
-                    # Copy results to cross_eval
-                    label = format_group_label(group_key, varying_fields)
-                    # Sanitize label for directory usage
-                    sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
-                    dest_dir = cross_eval_dir / sanitized_label
-                    dest_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # Files to copy (default format is pdf)
-                    src_file = Path(run_cfg.experiment_dir) / "archive" / f"archive_phylogeny.{viz_cfg.format}"
-                    
-                    if src_file.exists():
-                        dest_name = f"archive_phylogeny_seed{run_cfg.seed}.{viz_cfg.format}"
-                        shutil.copy2(src_file, dest_dir / dest_name)
-                        print(f"Copied {src_file.name} -> {dest_dir / dest_name}")
-                    else:
-                        print(f"Warning: Expected output {src_file} not found.")
-
-                # Plot aggregates
-                _plot_tree_metrics_aggregates(
-                    run_configs=run_configs,
-                    output_dir=cross_eval_dir,
-                    filename_tag=filename_tag,
-                )
-
-        finally:
-            os.chdir(previous_cwd)
-    elif cfg.slurm:
+    if cfg.slurm:
         launch_slurm(cfg, log_dir, run_configs)
     else:
         launch_locally(run_configs)
