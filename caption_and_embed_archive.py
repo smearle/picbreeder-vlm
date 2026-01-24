@@ -360,11 +360,6 @@ def calculate_caption_metrics_trajectory(
     """Calculate metrics over time as the archive grows."""
     
     ordered_keys = [p.name for p in image_paths_ordered if p.name in embeddings_dict]
-    if not ordered_keys:
-        # Ensure we write a valid JSON (empty dict) to avoid stale data
-        with open(data_path, "w") as f:
-            json.dump({}, f)
-        return {}
 
     all_vectors = np.array([embeddings_dict[k] for k in ordered_keys])
     total_images = len(ordered_keys)
@@ -378,16 +373,21 @@ def calculate_caption_metrics_trajectory(
     if not checkpoints or checkpoints[-1] != total_images:
         checkpoints.append(total_images)
         
-    trajectory = {}
     
     logger.info(f"Computing metrics over {len(checkpoints)} checkpoints (Total {total_images} images)...")
 
-    # if data_path.is_file():
-    #     with open(data_path, "r") as f:
-    #         trajectory = json.load(f)
+    trajectory = {}
+    if data_path.is_file():
+        with open(data_path, "r") as f:
+            trajectory = json.load(f)
+            if isinstance(trajectory, list) or 'total_images' in trajectory:
+                logger.warning(f"Existing metrics file {data_path} has unexpected format. Recomputing.")
+                trajectory = {}
+            else:
+                print(f"Loaded existing trajectory with {len(trajectory)} checkpoints from {data_path}.")
     
     for n in tqdm(checkpoints):
-        if n in trajectory:
+        if (n in trajectory) or (str(n) in trajectory):
             continue
         subset = all_vectors[:n]
         metrics = compute_metrics_snapshot(subset, k_values)
@@ -404,7 +404,7 @@ def plot_metrics(metrics_data: Dict[str, Any], output_dir: Path):
     """Plot metrics over time."""
 
     output_dir.mkdir(exist_ok=True, parents=True)
-    trajectory = metrics_data
+    trajectory = {int(k): v for k, v in metrics_data.items()}
     if not trajectory:
         return
         
@@ -412,8 +412,8 @@ def plot_metrics(metrics_data: Dict[str, Any], output_dir: Path):
     str_xs = [str(x) for x in xs]
     
     # 1. Mean Pairwise Distance
-    means = [trajectory[x]["mean_pairwise_distance"] for x in str_xs]
-    stds = [trajectory[x]["std_pairwise_distance"] for x in str_xs]
+    means = [trajectory[x]["mean_pairwise_distance"] for x in xs]
+    stds = [trajectory[x]["std_pairwise_distance"] for x in xs]
     
     plt.figure(figsize=(10, 6))
     plt.plot(xs, means, marker='o', label="Mean Pairwise Dist")
@@ -434,7 +434,7 @@ def plot_metrics(metrics_data: Dict[str, Any], output_dir: Path):
         return
 
     # Determine which Ks are present in the final snapshot to ensure we plot relevant ones
-    final_key = str_xs[-1]
+    final_key = xs[-1]
     final_metrics = trajectory[final_key].get("k_covering_radii", {})
     ks_to_plot = sorted([int(k) for k in final_metrics.keys()])
     
@@ -443,8 +443,8 @@ def plot_metrics(metrics_data: Dict[str, Any], output_dir: Path):
         # Extract series
         ys = []
         valid_xs = []
-        for x, key in zip(xs, str_xs):
-            radii = trajectory[key].get("k_covering_radii", {})
+        for x in xs:
+            radii = trajectory[x].get("k_covering_radii", {})
             if k in radii:
                 ys.append(radii[k])
                 valid_xs.append(x)
@@ -587,6 +587,9 @@ def run_embedding_phase(cfg: CaptionEmbedConfig, embed_model: Any = None):
     metrics = calculate_caption_metrics_trajectory(embeddings, images, k_values, metrics_file)
             
     plot_metrics(metrics, archive_path / "plots")
+
+    return metrics_file
+
 
 def load_embedding_model(model_name: str, pretrained: str):
     """Load embedding model (OpenCLIP or HF) once."""

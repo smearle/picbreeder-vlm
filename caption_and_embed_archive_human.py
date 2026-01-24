@@ -23,7 +23,7 @@ def main(cfg: HumanCaptionEmbedConfig):
     
     embed_model = load_embedding_model(cfg.embedding_model, cfg.embedding_pretrained)
     metrics_file = run_embedding_phase(cfg, embed_model)
-    shutil.copy(metrics_file, Path("human_baseline") / f"caption_metrics_res{cfg.grid_thumb_size}_{cfg.caption_model}.json")
+    shutil.copy(metrics_file, Path("human_baseline") / f"metrics_res{cfg.grid_thumb_size}_{cfg.caption_model}.json")
 
 if __name__ == "__main__":
     main()

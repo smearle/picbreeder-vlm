@@ -224,7 +224,7 @@ class ObjectiveFreeSweep(SweepConfig):
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 500
+    num_agents: int = 1_000
 
 
 @dataclass
