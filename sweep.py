@@ -1030,7 +1030,7 @@ def _plot_seed_aggregates(
             if noun_cont:
                 noun_contrastive_grouped.setdefault(group_key, []).append(noun_cont)
             elif noun:
-                raise ValueError(f"Missing contrastive noun similarity in {noun_path} (eval_noun_coverage was likely run with an old version or incomplete data)")
+                raise ValueError(f"Missing contrastive noun similarity with key {f'mean_max_contrastive{neg_suffix}'} in {noun_path} (eval_noun_coverage was likely run with an old version or incomplete data)")
 
         # Try caption metrics
         if caption_model and caption_embedding_model:

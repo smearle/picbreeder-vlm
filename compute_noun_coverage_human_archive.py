@@ -17,14 +17,12 @@ import numpy as np
 # Set backend before importing other plotting modules
 matplotlib.use("Agg")
 
+from typing import Optional, Sequence
 from compute_noun_coverage import (
-    prepare_openclip_components,
-    embed_images,
-    compute_trajectory_metrics,
-    plot_mean_max_similarity_trajectory,
-    save_trajectory_json,
     NounSimilarityConfig,
-    prepare_noun_text_embeddings,
+    process_noun_similarity,
+    format_prompts,
+    load_nouns,
 )
 from utils import _ensure_absolute, load_human_archive_images, resolve_nounlist
 from config import ensure_valid_config
@@ -77,60 +75,39 @@ def main(
         print("No images found. Exiting.")
         return
 
-    # Setup device
-    if validated_cfg.device:
-        device = torch.device(validated_cfg.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # Load nouns and format prompts
+    nouns_list = load_nouns(noun_file)
+    prompts_list = format_prompts(nouns_list, validated_cfg.label_template)
 
-    # Load model
-    print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
-    model, preprocess, tokenizer = prepare_openclip_components(validated_cfg, device)
-
-    # Embed images
-    print("Embedding images...")
-    _, image_embeddings = embed_images(
-        model,
-        preprocess,
-        image_paths,
-        device,
-        batch_size=validated_cfg.batch_size,
-    )
-
-    # Embed nouns and negatives
-    print("Preparing noun and negative embeddings...")
-    nouns_list, prompts_list, noun_embeddings, neg_embeddings = prepare_noun_text_embeddings(
-        validated_cfg,
-        original_cwd=original_cwd,
-        device=device,
-        model=model,
-        tokenizer=tokenizer,
-    )
-
-    # Compute trajectory
-    print("Computing trajectory...")
-    trajectory = compute_trajectory_metrics(image_embeddings, noun_embeddings, image_paths, neg_embeddings)
-
-    # Output filenames
-    # Include resolution and CLIP model in filename
+    # Setup output paths
     nounlist_name = noun_file.stem
     model_name = validated_cfg.embedding_model.replace("/", "-")
     
-    filename_base = f"noun_similarity_res{validated_cfg.render_size}_{model_name}_{nounlist_name}"
-
     output_dir = root_dir / "human_baseline"
     output_dir.mkdir(exist_ok=True, parents=True)
-
-    output_base = output_dir / filename_base
-    json_path = output_base.with_suffix(".json")
-    plot_path = output_base.with_suffix(".png")
-
-    print(f"Saving results to {json_path} and {plot_path}")
-    save_trajectory_json(trajectory, json_path)
-    plot_mean_max_similarity_trajectory(trajectory, plot_path)
     
-    print("Done.")
+    filename_base = f"noun_similarity_res{validated_cfg.render_size}_{model_name}_{nounlist_name}"
+    
+    # Configure output paths
+    validated_cfg.output_trajectory_json = output_dir / f"{filename_base}.json"
+    validated_cfg.output_trajectory_plot = output_dir / f"{filename_base}.png"
+    validated_cfg.output_json = output_dir / f"{filename_base}_metrics.json"
+
+    # Cache dir - use the parent directory of the images (archive_res-{size})
+    cache_dir = archive_dir.parent
+
+    print(f"Saving results to {output_dir}")
+    print(f"Using cache dir: {cache_dir}")
+
+    process_noun_similarity(
+        validated_cfg,
+        image_paths,
+        nouns_list,
+        prompts_list,
+        original_cwd,
+        output_dir=output_dir,
+        cache_dir=cache_dir,
+    )
 
 if __name__ == "__main__":
     main()

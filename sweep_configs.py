@@ -111,7 +111,10 @@ class FullRandSelectProbSweep(SweepConfig):
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5, 6, 7, 8])
+    seed: List[int] = field(default_factory=lambda: [
+        3, 4, 5, 
+        #  6, 7, 8
+    ])
     thumb_size: List[int] = field(default_factory=lambda: [128,])
     num_agents: int = 2_000
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.05, 0.085])

@@ -68,7 +68,11 @@ def load_images(archive_path: Path, max_images: Optional[int] = None) -> List[Pa
     if not archive_path.exists():
         raise FileNotFoundError(f"Archive path {archive_path} does not exist.")
     
-    search_path = archive_path / "images"
+    # Support both flat directory and 'archive/images' structure
+    if (archive_path / "images").exists():
+        search_path = archive_path / "images"
+    else:
+        search_path = archive_path
 
     image_extensions = {".png", ".jpg", ".jpeg"}
     images = sorted([
@@ -378,14 +382,9 @@ def calculate_caption_metrics_trajectory(
     
     logger.info(f"Computing metrics over {len(checkpoints)} checkpoints (Total {total_images} images)...")
 
-    if data_path.is_file():
-        with open(data_path, "r") as f:
-            trajectory = json.load(f)
-            # Ensure keys are integers
-            if isinstance(trajectory, dict):
-                trajectory = {int(k): v for k, v in trajectory.items()}
-            else:
-                trajectory = {}
+    # if data_path.is_file():
+    #     with open(data_path, "r") as f:
+    #         trajectory = json.load(f)
     
     for n in tqdm(checkpoints):
         if n in trajectory:
@@ -394,10 +393,10 @@ def calculate_caption_metrics_trajectory(
         metrics = compute_metrics_snapshot(subset, k_values)
         trajectory[n] = metrics
 
+    print(trajectory.keys())
     with open(data_path, "w") as f:
         json.dump(trajectory, f, indent=2)
-    print(f"Saved metrics trajectory to {data_path}")
-
+        
     return trajectory
 
 
@@ -405,16 +404,16 @@ def plot_metrics(metrics_data: Dict[str, Any], output_dir: Path):
     """Plot metrics over time."""
 
     output_dir.mkdir(exist_ok=True, parents=True)
-    # Ensure keys are integers
-    trajectory = {int(k): v for k, v in metrics_data.items()}
+    trajectory = metrics_data
     if not trajectory:
         return
         
-    xs = sorted(trajectory.keys())
+    xs = sorted([int(k) for k in trajectory.keys()])
+    str_xs = [str(x) for x in xs]
     
     # 1. Mean Pairwise Distance
-    means = [trajectory[x]["mean_pairwise_distance"] for x in xs]
-    stds = [trajectory[x]["std_pairwise_distance"] for x in xs]
+    means = [trajectory[x]["mean_pairwise_distance"] for x in str_xs]
+    stds = [trajectory[x]["std_pairwise_distance"] for x in str_xs]
     
     plt.figure(figsize=(10, 6))
     plt.plot(xs, means, marker='o', label="Mean Pairwise Dist")
@@ -431,11 +430,11 @@ def plot_metrics(metrics_data: Dict[str, Any], output_dir: Path):
     plt.close()
     
     # 2. K-Covering Radius
-    if not xs:
+    if not str_xs:
         return
 
     # Determine which Ks are present in the final snapshot to ensure we plot relevant ones
-    final_key = xs[-1]
+    final_key = str_xs[-1]
     final_metrics = trajectory[final_key].get("k_covering_radii", {})
     ks_to_plot = sorted([int(k) for k in final_metrics.keys()])
     
@@ -444,15 +443,10 @@ def plot_metrics(metrics_data: Dict[str, Any], output_dir: Path):
         # Extract series
         ys = []
         valid_xs = []
-        for x in xs:
-            radii = trajectory[x].get("k_covering_radii", {})
-            # Handle potential string keys from JSON
-            val = radii.get(k)
-            if val is None:
-                val = radii.get(str(k))
-                
-            if val is not None:
-                ys.append(val)
+        for x, key in zip(xs, str_xs):
+            radii = trajectory[key].get("k_covering_radii", {})
+            if k in radii:
+                ys.append(radii[k])
                 valid_xs.append(x)
         
         if ys:
@@ -548,6 +542,9 @@ def run_embedding_phase(cfg: CaptionEmbedConfig, embed_model: Any = None):
         archive_path = Path(hydra.utils.to_absolute_path(str(archive_path)))
 
     captions_file = archive_path / f"captions_{cfg.caption_model}.json"
+    if not captions_file.exists():
+        logger.warning(f"Captions file {captions_file} not found. Skipping embedding.")
+        return
         
     with open(captions_file, "r") as f:
         captions = json.load(f)
@@ -562,11 +559,14 @@ def run_embedding_phase(cfg: CaptionEmbedConfig, embed_model: Any = None):
     embeddings = {}
     should_embed = True
     if embeddings_file.exists():
-        with open(embeddings_file, "r") as f:
-            embeddings = json.load(f)
-        if len(embeddings) >= len(valid_captions): # Approximate check
-            should_embed = False
-            logger.info("Embeddings file seems complete, skipping embedding step.")
+        try:
+             with open(embeddings_file, "r") as f:
+                 embeddings = json.load(f)
+             if len(embeddings) >= len(valid_captions): # Approximate check
+                 should_embed = False
+                 logger.info("Embeddings file seems complete, skipping embedding step.")
+        except Exception:
+             pass
 
     if should_embed:
         if embed_model is None:
@@ -587,8 +587,6 @@ def run_embedding_phase(cfg: CaptionEmbedConfig, embed_model: Any = None):
     metrics = calculate_caption_metrics_trajectory(embeddings, images, k_values, metrics_file)
             
     plot_metrics(metrics, archive_path / "plots")
-    return metrics_file
-
 
 def load_embedding_model(model_name: str, pretrained: str):
     """Load embedding model (OpenCLIP or HF) once."""

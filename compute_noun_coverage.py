@@ -10,10 +10,12 @@ The resulting statistics are saved to JSON for further analysis.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+import pickle
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -22,6 +24,8 @@ import torch
 from tqdm import tqdm
 
 import matplotlib
+
+from constants import NOUN_LISTS_DIR
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -60,10 +64,7 @@ class NounSimilarityConfig(PicbreederConfig):
     grid_margin: int = 12
     grid_font_size: int = 10
     grid_top_k: Optional[int] = 900
-    negative_anchors: List[str] = field(default_factory=lambda: [
-        "random noise", "blurry mess", "abstract static", 
-        "compression artifacts", "noise"
-    ])
+    negative_anchors: str = "negative_anchors"
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
@@ -114,9 +115,97 @@ def prepare_openclip_components(
     return prepare_model(cfg, device)
 
 
+def load_or_compute_noun_embeddings(
+    cfg: NounSimilarityConfig,
+    original_cwd: Path,
+    device: torch.device,
+    prompts_list: List[str],
+    model: torch.nn.Module,
+    tokenizer,
+) -> np.ndarray:
+    noun_embed_cache_dir = original_cwd / "noun_lists" / "embeddings"
+    noun_embed_cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    model_name_sanitized = cfg.embedding_model.replace("/", "-")
+    pretrained_sanitized = str(cfg.pretrained).replace("/", "-")
+    nounlist_stem = Path(cfg.nounlist).stem
+    
+    cache_path = noun_embed_cache_dir / f"noun_embeddings_{nounlist_stem}_{model_name_sanitized}_{pretrained_sanitized}.npy"
+    
+    if cache_path.exists():
+        try:
+            print(f"Loading cached noun embeddings from {cache_path}...")
+            emb = np.load(cache_path)
+            if emb.shape[0] == len(prompts_list):
+                return emb
+            print(f"Cached noun embeddings shape mismatch. Recomputing.")
+        except Exception as e:
+            print(f"Failed to load cached noun embeddings: {e}")
+            
+    print(f"Embedding {len(prompts_list)} noun prompts...")
+    emb = embed_texts(model, tokenizer, prompts_list, device, batch_size=cfg.noun_batch_size)
+    
+    print(f"Saving noun embeddings to {cache_path}")
+    try:
+        np.save(cache_path, emb)
+    except Exception as e:
+        print(f"Failed to save noun embeddings cache: {e}")
+        
+    return emb
+
+
+def load_or_compute_negative_embeddings(
+    cfg: NounSimilarityConfig,
+    original_cwd: Path,
+    device: torch.device,
+    model: torch.nn.Module,
+    tokenizer,
+) -> tuple[Optional[np.ndarray], List[str]]:
+    if not cfg.negative_anchors:
+        return None, []
+        
+    anchors_name = cfg.negative_anchors
+    anchors_path = original_cwd / "noun_lists" / f"{anchors_name}.txt"
+    
+    neg_anchors_list = []
+    if anchors_path.exists():
+        neg_anchors_list = load_nouns(anchors_path)
+    else:
+        print(f"Warning: Negative anchors file {anchors_path} not found.")
+        return None, []
+        
+    noun_embed_cache_dir = original_cwd / "noun_lists" / "embeddings"
+    noun_embed_cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    model_name_sanitized = cfg.embedding_model.replace("/", "-")
+    pretrained_sanitized = str(cfg.pretrained).replace("/", "-")
+    
+    cache_path = noun_embed_cache_dir / f"negative_anchors_{anchors_name}_{model_name_sanitized}_{pretrained_sanitized}.npy"
+    
+    if cache_path.exists():
+        try:
+            print(f"Loading cached negative embeddings from {cache_path}...")
+            emb = np.load(cache_path)
+            if emb.shape[0] == len(neg_anchors_list):
+                return emb, neg_anchors_list
+            print(f"Cached negative embeddings size mismatch. Recomputing.")
+        except Exception as e:
+            print(f"Failed to load cached negative embeddings: {e}")
+
+    print(f"Embedding {len(neg_anchors_list)} negative anchors...")
+    emb = embed_texts(model, tokenizer, neg_anchors_list, device, batch_size=cfg.noun_batch_size)
+    
+    print(f"Saving negative embeddings to {cache_path}")
+    try:
+        np.save(cache_path, emb)
+    except Exception as e:
+        print(f"Failed to save negative embeddings cache: {e}")
+        
+    return emb, neg_anchors_list
+
+
 def prepare_noun_text_embeddings(
     cfg: NounSimilarityConfig,
-    *,
     original_cwd: Path,
     device: torch.device,
     model=None,
@@ -136,6 +225,7 @@ def prepare_noun_text_embeddings(
     if nouns is None:
         noun_file = resolve_nounlist(validated_cfg.nounlist, original_cwd)
         nouns_list = load_nouns(noun_file)
+
     else:
         nouns_list = [str(noun) for noun in nouns]
         if not nouns_list:
@@ -151,23 +241,22 @@ def prepare_noun_text_embeddings(
     if tokenizer is None or model is None:
         model, _, tokenizer = prepare_openclip_components(validated_cfg, device)
 
-    noun_embeddings = embed_texts(
+    noun_embeddings = load_or_compute_noun_embeddings(
+        validated_cfg,
+        original_cwd,
+        device,
+        prompts_list,
         model,
         tokenizer,
-        prompts_list,
-        device,
-        batch_size=validated_cfg.noun_batch_size,
     )
 
-    neg_embeddings = None
-    if validated_cfg.negative_anchors:
-        neg_embeddings = embed_texts(
-            model,
-            tokenizer,
-            validated_cfg.negative_anchors,
-            device,
-            batch_size=validated_cfg.noun_batch_size,
-        )
+    neg_embeddings, _ = load_or_compute_negative_embeddings(
+        validated_cfg,
+        original_cwd,
+        device,
+        model,
+        tokenizer,
+    )
 
     return nouns_list, prompts_list, noun_embeddings, neg_embeddings
 
@@ -335,7 +424,8 @@ def compute_trajectory_metrics(
     image_embeddings: np.ndarray,
     noun_embeddings: np.ndarray,
     image_paths: Sequence[Path],
-    neg_embeddings: [np.ndarray],
+    neg_embeddings: Optional[np.ndarray],
+    contrastive_key: Optional[str] = None,
 ) -> List[Dict[str, object]]:
     """Compute running mean of metrics as images are added."""
     if image_embeddings.size == 0:
@@ -349,6 +439,8 @@ def compute_trajectory_metrics(
     max_per_noun = np.full((num_nouns,), -np.inf, dtype=np.float32)
     
     if neg_embeddings is not None:
+        if contrastive_key is None:
+            raise ValueError("contrastive_key must be provided when neg_embeddings is not None")
         max_contrastive_per_noun = np.full((num_nouns,), -np.inf, dtype=np.float32)
     else:
         max_contrastive_per_noun = None
@@ -376,7 +468,7 @@ def compute_trajectory_metrics(
             "index": int(idx + 1),
             "image": image_paths[idx].name,
             "mean_max_similarity": float(max_per_noun.mean()),
-            "mean_max_contrastive": float(max_contrastive_per_noun.mean()),
+            contrastive_key: float(max_contrastive_per_noun.mean()),
         }
 
         results.append(entry)
@@ -385,15 +477,38 @@ def compute_trajectory_metrics(
 
 
 def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], outpath: Path) -> None:
+    if not results:
+        return
     steps = [int(row["index"]) for row in results]
     vals = [float(row["mean_max_similarity"]) for row in results]
 
     fig, ax = plt.subplots(1, 1, figsize=(12, 5))
     ax.plot(steps, vals, label="Noun Similarity", color="#1f77b4", linewidth=2)
     
-    if results and "mean_max_contrastive" in results[0]:
-        c_vals = [float(row["mean_max_contrastive"]) for row in results]
-        ax.plot(steps, c_vals, label="Contrastive Score", color="#ff7f0e", linewidth=2, linestyle="--")
+    # Identify all contrastive keys present in the data
+    all_keys = set()
+    for row in results:
+        for k in row.keys():
+            if k.startswith("mean_max_contrastive"):
+                all_keys.add(k)
+    
+    sorted_c_keys = sorted(list(all_keys))
+    # Use tab10 colormap skipping the first blue (used for main metric)
+    cmap = plt.get_cmap("tab10")
+    
+    for i, c_key in enumerate(sorted_c_keys):
+        c_vals = [float(row.get(c_key, float('nan'))) for row in results]
+        
+        label = "Contrastive"
+        suffix = c_key.replace('mean_max_contrastive', '')
+        if suffix.startswith('_'):
+            suffix = suffix[1:]
+        if suffix:
+            label += f" ({suffix})"
+        
+        # i+1 to skip blue
+        color = cmap((i + 1) % 10)
+        ax.plot(steps, c_vals, label=label, color=color, linewidth=2, linestyle="--")
 
     ax.set_title("Noun coverage metrics over archive growth")
     ax.set_xlabel("Archive insertion order")
@@ -406,20 +521,46 @@ def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], ou
     fig.savefig(outpath, dpi=150)
     plt.close(fig)
 
+def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) -> List[Dict[str, object]]:
+    final_data = []
+    existing_map = {}
 
-def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) -> None:
-    serializable = []
+    if outpath.exists():
+        try:
+            existing_data = json.loads(outpath.read_text(encoding="utf-8"))
+            for item in existing_data:
+                idx = item.get("index")
+                if idx is not None:
+                    existing_map[idx] = item
+        except Exception as e:
+            print(f"Could not read existing trajectory file {outpath}: {e}")
+
+    # Process new results
     for row in results:
-        item = {
-            "index": int(row["index"]),
-            "image": str(row["image"]),
-            "mean_max_similarity": float(row["mean_max_similarity"]),
-            "mean_max_contrastive": float(row["mean_max_contrastive"])
-        }
-        serializable.append(item)
+        idx = row["index"]
+        item = existing_map.get(idx, {})
+        
+        # Update core fields
+        item["index"] = int(row["index"])
+        item["image"] = str(row["image"])
+        item["mean_max_similarity"] = float(row["mean_max_similarity"])
+        
+        # Merge contrastive keys
+        for k, v in row.items():
+            if k.startswith("mean_max_contrastive"):
+                item[k] = float(v)
+        
+        existing_map[idx] = item
+
+    all_indices = sorted(existing_map.keys())
+    for idx in all_indices:
+        final_data.append(existing_map[idx])
 
     outpath.parent.mkdir(parents=True, exist_ok=True)
-    outpath.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+    outpath.write_text(json.dumps(final_data, indent=2), encoding="utf-8")
+    
+    return final_data
+
 
 
 def render_noun_similarity_grid(
@@ -463,10 +604,257 @@ def _resolve_optional_path(value: Optional[Path], base: Path) -> Optional[Path]:
     return _ensure_absolute(Path(value), base)
 
 
+def process_noun_similarity(
+    validated_cfg: NounSimilarityConfig,
+    image_paths: List[Path],
+    nouns_list: List[str],
+    prompts_list: List[str],
+    original_cwd: Path,
+    output_dir: Path,
+    cache_dir: Path,
+    model=None,
+    preprocess=None,
+    tokenizer=None,
+    noun_embeddings: Optional[np.ndarray] = None,
+    neg_embeddings: Optional[np.ndarray] = None,
+    device: Optional[torch.device] = None,
+) -> None:
+    if device is None:
+        if validated_cfg.device:
+            device = torch.device(validated_cfg.device)
+        else:
+            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    print(f"Using device: {device}")
+
+    # Setup Embedding Cache
+    # We use a shared directory for noun/negative embeddings to avoid recomputing them
+    # across different runs/experiments.
+    noun_embed_cache_dir = original_cwd / "noun_lists" / "embeddings"
+    noun_embed_cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
+    pretrained_sanitized = str(validated_cfg.pretrained).replace("/", "-")
+
+    # 1. Check for cached Noun Embeddings
+    noun_cached_exists = False
+    if noun_embeddings is None:
+        nounlist_stem = Path(validated_cfg.nounlist).stem
+        noun_cache_path = noun_embed_cache_dir / f"noun_embeddings_{nounlist_stem}_{model_name_sanitized}_{pretrained_sanitized}.npy"
+        if noun_cache_path.exists():
+            noun_cached_exists = True
+
+    # 2. Check for cached Negative Embeddings
+    neg_anchors_list = []
+    neg_cached_exists = False
+    if neg_embeddings is None and validated_cfg.negative_anchors:
+        anchors_name = validated_cfg.negative_anchors
+        # Resolve anchors file for later
+        anchors_path = original_cwd / "noun_lists" / f"{anchors_name}.txt"
+        if anchors_path.exists():
+            neg_anchors_list = load_nouns(anchors_path)
+            neg_cache_path = noun_embed_cache_dir / f"negative_anchors_{anchors_name}_{model_name_sanitized}_{pretrained_sanitized}.npy"
+            if neg_cache_path.exists():
+                neg_cached_exists = True
+        else:
+            print(f"Warning: Negative anchors file {anchors_path} not found. Skipping negative anchors.")
+
+    if (model is None) ^ (preprocess is None):
+        raise ValueError("Provide both model and preprocess, or neither.")
+    if (tokenizer is None) and (model is not None):
+        raise ValueError("Provide tokenizer when providing a pre-built model.")
+
+    if noun_embeddings is not None and len(nouns_list) == 0:
+        raise ValueError("Provide nouns when providing noun_embeddings")
+
+    # Check for cached image embeddings
+    embeddings_cache_path = cache_dir / f"image_embeddings_cache_{model_name_sanitized}_{pretrained_sanitized}.npy"
+
+    cached_image_embeddings = None
+    existing_count = 0
+    if embeddings_cache_path.exists():
+        try:
+            print(f"Loading cached embeddings from {embeddings_cache_path}...")
+            cached_image_embeddings = np.load(embeddings_cache_path)
+            existing_count = cached_image_embeddings.shape[0]
+            print(f"Loaded {existing_count} cached embeddings.")
+        except Exception as e:
+            print(f"Failed to load cached embeddings: {e}")
+            cached_image_embeddings = None
+            existing_count = 0
+
+    images_fully_cached = (existing_count >= len(image_paths))
+    
+    # Determine if we need the model
+    # We need model if:
+    # - Images are not fully cached
+    # - OR Noun embeddings need to be computed (no cache, or passed None)
+    # - OR Negative embeddings need to be computed (no cache, and we have anchors)
+    # Note: load_or_compute_... needs model if cache is missing.
+    
+    need_model = False
+    if not images_fully_cached:
+        need_model = True
+    elif (noun_embeddings is None) and (not noun_cached_exists):
+        need_model = True
+    elif (neg_embeddings is None) and neg_anchors_list and (not neg_cached_exists):
+        need_model = True
+
+    if need_model:
+        if model is None:
+            print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
+            model, preprocess, tokenizer = prepare_openclip_components(validated_cfg, device)
+        else:
+            model.to(device)
+            model.eval()
+
+    # Load/Compute Noun Embeddings
+    if noun_embeddings is None:
+        noun_embeddings = load_or_compute_noun_embeddings(
+            validated_cfg,
+            original_cwd,
+            device,
+            prompts_list,
+            model,
+            tokenizer,
+        )
+
+    # Load/Compute Negative Embeddings
+    if neg_embeddings is None and neg_anchors_list:
+        neg_embeddings, _ = load_or_compute_negative_embeddings(
+            validated_cfg,
+            original_cwd,
+            device,
+            model,
+            tokenizer,
+        )
+
+    # Process Images
+    if images_fully_cached:
+        print(f"Using {len(image_paths)} cached image embeddings.")
+        image_embeddings = cached_image_embeddings[:len(image_paths)]
+    else:
+        paths_to_compute = image_paths[existing_count:]
+        print(f"Embedding {len(paths_to_compute)} new images (found {existing_count} cached)...")
+        
+        _, new_embeddings = embed_images(
+            model,
+            preprocess,
+            paths_to_compute,
+            device,
+            batch_size=validated_cfg.batch_size,
+        )
+        
+        if existing_count > 0:
+            image_embeddings = np.vstack([cached_image_embeddings, new_embeddings])
+        else:
+            image_embeddings = new_embeddings
+
+        print(f"Saving {image_embeddings.shape[0]} embeddings to {embeddings_cache_path}")
+        np.save(embeddings_cache_path, image_embeddings)
+    
+    # Validation
+    if noun_embeddings is None:
+         # Should verify handled above, but technically if prompts_list was empty or something...
+         # But prompts_list comes from main.
+         # If prompts_list was not empty, noun_embeddings should be set.
+         pass
+    else:
+        # Check type
+        if isinstance(noun_embeddings, list):
+             noun_embeddings = np.asarray(noun_embeddings)
+
+    max_per_noun, mean_similarity, best_image_indices, max_contrastive, mean_contrastive = compute_max_similarities(
+        image_embeddings,
+        noun_embeddings,
+        neg_embeddings=neg_embeddings,
+    )
+
+    contrastive_key = None
+    per_noun_key = None
+    if validated_cfg.negative_anchors:
+        anchors_str = f"{validated_cfg.negative_anchors.replace(" ", "-")}"
+        contrastive_key = f"mean_max_contrastive_{anchors_str}"
+        per_noun_key = f"max_contrastive_per_noun_{anchors_str}"
+
+    trajectory = compute_trajectory_metrics(
+        image_embeddings,
+        noun_embeddings,
+        image_paths,
+        neg_embeddings=neg_embeddings,
+        contrastive_key=contrastive_key
+    )
+
+    metrics = {
+        "experiment_dir": str(output_dir),
+        "num_images": len(image_paths),
+        "num_nouns": len(nouns_list),
+        "model": validated_cfg.embedding_model,
+        "pretrained": validated_cfg.pretrained,
+        "label_template": validated_cfg.label_template,
+        "negative_anchors": validated_cfg.negative_anchors,
+        "mean_max_similarity": mean_similarity,
+        "max_similarity_per_noun": {noun: float(score) for noun, score in zip(nouns_list, max_per_noun)},
+    }
+    
+    if contrastive_key:
+        metrics[contrastive_key] = mean_contrastive
+        metrics[per_noun_key] = {noun: float(score) for noun, score in zip(nouns_list, max_contrastive)}
+
+    output_path = _resolve_optional_path(validated_cfg.output_json, original_cwd)
+    if output_path is None:
+        output_path = output_dir / "noun_similarity_metrics.json"
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if output_path.exists():
+        try:
+            existing_metrics = json.loads(output_path.read_text(encoding="utf-8"))
+            existing_metrics.update(metrics)
+            metrics = existing_metrics
+        except Exception as e:
+            print(f"Warning: Could not merge with existing metrics file {output_path}: {e}")
+
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"Saved noun similarity metrics to {output_path}")
+    print(f"Mean of per-noun max cosine similarity: {mean_similarity:.4f}")
+
+    nounlist_name = Path(validated_cfg.nounlist).stem
+    model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
+    trajectory_json = _resolve_optional_path(validated_cfg.output_trajectory_json, original_cwd)
+    if trajectory_json is None:
+        trajectory_json = output_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.json"
+    trajectory_plot = _resolve_optional_path(validated_cfg.output_trajectory_plot, original_cwd)
+    if trajectory_plot is None:
+        trajectory_plot = output_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.png"
+
+    merged_trajectory = save_trajectory_json(trajectory, trajectory_json)
+    plot_mean_max_similarity_trajectory(merged_trajectory, trajectory_plot)
+    print(f"Saved noun similarity trajectory JSON to {trajectory_json}")
+    print(f"Saved noun similarity trajectory plot to {trajectory_plot}")
+
+    if validated_cfg.render_grid:
+        grid_output = _resolve_optional_path(validated_cfg.output_grid, original_cwd)
+        if grid_output is None:
+            suffix = f"_top{validated_cfg.grid_top_k}" if validated_cfg.grid_top_k else ""
+            grid_output = output_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}{suffix}.png"
+        render_noun_similarity_grid(
+            nouns_list,
+            max_per_noun,
+            best_image_indices,
+            image_paths,
+            grid_output,
+            validated_cfg.grid_thumb_size,
+            validated_cfg.grid_margin,
+            validated_cfg.grid_font_size,
+            top_k=validated_cfg.grid_top_k,
+        )
+        print(f"Saved noun similarity grid to {grid_output}")
+
+
 @hydra.main(version_base="1.3", config_path=None, config_name="noun_similarity_base")
 def main(
     cfg: NounSimilarityConfig,
-    *,
     model=None,
     preprocess=None,
     tokenizer=None,
@@ -513,169 +901,20 @@ def main(
         if len(prompts_list) != len(nouns_list):
             raise ValueError("prompts must have the same length as nouns")
 
-    if validated_cfg.device:
-        device = torch.device(validated_cfg.device)
-    else:
-        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    print(f"Using device: {device}")
-
-    if (model is None) ^ (preprocess is None):
-        raise ValueError("Provide both model and preprocess, or neither.")
-    if (tokenizer is None) and (model is not None):
-        raise ValueError("Provide tokenizer when providing a pre-built model.")
-
-    if noun_embeddings is not None and nouns is None:
-        # We need the base noun labels to write per-noun metrics.
-        raise ValueError("Provide nouns when providing noun_embeddings")
-
-    # Check for cached image embeddings
-    model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
-    pretrained_sanitized = str(validated_cfg.pretrained).replace("/", "-")
-    embeddings_cache_path = exp_dir / f"image_embeddings_cache_{model_name_sanitized}_{pretrained_sanitized}.npy"
-
-    cached_image_embeddings = None
-    existing_count = 0
-    if embeddings_cache_path.exists():
-        try:
-            print(f"Loading cached embeddings from {embeddings_cache_path}...")
-            cached_image_embeddings = np.load(embeddings_cache_path)
-            existing_count = cached_image_embeddings.shape[0]
-            print(f"Loaded {existing_count} cached embeddings.")
-        except Exception as e:
-            print(f"Failed to load cached embeddings: {e}")
-            cached_image_embeddings = None
-            existing_count = 0
-
-    images_fully_cached = (existing_count >= len(image_paths))
-    # Check if we need model for negatives (always true unless passed in, which they aren't here)
-    need_negatives = len(validated_cfg.negative_anchors) > 0
-    need_model = (not images_fully_cached) or (noun_embeddings is None) or need_negatives
-
-    if need_model:
-        if model is None:
-            print(f"Loading OpenCLIP model {validated_cfg.embedding_model} ({validated_cfg.pretrained})...")
-            model, preprocess, tokenizer = prepare_openclip_components(validated_cfg, device)
-        else:
-            model.to(device)
-            model.eval()
-
-    if images_fully_cached:
-        print(f"Using {len(image_paths)} cached image embeddings.")
-        image_embeddings = cached_image_embeddings[:len(image_paths)]
-    else:
-        paths_to_compute = image_paths[existing_count:]
-        print(f"Embedding {len(paths_to_compute)} new images (found {existing_count} cached)...")
-        
-        _, new_embeddings = embed_images(
-            model,
-            preprocess,
-            paths_to_compute,
-            device,
-            batch_size=validated_cfg.batch_size,
-        )
-        
-        if existing_count > 0:
-            image_embeddings = np.vstack([cached_image_embeddings, new_embeddings])
-        else:
-            image_embeddings = new_embeddings
-
-        print(f"Saving {image_embeddings.shape[0]} embeddings to {embeddings_cache_path}")
-        np.save(embeddings_cache_path, image_embeddings)
-
-    if noun_embeddings is None:
-        print(f"Embedding {len(prompts_list)} noun prompts...")
-        noun_embeddings = embed_texts(
-            model,
-            tokenizer,
-            prompts_list,
-            device,
-            batch_size=validated_cfg.noun_batch_size,
-        )
-    else:
-        noun_embeddings = np.asarray(noun_embeddings)
-        if noun_embeddings.ndim != 2 or noun_embeddings.shape[0] != len(prompts_list):
-            raise ValueError(
-                "noun_embeddings must be a 2D array with shape (num_nouns, embed_dim) matching prompts"
-            )
-
-    if neg_embeddings is None and validated_cfg.negative_anchors:
-        print(f"Embedding {len(validated_cfg.negative_anchors)} negative anchors...")
-        neg_embeddings = embed_texts(
-            model,
-            tokenizer,
-            validated_cfg.negative_anchors,
-            device,
-            batch_size=validated_cfg.noun_batch_size,
-        )
-
-    max_per_noun, mean_similarity, best_image_indices, max_contrastive, mean_contrastive = compute_max_similarities(
-        image_embeddings,
-        noun_embeddings,
+    process_noun_similarity(
+        validated_cfg,
+        image_paths,
+        nouns_list,
+        prompts_list,
+        original_cwd,
+        exp_dir, # output_dir
+        exp_dir, # cache_dir
+        model=model,
+        preprocess=preprocess,
+        tokenizer=tokenizer,
+        noun_embeddings=noun_embeddings,
         neg_embeddings=neg_embeddings,
     )
-
-    trajectory = compute_trajectory_metrics(
-        image_embeddings,
-        noun_embeddings,
-        image_paths,
-        neg_embeddings=neg_embeddings
-    )
-
-    metrics = {
-        "experiment_dir": str(exp_dir),
-        "num_images": len(image_paths),
-        "num_nouns": len(nouns_list),
-        "model": validated_cfg.embedding_model,
-        "pretrained": validated_cfg.pretrained,
-        "label_template": validated_cfg.label_template,
-        "mean_max_similarity": mean_similarity,
-        "max_similarity_per_noun": {noun: float(score) for noun, score in zip(nouns_list, max_per_noun)},
-        "mean_max_contrastive": mean_contrastive,
-        "max_contrastive_per_noun": {noun: float(score) for noun, score in zip(nouns_list, max_contrastive)}
-    }
-
-    output_path = _resolve_optional_path(validated_cfg.output_json, original_cwd)
-    if output_path is None:
-        output_path = exp_dir / "noun_similarity_metrics.json"
-    else:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=2)
-    print(f"Saved noun similarity metrics to {output_path}")
-    print(f"Mean of per-noun max cosine similarity: {mean_similarity:.4f}")
-
-    nounlist_name = Path(validated_cfg.nounlist).stem
-    model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
-    trajectory_json = _resolve_optional_path(validated_cfg.output_trajectory_json, original_cwd)
-    if trajectory_json is None:
-        trajectory_json = exp_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.json"
-    trajectory_plot = _resolve_optional_path(validated_cfg.output_trajectory_plot, original_cwd)
-    if trajectory_plot is None:
-        trajectory_plot = exp_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.png"
-
-    save_trajectory_json(trajectory, trajectory_json)
-    plot_mean_max_similarity_trajectory(trajectory, trajectory_plot)
-    print(f"Saved noun similarity trajectory JSON to {trajectory_json}")
-    print(f"Saved noun similarity trajectory plot to {trajectory_plot}")
-
-    if validated_cfg.render_grid:
-        grid_output = _resolve_optional_path(validated_cfg.output_grid, original_cwd)
-        if grid_output is None:
-            suffix = f"_top{validated_cfg.grid_top_k}" if validated_cfg.grid_top_k else ""
-            grid_output = exp_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}{suffix}.png"
-        render_noun_similarity_grid(
-            nouns_list,
-            max_per_noun,
-            best_image_indices,
-            image_paths,
-            grid_output,
-            validated_cfg.grid_thumb_size,
-            validated_cfg.grid_margin,
-            validated_cfg.grid_font_size,
-            top_k=validated_cfg.grid_top_k,
-        )
-        print(f"Saved noun similarity grid to {grid_output}")
 
 
 if __name__ == "__main__":
