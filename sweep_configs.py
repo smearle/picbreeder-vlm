@@ -48,6 +48,8 @@ class SweepConfig(PicbreederConfig):
     eval_tree: bool = False  # If true, run phylogeny visualization instead of training
     eval_visual_coverage: bool = False  # If true, run visual coverage evaluation
     eval_noun_coverage: bool = False  # If true, run noun coverage evaluation
+    render_noun_grids: bool = False  # If true, render noun similarity grids
+    render_aggregate_noun_grid: bool = False # If true, render aggregate noun similarity grid
     overwrite_evals: bool = True  # If false, skip evaluation if output files already exist
     cross_eval: bool = False  # If true, summarize embedding metrics from the configured runs
     eval_captions: bool = False  # If true, run captioning and embedding analysis
@@ -56,7 +58,7 @@ class SweepConfig(PicbreederConfig):
     caption_embedding_model: str = "gemini-embedding-001"  # Embedding model for captions
     caption_embedding_pretrained: str = ""
     archive_limit: Optional[int] = None  # Limit the number of archive images passed to analysis scripts
-    nounlist: List[str] = field(default_factory=lambda: ["things"])  # Noun list(s) to evaluate
+    nounlist: List[str] = field(default_factory=lambda: ["things_deduped"])  # Noun list(s) to evaluate
     novelty_ylim: Optional[List[float]] = None  # Optional Y-axis limits for novelty plots (e.g., [0.6, 1.0])
     noun_ylim: Optional[List[float]] = None
     hydra: HydraConf = field(
@@ -99,13 +101,16 @@ class ChatHistoryTurnsSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5, 6, 7, 8])
     num_agents: int = 1_000
+    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.06, 0.09])
 
 
 @dataclass
 class FullRandSelectProbSweep(SweepConfig):
     rand_select_prob: List[float] = field(default_factory=lambda: [
         0.0, 
-        0.25, 0.5, 0.75, 1.0])
+        # 0.05,
+        0.25, 0.5, 0.75, 1.0
+    ])
     rand_select_mode: str = 'all'
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
@@ -113,11 +118,11 @@ class FullRandSelectProbSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [
         3, 4, 5, 
-        #  6, 7, 8
+        # 6, 7, 8,
     ])
     thumb_size: List[int] = field(default_factory=lambda: [128,])
     num_agents: int = 2_000
-    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.05, 0.085])
+    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.06, 0.095])
 
 
 @dataclass
@@ -129,9 +134,22 @@ class TraitsSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5, 6, 7, 8])
-    num_agents: int = 1_000
-    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.05, 0.08])
+    num_agents: int = 2_000
+    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.06, 0.095])
 
+@dataclass
+class ChatHistoryTurnsGemini3Sweep(SweepConfig):
+    chat_history_turns: List[int] = field(default_factory=lambda: [
+                                                                2, 
+                                                                1, 
+                                                                0
+    ])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["gemini-3-pro-preview"])
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    num_agents: int = 1_000
 
 @dataclass
 class ChatHistoryTurnsQwenSweep(SweepConfig):
@@ -218,7 +236,10 @@ class RandBaselineSweep(SweepConfig):
 
 @dataclass
 class ObjectiveFreeSweep(SweepConfig):
-    goal: List[str] = field(default_factory=lambda: ["none"])
+    goal: List[str] = field(default_factory=lambda: [
+        "none",
+        # "familiar_objects", 
+    ])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
@@ -266,6 +287,7 @@ class LongSweep2(SweepConfig):
 _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "sweep": SweepBasePreset,
     "chat_history_turns": ChatHistoryTurnsSweep,
+    "chat_history_turns_gemini3": ChatHistoryTurnsGemini3Sweep,
     "chat_history_turns_qwen": ChatHistoryTurnsQwenSweep,
     "chat_history_turns_qwen_30b": ChatHistoryTurnsQwen30BSweep,
     "temperature": TemperatureSweep,

@@ -16,10 +16,10 @@ class ClipNounNicheConfig:
     num_proc: int = 15
     mutation_strength: float = 0.5
     new_random_prob: float = 0.05
-    crossover_strength: float = 0.0
+    crossover_strength: float = 0.2
     save_offspring_grids: bool = False
     save_images: bool = False
-    nounlist: str = "imagenet21k"
+    nounlist: str = "things_deduped"
     config: Path = DEFAULT_CONFIG_PATH
     output_dir: Path = "clip_noun_niche_es_logs"
     device: str | None = None

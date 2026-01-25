@@ -33,7 +33,9 @@ from sweep_analysis_utils import (
     format_group_label,
     load_human_baseline,
     write_aggregate_plot,
+    write_aggregate_bar_chart,
     write_scalar_bar_plot,
+    write_combined_plot_and_bar,
 )
 
 
@@ -215,9 +217,10 @@ def _run_eval_visual_coverage(cfg: SweepConfig, run_configs: Sequence[Picbreeder
         )
 
 
-def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str):
+def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str, cross_eval_dir: Path):
     import torch
     import os
+    import shutil
     from pathlib import Path
     from collections import defaultdict
     from dataclasses import fields as dataclass_fields, replace
@@ -244,6 +247,10 @@ def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederCo
     os.chdir(original_cwd)
     device = torch.device(device_str)
     print(f"[Noun Coverage Worker] Using device: {device}")
+
+    # Pre-compute varying fields for labeling
+    all_group_keys = [_group_key_for_aggregate(rc) for rc in run_configs]
+    varying_fields = compute_varying_fields(all_group_keys)
 
     base_kwargs0 = {
         field_def.name: getattr(run_configs[0], field_def.name)
@@ -322,6 +329,22 @@ def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederCo
                 neg_embeddings=neg_embeddings,
                 original_cwd_override=original_cwd,
             )
+
+            if cfg.render_noun_grids:
+                # Copy rendered grid to cross_eval
+                group_key = _group_key_for_aggregate(run_cfg)
+                label, _, _ = format_group_label(group_key, varying_fields)
+                sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
+                dest_dir = cross_eval_dir / sanitized_label
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                
+                pattern = f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}*.pdf"
+                src_files = list(exp_dir.glob(pattern))
+                
+                for src in src_files:
+                    dest_name = f"{src.stem}_seed{run_cfg.seed}{src.suffix}"
+                    shutil.copy2(src, dest_dir / dest_name)
+                    print(f"Copied {src.name} -> {dest_dir / dest_name}")
 
 
 def _run_eval_captions(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path):
@@ -790,7 +813,7 @@ def _compute_mean_scalar(
             val = _load_embedding_mean_pairwise_distance_scalar(exp_dir, model_name)
         elif metric_type == "noun":
             val = _load_noun_similarity_scalar(exp_dir, model_name, nounlist_name)
-        elif metric_type in ("sackin", "colless", "depth"):
+        elif metric_type in ("sackin", "colless", "depth", "j1"):
              metrics_path = exp_dir / "archive" / "phylogeny_metrics.json"
              if metrics_path.exists():
                  try:
@@ -801,6 +824,8 @@ def _compute_mean_scalar(
                         val = m.get("colless_index")
                     elif metric_type == "depth":
                         val = m.get("max_depth")
+                    elif metric_type == "j1":
+                        val = m.get("j1_index")
                  except Exception:
                      pass
         
@@ -834,6 +859,13 @@ def _plot_seed_aggregates(
     noun_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     noun_contrastive_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     mpd_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+
+    final_novelty_scores: Dict[Tuple[Tuple[str, Any], ...], List[Tuple[int, float]]] = {}
+    final_noun_scores: Dict[Tuple[Tuple[str, Any], ...], List[Tuple[int, float]]] = {}
+    final_caption_scores: Dict[Tuple[Tuple[str, Any], ...], List[Tuple[int, float]]] = {}
+    
+    final_visual_k_scores: Dict[int, Dict[Tuple[Tuple[str, Any], ...], List[Tuple[int, float]]]] = {}
+    final_caption_k_scores: Dict[int, Dict[Tuple[Tuple[str, Any], ...], List[Tuple[int, float]]]] = {}
 
     image_model_suffix = ""
     if image_embedding_model:
@@ -998,12 +1030,19 @@ def _plot_seed_aggregates(
 
                 if mpd_traj:
                     novelty_grouped.setdefault(group_key, []).append(mpd_traj)
+                    last_idx = max(mpd_traj.keys())
+                    final_novelty_scores.setdefault(group_key, []).append((run_cfg.seed, mpd_traj[last_idx]))
                 
                 for k, traj in k_covering_trajs.items():
                     k_str = str(k)
                     if k_str not in visual_k_covering_grouped:
                         visual_k_covering_grouped[k_str] = {}
                     visual_k_covering_grouped[k_str].setdefault(group_key, []).append(traj)
+                    
+                    last_idx = max(traj.keys())
+                    if k not in final_visual_k_scores:
+                        final_visual_k_scores[k] = {}
+                    final_visual_k_scores[k].setdefault(group_key, []).append((run_cfg.seed, traj[last_idx]))
 
             except Exception as e:
                 print(f"Error reading/parsing {novelty_path}: {e}")
@@ -1024,6 +1063,8 @@ def _plot_seed_aggregates(
             noun = {k: v for k, v in noun.items() if k <= limit}
             if noun:
                 noun_grouped.setdefault(group_key, []).append(noun)
+                last_idx = max(noun.keys())
+                final_noun_scores.setdefault(group_key, []).append((run_cfg.seed, noun[last_idx]))
             
             noun_cont = _load_trajectory_metric(noun_path, f"mean_max_contrastive{neg_suffix}")
             noun_cont = {k: v for k, v in noun_cont.items() if k <= limit}
@@ -1060,11 +1101,18 @@ def _plot_seed_aggregates(
                             
                 if traj_points_mpd:
                         caption_grouped.setdefault(group_key, []).append(traj_points_mpd)
+                        last_idx = max(traj_points_mpd.keys())
+                        final_caption_scores.setdefault(group_key, []).append((run_cfg.seed, traj_points_mpd[last_idx]))
                         
                 for k, traj in traj_points_k.items():
                     if k not in caption_k_covering_grouped:
                         caption_k_covering_grouped[k] = {}
                     caption_k_covering_grouped[k].setdefault(group_key, []).append(traj)
+                    
+                    last_idx = max(traj.keys())
+                    if k not in final_caption_k_scores:
+                        final_caption_k_scores[k] = {}
+                    final_caption_k_scores[k].setdefault(group_key, []).append((run_cfg.seed, traj[last_idx]))
                             
     # Derive scalars strictly from the truncated trajectories
     for group_key, runs in novelty_grouped.items():
@@ -1154,23 +1202,18 @@ def _plot_seed_aggregates(
         baselines=baselines_novelty,
         ylim=tuple(novelty_ylim) if novelty_ylim else None,
     )
-    agg_plot_noun_path = output_dir / f"aggregate_noun_similarity_over_time_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png"
-    write_aggregate_plot(
+    agg_plot_noun_combined_path = output_dir / f"aggregate_noun_similarity_combined_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png"
+    write_combined_plot_and_bar(
         grouped_runs=noun_grouped,
-        outpath=agg_plot_noun_path,
-        title="Noun similarity over time (mean±sem across seeds)",
-        xlabel="Archive insertion order",
-        ylabel="Mean max cosine similarity",
-        baselines=baselines_noun,
-        ylim=tuple(noun_ylim) if noun_ylim else None,
-    )
-
-    write_scalar_bar_plot(
         grouped_values=noun_scalar_grouped,
-        outpath=output_dir / f"aggregate_noun_similarity_mean_bar_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png",
-        title="Mean max noun similarity (mean±sem across seeds)",
-        ylabel="Mean of per-noun max cosine similarity",
-        baselines=baseline_scalars_noun,
+        outpath=agg_plot_noun_combined_path,
+        title="Semantic Recall (mean±sem across seeds)",
+        xlabel="Archive insertion order",
+        ylabel_line="Mean max cosine similarity",
+        ylabel_bar="Mean max cosine similarity",
+        baselines_line=baselines_noun,
+        baselines_bar=baseline_scalars_noun,
+        ylim=tuple(noun_ylim) if noun_ylim else None,
     )
 
     agg_plot_noun_cont_path = output_dir / f"aggregate_noun_contrastive_over_time_{nounlist_name_for_file}{neg_anchors_for_file}_{filename_tag}{text_image_model_suffix}.png"
@@ -1245,6 +1288,16 @@ def _plot_seed_aggregates(
             ylim=None,
         )
 
+        agg_bar_k_path = output_dir / f"aggregate_visual_k_covering_k{k}_final_{filename_tag}{image_model_suffix}.png"
+        write_aggregate_bar_chart(
+            grouped_runs=grouped_data,
+            outpath=agg_bar_k_path,
+            title=f"Final Visual K-Covering Radius (k={k})",
+            ylabel=f"Covering Radius (k={k})",
+            baselines=current_baselines,
+            ylim=None,
+        )
+
     if caption_grouped:
         agg_plot_caption_path = output_dir / f"aggregate_caption_diversity_over_time_{filename_tag}{caption_suffix}.png"
         write_aggregate_plot(
@@ -1304,6 +1357,88 @@ def _plot_seed_aggregates(
             ylim=None,
         )
 
+        agg_bar_k_path = output_dir / f"aggregate_caption_k_covering_k{k}_final_{filename_tag}{caption_suffix}.png"
+        write_aggregate_bar_chart(
+            grouped_runs=grouped_data,
+            outpath=agg_bar_k_path,
+            title=f"Final Caption K-Covering Radius (k={k})",
+            ylabel=f"Covering Radius (k={k})",
+            baselines=current_baselines,
+            ylim=None,
+        )
+
+    # Write best seeds JSON analysis
+    all_group_keys = set(novelty_grouped.keys()) | set(noun_grouped.keys()) | set(caption_grouped.keys())
+    if run_configs:
+        group_keys_list = [_group_key_for_aggregate(rc) for rc in run_configs]
+        varying_fields = compute_varying_fields(group_keys_list)
+        
+        for group_key in all_group_keys:
+            label, _, _ = format_group_label(group_key, varying_fields)
+            sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
+            group_dir = output_dir / sanitized_label
+            group_dir.mkdir(parents=True, exist_ok=True)
+            
+            best_seeds_data = {}
+            
+            if group_key in final_novelty_scores:
+                seeds_vals = final_novelty_scores[group_key]
+                if seeds_vals:
+                    best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
+                    best_seeds_data["visual_coverage"] = {
+                        "best_seed": best_seed,
+                        "value": best_val,
+                        "metric": "mean_pairwise_distance"
+                    }
+
+            if group_key in final_noun_scores:
+                seeds_vals = final_noun_scores[group_key]
+                if seeds_vals:
+                    best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
+                    best_seeds_data["noun_coverage"] = {
+                        "best_seed": best_seed,
+                        "value": best_val,
+                        "metric": "mean_max_similarity"
+                    }
+                    
+            if group_key in final_caption_scores:
+                seeds_vals = final_caption_scores[group_key]
+                if seeds_vals:
+                    best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
+                    best_seeds_data["semantic_coverage"] = {
+                        "best_seed": best_seed,
+                        "value": best_val,
+                        "metric": "mean_pairwise_distance"
+                    }
+            
+            # Add K-covering metrics
+            for k, group_scores in final_visual_k_scores.items():
+                if group_key in group_scores:
+                    seeds_vals = group_scores[group_key]
+                    if seeds_vals:
+                        best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
+                        best_seeds_data[f"visual_k_covering_k{k}"] = {
+                            "best_seed": best_seed,
+                            "value": best_val,
+                            "metric": f"k_covering_radius_k{k}"
+                        }
+
+            for k, group_scores in final_caption_k_scores.items():
+                if group_key in group_scores:
+                    seeds_vals = group_scores[group_key]
+                    if seeds_vals:
+                        best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
+                        best_seeds_data[f"semantic_k_covering_k{k}"] = {
+                            "best_seed": best_seed,
+                            "value": best_val,
+                            "metric": f"k_covering_radius_k{k}"
+                        }
+                    
+            if best_seeds_data:
+                json_path = group_dir / "best_seeds.json"
+                json_path.write_text(json.dumps(best_seeds_data, indent=2))
+                print(f"Wrote best seeds to {json_path}")
+
 
 def _plot_tree_metrics_aggregates(
     *,
@@ -1314,6 +1449,7 @@ def _plot_tree_metrics_aggregates(
     sackin_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     colless_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     depth_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+    j1_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
 
     missing_metrics = []
 
@@ -1330,6 +1466,8 @@ def _plot_tree_metrics_aggregates(
                     colless_grouped.setdefault(group_key, []).append(float(m["colless_index"]))
                 if m.get("max_depth") is not None:
                     depth_grouped.setdefault(group_key, []).append(float(m["max_depth"]))
+                if m.get("j1_index") is not None:
+                    j1_grouped.setdefault(group_key, []).append(float(m["j1_index"]))
             except Exception as e:
                 print(f"Error reading metrics from {metrics_path}: {e}")
         else:
@@ -1347,6 +1485,7 @@ def _plot_tree_metrics_aggregates(
     human_baselines_sackin = []
     human_baselines_colless = []
     human_baselines_depth = []
+    human_baselines_j1 = []
 
     if run_configs:
          # Random Baseline
@@ -1376,6 +1515,10 @@ def _plot_tree_metrics_aggregates(
                      if val is not None:
                          human_baselines_depth.append((f"Random Baseline{label_suffix}", val))
 
+                     val = _compute_mean_scalar(rb_configs, "j1")
+                     if val is not None:
+                         human_baselines_j1.append((f"Random Baseline{label_suffix}", val))
+
     if human_metrics_path.exists() and run_configs:
          try:
             hm = json.loads(human_metrics_path.read_text(encoding="utf-8"))
@@ -1390,6 +1533,8 @@ def _plot_tree_metrics_aggregates(
                     human_baselines_colless.append(("Human Baseline", float(m["colless_index"])))
                 if m.get("max_depth") is not None:
                     human_baselines_depth.append(("Human Baseline", float(m["max_depth"])))
+                if m.get("j1_index") is not None:
+                    human_baselines_j1.append(("Human Baseline", float(m["j1_index"])))
          except Exception as e:
              print(f"Error reading human baseline metrics: {e}")
 
@@ -1419,6 +1564,15 @@ def _plot_tree_metrics_aggregates(
             title="Max Tree Depth (mean±sem across seeds)",
             ylabel="Max Depth",
             baselines=human_baselines_depth,
+        )
+
+    if any(len(v) > 0 for v in j1_grouped.values()):
+        write_scalar_bar_plot(
+            grouped_values=j1_grouped,
+            outpath=output_dir / f"aggregate_j1_index_{filename_tag}.png",
+            title="J1 Index (Tree Balance)",
+            ylabel="J1 Index (higher is more balanced)",
+            baselines=human_baselines_j1,
         )
 
 
@@ -1531,7 +1685,7 @@ def _run_render_archive(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig
             )
 
             # Copy results to cross_eval
-            label = format_group_label(group_key, varying_fields)
+            label, _, _ = format_group_label(group_key, varying_fields)
             # Sanitize label for directory usage
             sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
             dest_dir = cross_eval_dir / sanitized_label
@@ -1591,7 +1745,7 @@ def _run_eval_tree(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], or
             _call_hydra_wrapped_main(viz_main, viz_cfg)
 
             # Copy results to cross_eval
-            label = format_group_label(group_key, varying_fields)
+            label, _, _ = format_group_label(group_key, varying_fields)
             # Sanitize label for directory usage
             sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
             dest_dir = cross_eval_dir / sanitized_label
@@ -1613,6 +1767,190 @@ def _run_eval_tree(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], or
             output_dir=cross_eval_dir,
             filename_tag=filename_tag,
         )
+    finally:
+        os.chdir(previous_cwd)
+
+
+def _run_render_aggregate_noun_grid(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, cross_eval_dir: Path):
+    import torch
+    import os
+    import numpy as np
+    from pathlib import Path
+    from dataclasses import fields as dataclass_fields
+    from collections import defaultdict
+    from scipy.optimize import linear_sum_assignment
+    from compute_noun_coverage import (
+        NounSimilarityConfig,
+        prepare_openclip_components,
+        prepare_noun_text_embeddings,
+        infer_archive_order,
+        embed_images,
+        compute_max_similarities,
+        render_noun_similarity_grid,
+        load_nouns,
+    )
+    from config import PicbreederConfig
+
+    # Helper to compute group label for a run (used for organization)
+    group_keys = [_group_key_for_aggregate(rc) for rc in run_configs]
+    varying_fields = compute_varying_fields(group_keys)
+    
+    # Group runs
+    grouped_runs = defaultdict(list)
+    grouped_labels = {}
+    
+    for rc, gk in zip(run_configs, group_keys):
+        label, _, _ = format_group_label(gk, varying_fields)
+        # Sanitize label for directory usage
+        sanitized_label = label.replace(" ", "_").replace("=", "_").replace(":", "_").replace("/", "-")
+        grouped_runs[sanitized_label].append(rc)
+        grouped_labels[sanitized_label] = label
+
+    previous_cwd = Path.cwd()
+    os.chdir(original_cwd)
+    try:
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        print(f"[Aggregate Noun Grid] Using device: {device}")
+
+        # Initialize model once (assuming embedding model is constant across sweep)
+        base_kwargs0 = {
+            field_def.name: getattr(run_configs[0], field_def.name)
+            for field_def in dataclass_fields(PicbreederConfig)
+            if field_def.name != "hydra"
+        }
+        noun_cfg_template = NounSimilarityConfig(
+            **base_kwargs0, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained,
+            render_grid=cfg.render_noun_grids)
+        noun_model, noun_preprocess, noun_tokenizer = prepare_openclip_components(noun_cfg_template, device)
+
+        for label, group_configs in grouped_runs.items():
+            print(f"Processing aggregate grid for group: {label}")
+            
+            # Use the first config in the group as reference
+            ref_cfg = group_configs[0]
+            base_kwargs = {
+                field_def.name: getattr(ref_cfg, field_def.name)
+                for field_def in dataclass_fields(PicbreederConfig)
+                if field_def.name != "hydra"
+            }
+            noun_cfg = NounSimilarityConfig(**base_kwargs, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+            
+            # Load and deduplicate nouns
+            noun_file = resolve_nounlist(noun_cfg.nounlist, original_cwd)
+            raw_nouns = load_nouns(noun_file)
+            dedup_nouns = []
+            seen = set()
+            for n in raw_nouns:
+                if n not in seen:
+                    dedup_nouns.append(n)
+                    seen.add(n)
+
+            # Prepare nouns
+            nouns_list, prompts_list, noun_embeddings, _ = prepare_noun_text_embeddings(
+                noun_cfg,
+                original_cwd=original_cwd,
+                device=device,
+                model=noun_model,
+                tokenizer=noun_tokenizer,
+                nouns=dedup_nouns,
+            )
+
+            all_image_paths = []
+            all_image_embeddings = []
+
+            for run_cfg in group_configs:
+                exp_dir = Path(run_cfg.experiment_dir)
+                try:
+                    run_paths = infer_archive_order(exp_dir)
+                    if cfg.archive_limit is not None:
+                        run_paths = run_paths[:cfg.archive_limit]
+                    
+                    if not run_paths:
+                        continue
+
+                    model_name_sanitized = cfg.text_image_embedding_model.replace("/", "-")
+                    pretrained_sanitized = str(cfg.text_image_pretrained).replace("/", "-")
+                    cache_path = exp_dir / f"image_embeddings_cache_{model_name_sanitized}_{pretrained_sanitized}.npy"
+                    
+                    run_embeddings = None
+                    if cache_path.exists():
+                        try:
+                            cached = np.load(cache_path)
+                            if len(cached) >= len(run_paths):
+                                run_embeddings = cached[:len(run_paths)]
+                            else:
+                                print(f"Cache partial for {exp_dir} ({len(cached)} vs {len(run_paths)}), re-embedding...")
+                        except Exception:
+                            print(f"Cache load failed for {exp_dir}, re-embedding...")
+                    
+                    if run_embeddings is None:
+                         _, run_embeddings = embed_images(
+                            noun_model,
+                            noun_preprocess,
+                            run_paths,
+                            device,
+                            batch_size=noun_cfg.batch_size
+                        )
+                    
+                    all_image_paths.extend(run_paths)
+                    all_image_embeddings.append(run_embeddings)
+
+                except Exception as e:
+                    print(f"Skipping run {exp_dir}: {e}")
+
+            if not all_image_embeddings:
+                print(f"No valid images/embeddings for group {label}")
+                continue
+
+            full_embeddings = np.vstack(all_image_embeddings)
+            
+            # Compute similarities
+            # We want to assign each image to at most one noun (and each noun to at most one image)
+            # such that total similarity is maximized.
+            print(f"Solving linear assignment for {full_embeddings.shape[0]} images and {noun_embeddings.shape[0]} nouns...")
+            sims = full_embeddings @ noun_embeddings.T
+            
+            # linear_sum_assignment solves min cost, so we pass negative similarity (maximize=True works in newer scipy)
+            # row_ind are image indices, col_ind are noun indices
+            row_ind, col_ind = linear_sum_assignment(sims, maximize=True)
+            
+            # Construct max_per_noun and best_image_indices for rendering
+            # Initialize with -1.0 so unmatched nouns appear at the end
+            max_per_noun = np.full(len(nouns_list), -1.0, dtype=np.float32)
+            best_image_indices = np.zeros(len(nouns_list), dtype=np.int64)
+            
+            # Fill in the matched pairs
+            max_per_noun[col_ind] = sims[row_ind, col_ind]
+            best_image_indices[col_ind] = row_ind
+            
+            num_matches = len(row_ind)
+            print(f"Matched {num_matches} unique image-noun pairs.")
+            
+            # Determine effective top_k to avoid showing unmatched nouns
+            effective_top_k = num_matches
+            if noun_cfg.grid_top_k is not None:
+                effective_top_k = min(effective_top_k, noun_cfg.grid_top_k)
+            
+            # Render Grid
+            dest_dir = cross_eval_dir / label
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            nounlist_name = Path(noun_cfg.nounlist).stem
+            model_name_sanitized = cfg.text_image_embedding_model.replace("/", "-")
+            output_path = dest_dir / f"aggregate_noun_grid_{nounlist_name}_{model_name_sanitized}.pdf"
+            
+            print(f"Rendering aggregate grid to {output_path}")
+            render_noun_similarity_grid(
+                nouns_list,
+                max_per_noun,
+                best_image_indices,
+                all_image_paths,
+                output_path,
+                thumb_size=noun_cfg.grid_thumb_size,
+                margin=noun_cfg.grid_margin,
+                font_size=noun_cfg.grid_font_size,
+                top_k=effective_top_k
+            )
+
     finally:
         os.chdir(previous_cwd)
 
@@ -1728,7 +2066,7 @@ def main(cfg: SweepConfig) -> None:
         group_labels: Dict[str, str] = {}
         for run_cfg, group_key in zip(existing_configs, group_keys):
             exp_name = Path(run_cfg.experiment_dir).name
-            label = format_group_label(group_key, varying_fields)
+            label, _, _ = format_group_label(group_key, varying_fields)
             group_labels[exp_name] = label
 
         try:
@@ -1765,7 +2103,8 @@ def main(cfg: SweepConfig) -> None:
         cfg.eval_noun_coverage or
         cfg.eval_captions or
         cfg.render_archive or
-        cfg.eval_tree
+        cfg.eval_tree or
+        cfg.render_aggregate_noun_grid
     )
 
     if any_eval_or_render:
@@ -1773,6 +2112,9 @@ def main(cfg: SweepConfig) -> None:
         import torch
         ctx = multiprocessing.get_context("spawn")
         device_str = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if cfg.render_aggregate_noun_grid:
+            _run_render_aggregate_noun_grid(cfg, run_configs, original_cwd, cross_eval_dir)
 
         if cfg.eval_visual_coverage:
             p1 = ctx.Process(
@@ -1787,7 +2129,7 @@ def main(cfg: SweepConfig) -> None:
         if cfg.eval_noun_coverage:
             p2 = ctx.Process(
                 target=_run_eval_noun_coverage,
-                args=(cfg, run_configs, original_cwd, device_str)
+                args=(cfg, run_configs, original_cwd, device_str, cross_eval_dir)
             )
             p2.start()
             p2.join()

@@ -195,6 +195,57 @@ def create_numbered_grid(
     return canvas.convert("RGB")
 
 
+def save_captioned_grid_pdf(
+    images: Sequence[Image.Image],
+    captions: Sequence[str],
+    output_path: Path,
+    cols: Optional[int] = None,
+    font_size: int = 14,
+) -> None:
+    """Render a grid of images with captions to a PDF file using matplotlib."""
+    import math
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    if not images:
+        return
+
+    n = len(images)
+    if cols is None:
+        cols = max(1, int(math.ceil(math.sqrt(n))))
+    rows = int(math.ceil(n / cols))
+
+    # Calculate figure size (heuristic: 2.5 inches wide per col, 3 inches high per row)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 2.5, rows * 3))
+    
+    # Handle single subplot case
+    if n == 1:
+        axes = np.array([axes])
+    axes = np.array(axes).flatten()
+
+    for i, ax in enumerate(axes):
+        if i < n:
+            ax.imshow(images[i])
+            title = captions[i]
+            # Place caption below image
+            ax.text(
+                0.5, -0.02, title,
+                transform=ax.transAxes,
+                ha="center", va="top",
+                wrap=True, fontsize=font_size
+            )
+            ax.axis("off")
+        else:
+            ax.axis("off")
+
+    plt.tight_layout()
+    if not output_path.parent.exists():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+    fig.savefig(output_path, format="pdf", bbox_inches="tight")
+    plt.close(fig)
+
+
 def render_genome_image(
     genome: neat.DefaultGenome,
     config: neat.Config,
@@ -352,6 +403,7 @@ __all__ = [
     "draw_label",
     "create_captioned_grid",
     "create_numbered_grid",
+    "save_captioned_grid_pdf",
     "render_genome_image",
     "render_genome_diagram",
 ]

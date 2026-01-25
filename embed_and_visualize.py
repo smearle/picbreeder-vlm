@@ -89,7 +89,7 @@ class EmbedVisualizeConfig(PicbreederConfig):
                     "  goal/scheme/seed    Combine with ensure_valid_config to infer a run directory.\n"
                     "  method              Choose between umap/tsne/pca.\n"
                     "  k_center_values     Comma-separated radii to measure diversity.\n"
-                    "  representative_k    Number of representative images to select (default 36).\n"
+                    "  representative_k    Number of representative images to select (default 25).\n"
                 ),
                 footer="Override with +option=value (e.g. method=pca k_center_values=5,10).",
             )
@@ -626,18 +626,13 @@ def main(
     print(f"Reducing to 2D using {validated_cfg.method}...")
     coords = reduce_embeddings(embeddings, method=validated_cfg.method)
 
-    viz_out = exp_dir / f"embed_viz_{model_name_sanitized}_{validated_cfg.method}.pdf"
-    print(f"Creating visualization (thumbnails limit={validated_cfg.thumbs_limit}) -> {viz_out}")
-    plot_coords(coords, list(image_paths), viz_out, thumbs_limit=validated_cfg.thumbs_limit)
+    # viz_out = exp_dir / f"embed_viz_{model_name_sanitized}_{validated_cfg.method}.pdf"
+    # print(f"Creating visualization (thumbnails limit={validated_cfg.thumbs_limit}) -> {viz_out}")
+    # plot_coords(coords, list(image_paths), viz_out, thumbs_limit=validated_cfg.thumbs_limit)
 
-    # grid_assignments, grid_bounds = layout_embeddings_to_grid(coords)
-    # grid_out = exp_dir / f"embed_grid_{model_name_sanitized}_{validated_cfg.method}.pdf"
-    # print(f"Rendering grid approximation -> {grid_out}")
-    # render_grid(grid_assignments, grid_bounds, image_paths, grid_out)
-
-    rect_grid_out = exp_dir / f"embed_grid_rect_{model_name_sanitized}_{validated_cfg.method}.pdf"
-    print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
-    render_rectangular_grid(coords, image_paths, rect_grid_out)
+    # rect_grid_out = exp_dir / f"embed_grid_rect_{model_name_sanitized}_{validated_cfg.method}.pdf"
+    # print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
+    # render_rectangular_grid(coords, image_paths, rect_grid_out)
 
     if validated_cfg.representative_k > 0:
         print(f"Selecting {validated_cfg.representative_k} representative images via FPS...")

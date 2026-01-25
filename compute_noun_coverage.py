@@ -41,7 +41,7 @@ except Exception as exc:  # pragma: no cover - import guard
     raise RuntimeError("open_clip import failed. Is `open_clip_torch` installed?") from exc
 
 from config import PicbreederConfig, ensure_valid_config
-from rendering import try_load_font, create_captioned_grid
+from rendering import try_load_font, create_captioned_grid, save_captioned_grid_pdf
 from utils import _ensure_absolute, resolve_nounlist
 from model_loader import prepare_model, embed_images
 
@@ -62,8 +62,8 @@ class NounSimilarityConfig(PicbreederConfig):
     output_grid: Optional[Path] = None
     grid_thumb_size: int = 192
     grid_margin: int = 12
-    grid_font_size: int = 10
-    grid_top_k: Optional[int] = 900
+    grid_font_size: int = 20
+    grid_top_k: Optional[int] = 16
     negative_anchors: str = "negative_anchors"
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
@@ -521,6 +521,7 @@ def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], ou
     fig.savefig(outpath, dpi=150)
     plt.close(fig)
 
+
 def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) -> List[Dict[str, object]]:
     final_data = []
     existing_map = {}
@@ -590,12 +591,16 @@ def render_noun_similarity_grid(
             cached = Image.open(image_path).convert("RGB")
             cache[image_path] = cached
         images.append(cached)
-        distance = 1.0 - float(max_per_noun[noun_idx])
-        captions.append(f"{nouns[noun_idx]} (dist {distance:.3f})")
+        # distance = 1.0 - float(max_per_noun[noun_idx])
+        # captions.append(f"{nouns[noun_idx]} (dist {distance:.3f})")
+        captions.append(nouns[noun_idx])
 
-    grid = create_captioned_grid(images, captions, thumb_size, margin, font_size)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    grid.save(output_path, format="PNG")
+    if output_path.suffix.lower() == ".pdf":
+        save_captioned_grid_pdf(images, captions, output_path, font_size=font_size)
+    else:
+        grid = create_captioned_grid(images, captions, thumb_size, margin, font_size)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        grid.save(output_path, format="PNG")
 
 
 def _resolve_optional_path(value: Optional[Path], base: Path) -> Optional[Path]:
@@ -837,7 +842,7 @@ def process_noun_similarity(
         grid_output = _resolve_optional_path(validated_cfg.output_grid, original_cwd)
         if grid_output is None:
             suffix = f"_top{validated_cfg.grid_top_k}" if validated_cfg.grid_top_k else ""
-            grid_output = output_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}{suffix}.png"
+            grid_output = output_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}{suffix}.pdf"
         render_noun_similarity_grid(
             nouns_list,
             max_per_noun,

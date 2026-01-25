@@ -25,6 +25,7 @@ import json
 import os
 import re
 import requests
+import httpx
 import time
 from abc import ABC, abstractmethod
 from io import BytesIO
@@ -183,6 +184,10 @@ class GeminiBackend(VLMBackend):
                     raw_response=response,
                 )
             except Exception as exc:
+                if isinstance(exc, httpx.RemoteProtocolError):
+                    print(f"RemoteProtocolError in query. Retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
                 if isinstance(exc, self._genai.errors.ClientError) and _is_rate_limit_error(exc):
                     delay = _extract_retry_delay_seconds(exc) or 40.0
                     print(f"Gemini quota exceeded (429) in query. Retrying in {delay} seconds...")
@@ -245,6 +250,10 @@ class GeminiBackend(VLMBackend):
                     raw_response=response,
                 )
             except Exception as exc:
+                if isinstance(exc, httpx.RemoteProtocolError):
+                    print(f"RemoteProtocolError in query_multiple. Retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
                 if isinstance(exc, self._genai.errors.ClientError) and _is_rate_limit_error(exc):
                     delay = _extract_retry_delay_seconds(exc) or 40.0
                     print(f"Gemini quota exceeded (429) in query_multiple. Retrying in {delay} seconds...")
@@ -475,6 +484,11 @@ class GeminiChatSession(VLMChatSession):
                 response = chat.send_message(parts)
                 break
             except Exception as exc:
+                if isinstance(exc, httpx.RemoteProtocolError):
+                    print(f"RemoteProtocolError in chat session. Retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
+
                 # Handle 429 Resource Exhausted (Rate Limit)
                 if isinstance(exc, self._genai.errors.ClientError) and _is_rate_limit_error(exc):
                     delay = _extract_retry_delay_seconds(exc) or 40.0

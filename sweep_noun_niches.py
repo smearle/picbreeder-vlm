@@ -39,7 +39,6 @@ from sweep_analysis_utils import (
     sanitize_filename_tag,
     normalize_group_value,
     compute_varying_fields,
-    format_group_label,
     load_human_baseline,
     write_aggregate_plot,
     write_scalar_bar_plot,

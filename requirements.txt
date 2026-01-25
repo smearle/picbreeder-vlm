@@ -17,6 +17,7 @@ torchvision
 torch
 # umap-learn
 scikit-learn
+scipy
 seaborn
 tqdm
 rasterfairy

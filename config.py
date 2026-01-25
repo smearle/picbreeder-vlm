@@ -49,7 +49,7 @@ class PicbreederConfig:
     render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
     log_raw_responses: bool = False  # When true, dump raw VLM responses to timestamped text files
     fixed_session_lengths: bool = True  # When true, agents run for exactly 20 generations and must publish at the 20th generation
-    nounlist: str = "things"  # Noun list name (in noun_lists/) or path
+    nounlist: str = "things_deduped"  # Noun list name (in noun_lists/) or path
     n_personality_traits: int = 0  # Number of random personality traits to prepend to the system prompt
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
