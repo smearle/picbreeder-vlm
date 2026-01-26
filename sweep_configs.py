@@ -100,7 +100,7 @@ class ChatHistoryTurnsSweep(SweepConfig):
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5, 6, 7, 8])
-    num_agents: int = 1_000
+    num_agents: int = 2_000
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.06, 0.09])
 
 
@@ -108,7 +108,7 @@ class ChatHistoryTurnsSweep(SweepConfig):
 class FullRandSelectProbSweep(SweepConfig):
     rand_select_prob: List[float] = field(default_factory=lambda: [
         0.0, 
-        # 0.05,
+        0.05,
         0.25, 0.5, 0.75, 1.0
     ])
     rand_select_mode: str = 'all'
@@ -118,7 +118,7 @@ class FullRandSelectProbSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [
         3, 4, 5, 
-        # 6, 7, 8,
+        6, 7, 8,
     ])
     thumb_size: List[int] = field(default_factory=lambda: [128,])
     num_agents: int = 2_000

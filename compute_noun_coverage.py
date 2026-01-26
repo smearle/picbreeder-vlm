@@ -18,6 +18,7 @@ from pathlib import Path
 import pickle
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from scipy.optimize import linear_sum_assignment
 import numpy as np
 from PIL import Image, ImageDraw
 import torch
@@ -839,14 +840,28 @@ def process_noun_similarity(
     print(f"Saved noun similarity trajectory plot to {trajectory_plot}")
 
     if validated_cfg.render_grid:
+        # Override max_per_noun and best_image_indices using linear assignment for better visualization
+        # We want to assign each image to at most one noun (and each noun to at most one image)
+        print(f"Solving linear assignment for grid rendering ({image_embeddings.shape[0]} images, {noun_embeddings.shape[0]} nouns)...")
+        sims = image_embeddings @ noun_embeddings.T
+        # linear_sum_assignment solves min cost, so we pass negative similarity (maximize=True works in newer scipy)
+        row_ind, col_ind = linear_sum_assignment(sims, maximize=True)
+        
+        # Re-initialize for grid usage: unmatched nouns get -1.0 so they appear at end
+        max_per_noun_grid = np.full(len(nouns_list), -1.0, dtype=np.float32)
+        best_image_indices_grid = np.zeros(len(nouns_list), dtype=np.int64)
+        
+        max_per_noun_grid[col_ind] = sims[row_ind, col_ind]
+        best_image_indices_grid[col_ind] = row_ind
+        
         grid_output = _resolve_optional_path(validated_cfg.output_grid, original_cwd)
         if grid_output is None:
             suffix = f"_top{validated_cfg.grid_top_k}" if validated_cfg.grid_top_k else ""
             grid_output = output_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}{suffix}.pdf"
         render_noun_similarity_grid(
             nouns_list,
-            max_per_noun,
-            best_image_indices,
+            max_per_noun_grid,
+            best_image_indices_grid,
             image_paths,
             grid_output,
             validated_cfg.grid_thumb_size,
