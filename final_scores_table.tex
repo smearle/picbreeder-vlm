@@ -1,0 +1,26 @@
+\begin{tabular}{llcccc}
+\toprule
+Sweep & Condition & Semantic Recall & Visual Coverage & Semantic Coverage & Tree Balance ($J^1$) \\
+\midrule
+\multirow{6}{*}{Random Action Prob. ($\epsilon$)} & \cellcolor[gray]{0.9}0.0 & \cellcolor[gray]{0.9}0.087 $\pm$ 0.001 & \cellcolor[gray]{0.9}0.614 $\pm$ 0.002 & \cellcolor[gray]{0.9}0.696 $\pm$ 0.004 & \cellcolor[gray]{0.9}0.235 $\pm$ 0.026 \\
+ & 0.05 & 0.086 $\pm$ 0.001 & 0.619 $\pm$ 0.011 & 0.702 $\pm$ 0.006 & 0.246 $\pm$ 0.023 \\
+ & 0.25 & \textbf{0.088 $\pm$ 0.001} & 0.638 $\pm$ 0.009 & \textbf{0.717 $\pm$ 0.004} & 0.249 $\pm$ 0.022 \\
+ & 0.5 & 0.085 $\pm$ 0.001 & 0.633 $\pm$ 0.007 & 0.709 $\pm$ 0.005 & 0.260 $\pm$ 0.013 \\
+ & 0.75 & 0.084 $\pm$ 0.001 & \textbf{0.639 $\pm$ 0.004} & 0.706 $\pm$ 0.003 & \textbf{0.303 $\pm$ 0.010} \\
+ & 1.0 & 0.082 $\pm$ 0.001 & 0.610 $\pm$ 0.013 & 0.700 $\pm$ 0.003 & 0.275 $\pm$ 0.030 \\
+\midrule
+\multirow{5}{*}{Context Length ($CL$)} & 0 & 0.082 $\pm$ 0.001 & 0.527 $\pm$ 0.009 & 0.632 $\pm$ 0.006 & 0.305 $\pm$ 0.027 \\
+ & \cellcolor[gray]{0.9}1 & \cellcolor[gray]{0.9}\textbf{0.087 $\pm$ 0.001} & \cellcolor[gray]{0.9}\textbf{0.614 $\pm$ 0.002} & \cellcolor[gray]{0.9}0.696 $\pm$ 0.004 & \cellcolor[gray]{0.9}0.235 $\pm$ 0.026 \\
+ & 2 & 0.083 $\pm$ 0.001 & 0.583 $\pm$ 0.004 & 0.675 $\pm$ 0.006 & 0.339 $\pm$ 0.033 \\
+ & 10 & 0.079 $\pm$ 0.003 & 0.512 $\pm$ 0.021 & 0.661 $\pm$ 0.010 & 0.331 $\pm$ 0.040 \\
+ & 20 (Full) & 0.083 $\pm$ 0.001 & 0.595 $\pm$ 0.010 & \textbf{0.697 $\pm$ 0.003} & \textbf{0.350 $\pm$ 0.018} \\
+\midrule
+\multirow{4}{*}{Num. Agents ($NA$)} & \cellcolor[gray]{0.9}0 & \cellcolor[gray]{0.9}0.087 $\pm$ 0.001 & \cellcolor[gray]{0.9}0.614 $\pm$ 0.002 & \cellcolor[gray]{0.9}0.696 $\pm$ 0.004 & \cellcolor[gray]{0.9}0.235 $\pm$ 0.026 \\
+ & 10 & 0.086 $\pm$ 0.002 & 0.605 $\pm$ 0.012 & 0.698 $\pm$ 0.011 & 0.373 $\pm$ 0.030 \\
+ & 100 & \textbf{0.089 $\pm$ 0.001} & 0.659 $\pm$ 0.006 & 0.710 $\pm$ 0.009 & 0.473 $\pm$ 0.022 \\
+ & 1000 & 0.088 $\pm$ 0.001 & \textbf{0.665 $\pm$ 0.004} & \cellcolor[rgb]{0.75, 1, 0.75}{\textbf{0.734 $\pm$ 0.013}} & \textbf{0.476 $\pm$ 0.013} \\
+\midrule
+\multirow{2}{*}{Baselines} & Random & 0.080 $\pm$ 0.001 & 0.612 $\pm$ 0.005 & 0.692 $\pm$ 0.002 & \cellcolor[rgb]{0.75, 1, 0.75}{0.540 $\pm$ 0.003} \\
+ & Human & \cellcolor[rgb]{0.75, 1, 0.75}{0.089 $\pm$ 0.000} & \cellcolor[rgb]{0.75, 1, 0.75}{0.681 $\pm$ 0.000} & 0.730 $\pm$ 0.000 & 0.363 $\pm$ 0.000 \\
+\bottomrule
+\end{tabular}

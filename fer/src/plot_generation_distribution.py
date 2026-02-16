@@ -130,10 +130,42 @@ def main() -> None:
         return
 
     # Basic stats
-    print(f"Min generations: {min(generation_counts)}")
-    print(f"Max generations: {max(generation_counts)}")
-    print(f"Mean generations: {np.mean(generation_counts):.2f}")
-    print(f"Median generations: {np.median(generation_counts):.2f}")
+    min_gen = min(generation_counts)
+    max_gen = max(generation_counts)
+    mean_gen = np.mean(generation_counts)
+    median_gen = np.median(generation_counts)
+    
+    count_le_20 = sum(1 for c in generation_counts if c <= 20)
+    pct_le_20 = (count_le_20 / len(generation_counts)) * 100
+
+    print(f"Min generations: {min_gen}")
+    print(f"Max generations: {max_gen}")
+    print(f"Mean generations: {mean_gen:.2f}")
+    print(f"Median generations: {median_gen:.2f}")
+    print(f"Percentage <= 20 generations: {pct_le_20:.2f}%")
+    
+    # Generate LaTeX table
+    tex_output_path = output_path.parent / "human_generations_stats.tex"
+    tex_content = f"""\\begin{{table}}[ht]
+    \\centering
+    \\caption{{Statistics of generations between publications in the human archive.}}
+    \\begin{{tabular}}{{lc}}
+        \\toprule
+        \\textbf{{Statistic}} & \\textbf{{Value}} \\\\
+        \\midrule
+        Mean Generations & {mean_gen:.2f} \\\\
+        Median Generations & {median_gen:.2f} \\\\
+        Min Generations & {min_gen} \\\\
+        Max Generations & {max_gen} \\\\
+        \\% $\\le$ 20 Generations & {pct_le_20:.1f}\\% \\\\
+        \\bottomrule
+    \\end{{tabular}}
+    \\label{{tab:human_gen_stats}}
+\\end{{table}}
+"""
+    with open(tex_output_path, "w") as f:
+        f.write(tex_content)
+    print(f"Saved LaTeX stats table to {tex_output_path}")
     
     # Save raw data
     data_path = output_path.with_suffix(".json")
@@ -155,6 +187,9 @@ def main() -> None:
     outliers = len(generation_counts) - len(filtered_counts)
     
     plt.hist(filtered_counts, bins=range(0, args.max_gen + 2), edgecolor='black', alpha=0.7)
+    plt.axvline(x=20, color='red', linestyle=':', linewidth=2, label='20 Generations')
+    plt.legend()
+
     plt.title(f"Distribution of Generations Between Publications\n(n={len(generation_counts)}, showing <= {args.max_gen}, {outliers} outliers)")
     plt.xlabel("Number of Generations")
     plt.ylabel("Count")
@@ -167,6 +202,9 @@ def main() -> None:
     # Plot 2: Log scale / Full range
     plt.figure(figsize=(10, 6))
     plt.hist(generation_counts, bins=50, edgecolor='black', alpha=0.7, log=True)
+    plt.axvline(x=20, color='red', linestyle=':', linewidth=2, label='20 Generations')
+    plt.legend()
+    
     plt.title(f"Distribution of Generations Between Publications (Log Scale)\n(n={len(generation_counts)})")
     plt.xlabel("Number of Generations")
     plt.ylabel("Count (Log)")

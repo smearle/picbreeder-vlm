@@ -3,8 +3,10 @@ google-genai
 hydra-core
 matplotlib
 neat-python==0.92
+pandas
 pathlib
 Pillow
+portkey-ai
 pygame
 python-dotenv
 submitit

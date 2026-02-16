@@ -723,6 +723,21 @@ def _compute_mean_trajectory(
             if traj:
                 trajectories.append(traj)
 
+        elif metric_type == "noun_per_image":
+            if not nounlist_name:
+                continue
+            suffix = ""
+            if model_name:
+                sanitized = model_name.replace("/", "-")
+                suffix = f"_{sanitized}"
+            
+            path = exp_dir / f"noun_similarity_over_time_{nounlist_name}{suffix}.json"
+            if path.exists():
+                traj = _load_trajectory_metric(path, "mean_max_per_image_similarity")
+                traj = {key: val for key, val in traj.items() if key <= limit}
+                if traj:
+                    trajectories.append(traj)
+
         elif metric_type == "caption_diversity":
              if not caption_model_name or not caption_embedding_model:
                  continue
@@ -852,12 +867,14 @@ def _plot_seed_aggregates(
 ) -> None:
     novelty_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     noun_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
+    noun_per_image_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     noun_contrastive_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     caption_grouped: Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]] = {}
     caption_k_covering_grouped: Dict[str, Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]]] = {}
     visual_k_covering_grouped: Dict[str, Dict[Tuple[Tuple[str, Any], ...], List[Dict[int, float]]]] = {}
     noun_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     noun_contrastive_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
+    noun_per_image_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
     mpd_scalar_grouped: Dict[Tuple[Tuple[str, Any], ...], List[float]] = {}
 
     final_novelty_scores: Dict[Tuple[Tuple[str, Any], ...], List[Tuple[int, float]]] = {}
@@ -894,6 +911,7 @@ def _plot_seed_aggregates(
 
     baselines_novelty: List[Tuple[str, Dict[int, float]]] = []
     baselines_noun: List[Tuple[str, Dict[int, float]]] = []
+    baselines_noun_per_image: List[Tuple[str, Dict[int, float]]] = []
     baselines_noun_contrastive: List[Tuple[str, Dict[int, float]]] = []
     baselines_caption_diversity: List[Tuple[str, Dict[int, float]]] = []
     
@@ -923,6 +941,10 @@ def _plot_seed_aggregates(
                  bnnc = load_human_baseline("noun_contrastive", size, baseline_model_noun, nounlist=nl_name, strict=False, negative_anchors=neg_anchors)
                  if bnnc:
                      baselines_noun_contrastive.append((f"Human Baseline{label_suffix}{nl_suffix}", bnnc))
+
+                 bnnpi = load_human_baseline("noun_per_image", size, baseline_model_noun, nounlist=nl_name, strict=False, negative_anchors=neg_anchors)
+                 if bnnpi:
+                     baselines_noun_per_image.append((f"Human Baseline{label_suffix}{nl_suffix}", bnnpi))
             
             # Human Baseline for Caption Diversity
             if caption_model:
@@ -970,6 +992,11 @@ def _plot_seed_aggregates(
                             traj_noun_cont = _compute_mean_trajectory(rb_configs, "noun_contrastive", text_image_embedding_model, nl_name, negative_anchors_name=neg_stem)
                             if traj_noun_cont:
                                 baselines_noun_contrastive.append((f"Random Baseline{label_suffix}{nl_suffix}", traj_noun_cont))
+                        
+                        traj_noun_per_image = _compute_mean_trajectory(rb_configs, "noun_per_image", text_image_embedding_model, nl_name, negative_anchors_name=negative_anchors)
+                        if traj_noun_per_image:
+                            baselines_noun_per_image.append((f"Random Baseline{label_suffix}{nl_suffix}", traj_noun_per_image))
+                        
                         # else:
                         #     scalar_noun = _compute_mean_scalar(rb_configs, "noun", text_image_embedding_model, nl_name)
                         #     if scalar_noun is not None:
@@ -1073,6 +1100,12 @@ def _plot_seed_aggregates(
             elif noun:
                 raise ValueError(f"Missing contrastive noun similarity with key {f'mean_max_contrastive{neg_suffix}'} in {noun_path} (eval_noun_coverage was likely run with an old version or incomplete data)")
 
+            noun_per_image = _load_trajectory_metric(noun_path, "mean_max_per_image_similarity")
+            noun_per_image = {k: v for k, v in noun_per_image.items() if k <= limit}
+            if noun_per_image:
+                 noun_per_image_grouped.setdefault(group_key, []).append(noun_per_image)
+
+
         # Try caption metrics
         if caption_model and caption_embedding_model:
             cap_metrics_path = exp_dir / "archive" / f"metrics{caption_suffix}.json"
@@ -1139,6 +1172,14 @@ def _plot_seed_aggregates(
         if scalars:
             noun_contrastive_scalar_grouped[group_key] = scalars
 
+    for group_key, runs in noun_per_image_grouped.items():
+        scalars = []
+        for run in runs:
+            if run:
+                scalars.append(run[max(run.keys())])
+        if scalars:
+            noun_per_image_scalar_grouped[group_key] = scalars
+
     # Use image model suffix for novelty plots, text-image model suffix for noun plots
     # If mixed, we append both or stick to one convention. 
     # Let's append suffixes specific to the metric.
@@ -1173,6 +1214,9 @@ def _plot_seed_aggregates(
     
     max_x_noun_cont = _compute_max_x(noun_contrastive_grouped)
     baseline_scalars_noun_contrastive = _extract_baseline_scalars(baselines_noun_contrastive, max_x_noun_cont) if max_x_noun_cont > 0 else []
+    
+    max_x_noun_per_image = _compute_max_x(noun_per_image_grouped)
+    baseline_scalars_noun_per_image = _extract_baseline_scalars(baselines_noun_per_image, max_x_noun_per_image) if max_x_noun_per_image > 0 else []
     
     if len(used_nounlists) == 1:
         nounlist_name_for_file = list(used_nounlists)[0]
@@ -1233,6 +1277,19 @@ def _plot_seed_aggregates(
         title="Mean max contrastive noun similarity (mean±sem across seeds)",
         ylabel="Mean of per-noun max contrastive similarity",
         baselines=baseline_scalars_noun_contrastive,
+    )
+
+    agg_plot_noun_per_image_path = output_dir / f"aggregate_noun_per_image_combined_{nounlist_name_for_file}_{filename_tag}{text_image_model_suffix}.png"
+    write_combined_plot_and_bar(
+        grouped_runs=noun_per_image_grouped,
+        grouped_values=noun_per_image_scalar_grouped,
+        outpath=agg_plot_noun_per_image_path,
+        title="Mean Max Per-Image Noun Similarity (mean±sem across seeds)",
+        xlabel="Archive insertion order",
+        ylabel_line="Mean max per-image similarity",
+        ylabel_bar="Mean max per-image similarity",
+        baselines_line=baselines_noun_per_image,
+        baselines_bar=baseline_scalars_noun_per_image,
     )
 
     write_scalar_bar_plot(
@@ -1695,12 +1752,12 @@ def _run_render_archive(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig
             
             # Files to copy
             src_files = [
-                Path(run_cfg.experiment_dir) / f"embed_viz_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                Path(run_cfg.experiment_dir) / f"embed_grid_rect_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                Path(run_cfg.experiment_dir) / f"embed_grid_representative_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                Path(run_cfg.experiment_dir) / f"embed_grid_representative_simple_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                Path(run_cfg.experiment_dir) / f"embed_grid_uniform_interval_{model_name_sanitized}_{eval_cfg.method}.pdf",
-                Path(run_cfg.experiment_dir) / f"embed_grid_uniform_random_{model_name_sanitized}_{eval_cfg.method}.pdf",
+                Path(run_cfg.experiment_dir) / f"embed_viz_{model_name_sanitized}_{eval_cfg.method}.png",
+                Path(run_cfg.experiment_dir) / f"embed_grid_rect_{model_name_sanitized}_{eval_cfg.method}.png",
+                Path(run_cfg.experiment_dir) / f"embed_grid_representative_{model_name_sanitized}_{eval_cfg.method}.png",
+                Path(run_cfg.experiment_dir) / f"embed_grid_representative_simple_{model_name_sanitized}_{eval_cfg.method}.png",
+                Path(run_cfg.experiment_dir) / f"embed_grid_uniform_interval_{model_name_sanitized}_{eval_cfg.method}.png",
+                Path(run_cfg.experiment_dir) / f"embed_grid_uniform_random_{model_name_sanitized}_{eval_cfg.method}.png",
             ]
             
             for src in src_files:

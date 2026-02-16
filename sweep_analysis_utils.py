@@ -168,6 +168,15 @@ def load_human_baseline(
             return None
         filename = f"noun_similarity_res{render_size}_{model_name}_{nounlist}.json"
         key = f"mean_max_contrastive{neg_suffix}"
+    elif metric == "noun_per_image":
+        if not nounlist:
+            msg = "Nounlist name must be provided to load noun per-image baseline."
+            if strict:
+                raise ValueError(msg)
+            print(msg)
+            return None
+        filename = f"noun_similarity_res{render_size}_{model_name}_{nounlist}.json"
+        key = "mean_max_per_image_similarity"
     elif metric == "visual_k_covering":
         if k is None:
             msg = "k must be provided for visual_k_covering baseline."

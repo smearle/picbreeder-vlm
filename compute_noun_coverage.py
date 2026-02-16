@@ -392,8 +392,8 @@ def compute_max_similarities(
     image_embeddings: np.ndarray,
     noun_embeddings: np.ndarray,
     neg_embeddings: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, float, np.ndarray, Optional[np.ndarray], Optional[float]]:
-    """Return per-noun max cosine similarity, mean, best indices, and optionally contrastive metrics."""
+) -> Tuple[np.ndarray, float, np.ndarray, Optional[np.ndarray], Optional[float], float]:
+    """Return per-noun max cosine similarity, mean, best indices, contrastive metrics, and mean per-image max sim."""
     if image_embeddings.size == 0:
         raise ValueError("No image embeddings available for similarity calculation.")
     
@@ -401,6 +401,10 @@ def compute_max_similarities(
     max_per_noun = np.max(sims, axis=0)
     best_image_indices = np.argmax(sims, axis=0)
     mean_sim = float(max_per_noun.mean())
+
+    # Per-image max similarity (how well does each image match *any* noun?)
+    max_per_image = np.max(sims, axis=1)
+    mean_max_per_image = float(max_per_image.mean())
 
     max_contrastive_per_noun = None
     mean_contrastive = None
@@ -418,7 +422,7 @@ def compute_max_similarities(
         max_contrastive_per_noun = np.max(contrastive_sims, axis=0)
         mean_contrastive = float(max_contrastive_per_noun.mean())
 
-    return max_per_noun, mean_sim, best_image_indices, max_contrastive_per_noun, mean_contrastive
+    return max_per_noun, mean_sim, best_image_indices, max_contrastive_per_noun, mean_contrastive, mean_max_per_image
 
 
 def compute_trajectory_metrics(
@@ -446,6 +450,7 @@ def compute_trajectory_metrics(
     else:
         max_contrastive_per_noun = None
 
+    cumulative_per_image_max = 0.0
     results: List[Dict[str, object]] = []
 
     for idx in range(image_embeddings.shape[0]):
@@ -455,6 +460,10 @@ def compute_trajectory_metrics(
         # Similarities to nouns: (1, N_nouns) -> (N_nouns,)
         sims = (img_emb @ noun_embeddings.T).flatten()
         max_per_noun = np.maximum(max_per_noun, sims)
+        
+        # Track per-image max similarity
+        max_sim_for_this_image = float(np.max(sims))
+        cumulative_per_image_max += max_sim_for_this_image
 
         # Similarity to negatives: (1, N_neg)
         neg_sims = img_emb @ neg_embeddings.T
@@ -469,6 +478,7 @@ def compute_trajectory_metrics(
             "index": int(idx + 1),
             "image": image_paths[idx].name,
             "mean_max_similarity": float(max_per_noun.mean()),
+            "mean_max_per_image_similarity": float(cumulative_per_image_max / (idx + 1)),
             contrastive_key: float(max_contrastive_per_noun.mean()),
         }
 
@@ -486,6 +496,10 @@ def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], ou
     fig, ax = plt.subplots(1, 1, figsize=(12, 5))
     ax.plot(steps, vals, label="Noun Similarity", color="#1f77b4", linewidth=2)
     
+    if "mean_max_per_image_similarity" in results[0]:
+        vals_per_img = [float(row.get("mean_max_per_image_similarity", 0.0)) for row in results]
+        ax.plot(steps, vals_per_img, label="Mean Max Per-Image Sim", color="#2ca02c", linewidth=2, linestyle=":")
+
     # Identify all contrastive keys present in the data
     all_keys = set()
     for row in results:
@@ -546,6 +560,8 @@ def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) ->
         item["index"] = int(row["index"])
         item["image"] = str(row["image"])
         item["mean_max_similarity"] = float(row["mean_max_similarity"])
+        if "mean_max_per_image_similarity" in row:
+            item["mean_max_per_image_similarity"] = float(row["mean_max_per_image_similarity"])
         
         # Merge contrastive keys
         for k, v in row.items():
@@ -769,7 +785,7 @@ def process_noun_similarity(
         if isinstance(noun_embeddings, list):
              noun_embeddings = np.asarray(noun_embeddings)
 
-    max_per_noun, mean_similarity, best_image_indices, max_contrastive, mean_contrastive = compute_max_similarities(
+    max_per_noun, mean_similarity, best_image_indices, max_contrastive, mean_contrastive, mean_max_per_image = compute_max_similarities(
         image_embeddings,
         noun_embeddings,
         neg_embeddings=neg_embeddings,
@@ -778,7 +794,7 @@ def process_noun_similarity(
     contrastive_key = None
     per_noun_key = None
     if validated_cfg.negative_anchors:
-        anchors_str = f"{validated_cfg.negative_anchors.replace(" ", "-")}"
+        anchors_str = f"{validated_cfg.negative_anchors.replace(' ', '-')}"
         contrastive_key = f"mean_max_contrastive_{anchors_str}"
         per_noun_key = f"max_contrastive_per_noun_{anchors_str}"
 
@@ -799,6 +815,7 @@ def process_noun_similarity(
         "label_template": validated_cfg.label_template,
         "negative_anchors": validated_cfg.negative_anchors,
         "mean_max_similarity": mean_similarity,
+        "mean_max_per_image_similarity": mean_max_per_image,
         "max_similarity_per_noun": {noun: float(score) for noun, score in zip(nouns_list, max_per_noun)},
     }
     

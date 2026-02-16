@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import multiprocessing
 import os
+import matplotlib.pyplot as plt
 
 # Add repo root to path
 sys.path.append(str(Path(__file__).resolve().parent))
@@ -50,6 +51,82 @@ def load_config(config_path: Path) -> neat.Config:
     apply_picbreeder_config_defaults(config)
     return config
 
+def save_modulation_grid(
+    results,
+    genome,
+    deltas,
+    output_path: Path,
+    mode: str,
+    title: str,
+):
+    num_rows = len(results)
+    num_cols = len(deltas)
+
+    if num_rows == 0:
+        print(f"No rows to render for {title} ({mode}).")
+        return
+
+    # Use a per-row height so full-reference grids can be very tall.
+    fig_height = max(3.0, num_rows * 2.2)
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(15, fig_height), squeeze=False)
+
+    plt.subplots_adjust(wspace=0.1, hspace=0.3)
+    fig.suptitle(title, fontsize=14)
+    fig.text(0.5, 0.02, 'Sweeping Weight Value', ha='center', fontsize=14)
+    fig.text(0.02, 0.5, 'Weight ID', va='center', rotation='vertical', fontsize=14)
+
+    for i, (conn_key, row_images) in enumerate(results):
+        conn_gene = genome.connections[conn_key]
+        original_weight = conn_gene.weight
+
+        ax_first = axes[i, 0]
+        ax_first.text(
+            -0.1,
+            0.5,
+            f"Conn {conn_key}\n$w={original_weight:.2f}$",
+            transform=ax_first.transAxes,
+            va='center',
+            ha='right',
+            fontsize=10,
+        )
+
+        for j, imgs in enumerate(row_images):
+            ax = axes[i, j]
+            if imgs is None:
+                ax.axis('off')
+                continue
+
+            grayscale_image, color_image = imgs
+
+            if mode == 'color':
+                ax.imshow(color_image)
+            else:
+                ax.imshow(grayscale_image, cmap='gray')
+
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            if i == num_rows - 1 and j in [0, 2, 4]:
+                delta_val = int(deltas[j])
+                ax.text(
+                    0.5,
+                    -0.15,
+                    rf"$\delta W = {delta_val}$",
+                    transform=ax.transAxes,
+                    ha='center',
+                    va='top',
+                    fontsize=12,
+                )
+
+    output_base_name = output_path.stem
+    output_dir = output_path.parent
+    current_output_path = output_dir / f"{output_base_name}_{mode}.png"
+    plt.savefig(current_output_path, bbox_inches='tight', dpi=150)
+    print(f"Saved to {current_output_path}")
+    plt.close(fig)
+
 def main():
     genome_path = Path("sweep_logs/sweep/th1_ag20_model-gemini-2.5-flash-lite_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5/archive/genomes/img_000447.pkl")
     config_path = Path("picture2d/interactive_config_color")
@@ -77,7 +154,7 @@ def main():
     print(f"Loaded genome: {genome.key}")
     
     # Parameters for modulation
-    deltas = np.linspace(-3.0, 3.0, 7)
+    deltas = np.linspace(-1.0, 1.0, 5)
     image_size = (128, 128)
     
     # Get all connections (weights)
@@ -101,59 +178,72 @@ def main():
     
     with multiprocessing.Pool(processes=num_workers) as pool:
         # Use starmap to pass arguments unpacked
-        results = pool.starmap(process_connection_row, tasks)
+        all_results = pool.starmap(process_connection_row, tasks)
     
-    # Create grid image
-    # Add space for labels
-    label_width = 150
-    header_height = 40
-    
-    grid_width = label_width + num_cols * image_size[0]
-    grid_height = header_height + num_rows * image_size[1]
-    
-    grid_image = Image.new("RGB", (grid_width, grid_height), (255, 255, 255))
-    grayscale_grid_image = Image.new("L", (grid_width, grid_height), 255)
-    draw = ImageDraw.Draw(grid_image)
-    draw_gray = ImageDraw.Draw(grayscale_grid_image)
-    
-    # Draw header
-    for j, delta in enumerate(deltas):
-        x = label_width + j * image_size[0]
-        text = f"{delta:+.1f}"
-        # Use default font
-        bbox = draw.textbbox((0, 0), text)
-        text_width = bbox[2] - bbox[0]
-        draw.text((x + (image_size[0] - text_width) // 2, 10), text, fill=(0, 0, 0))
-        draw_gray.text((x + (image_size[0] - text_width) // 2, 10), text, fill=0)
-
-    # Process results and draw
-    for i, (conn_key, row_images) in enumerate(results):
-        conn_gene = genome.connections[conn_key]
-        original_weight = conn_gene.weight
-        
-        # Draw row label
-        y = header_height + i * image_size[1]
-        label = f"Idx: {i}\nConn: {conn_key}\nW: {original_weight:.2f}"
-        draw.text((10, y + image_size[1] // 2 - 20), label, fill=(0, 0, 0))
-        draw_gray.text((10, y + image_size[1] // 2 - 20), label, fill=0)
-        
-        for j, imgs in enumerate(row_images):
-            if imgs is None:
-                continue
-                
-            grayscale_image, color_image = imgs
-            x = label_width + j * image_size[0]
+    # Compute impact of modulation (pixel distance)
+    # We want weights where modulation causes biggest change from the original (center) to extremes.
+    # deltas are linspace(-1, 1, 5) -> indices: 0 (-1), 1 (-0.5), 2 (0), 3 (0.5), 4 (1)
+    scored_results = []
+    for conn_key, row_images in all_results:
+        # Check if valid
+        if not row_images or len(row_images) != 5 or any(img is None for img in row_images):
+            score = -1.0
+        else:
+            # row_images[i] is (grayscale, color)
+            # Use grayscale image for distance
             
-            # Paste
-            grid_image.paste(color_image, (x, y))
-            grayscale_grid_image.paste(grayscale_image, (x, y))
+            # Center image (original weight)
+            center_img = np.array(row_images[2][0], dtype=np.float32)
+            
+            # Extremes
+            left_img = np.array(row_images[0][0], dtype=np.float32)
+            right_img = np.array(row_images[4][0], dtype=np.float32)
+            
+            # L1 distance
+            dist_left = np.mean(np.abs(center_img - left_img))
+            dist_right = np.mean(np.abs(center_img - right_img))
+            
+            score = dist_left + dist_right
+            
+        scored_results.append((score, conn_key, row_images))
+        
+    # Sort descending by score
+    scored_results.sort(key=lambda x: x[0], reverse=True)
+    
+    # Take top k
+    k = 4
+    top_k = scored_results[:k]
 
-    print("\nSaving grid...")
+    # Extract results for rendering
+    top_k_results = [(item[1], item[2]) for item in top_k]
+    all_weight_results = [(item[1], item[2]) for item in scored_results]
 
-    grid_image.save(output_path)
-    grayscale_output_path = output_path.with_name(output_path.stem + "_grayscale" + output_path.suffix)
-    grayscale_grid_image.save(grayscale_output_path)
-    print(f"Saved to {output_path} and {grayscale_output_path}")
+    print(f"Selected top {len(top_k_results)} weights with highest modulation impact.")
+    print(f"Rendering full reference grid with all {len(all_weight_results)} weights.")
+
+    top_k_output_path = output_path.with_name(f"{output_path.stem}_topk{output_path.suffix}")
+    all_weights_output_path = output_path.with_name(f"{output_path.stem}_all_weights{output_path.suffix}")
+
+    for mode in ['color', 'grayscale']:
+        print(f"\nSaving top-k {mode} grid...")
+        save_modulation_grid(
+            top_k_results,
+            genome,
+            deltas,
+            top_k_output_path,
+            mode,
+            title=f"Top-{k} Weight Modulations by Impact",
+        )
+
+        print(f"Saving all-weights {mode} grid...")
+        save_modulation_grid(
+            all_weight_results,
+            genome,
+            deltas,
+            all_weights_output_path,
+            mode,
+            title="All Weight Modulations (Reference)",
+        )
 
 if __name__ == "__main__":
     main()

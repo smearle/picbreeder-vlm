@@ -84,10 +84,10 @@ def get_lineage_genomes(pb_dir: Path, pid: str) -> List[Dict]:
     for lineage_pid in get_pid_lineage(pb_dir, pid):
         for archive in iter_generation_archives(pb_dir, lineage_pid):
             root = load_zip_xml_as_dict(str(archive))
-            generation = (
-                root.get("genome", {})
-                .get("storage", {})
-                .get("generation")
-            )
+            genome_data = root['genome']
+            if "storage" not in genome_data:
+                generation = genome_data["generation"]
+            else:
+                generation = genome_data["storage"]["generation"]
             genomes.extend(recursive_parse_all_genomes(generation))
     return sorted(genomes, key=lambda g: int(g.get("@age", 0)))

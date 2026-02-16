@@ -54,7 +54,7 @@ import neat
 from neat.population import CompleteExtinctionException
 
 from chat import (
-    ensure_gemini_key,
+    ensure_vlm_credentials,
 )
 from archive_manager import (
     ArchiveEntry,
@@ -1852,7 +1852,7 @@ def run(cfg: PicbreederConfig) -> None:
         _generate_personalities_for_run(cfg)
     apply_random_seed(cfg.seed)
     if cfg.selection_baseline == "none":
-        ensure_gemini_key()
+        ensure_vlm_credentials()
     orchestrator = _build_orchestrator(cfg)
     orchestrator.run_agents(
         cfg.num_agents,
@@ -2403,7 +2403,7 @@ def _continual_agent_worker(
     print(f"[Worker {worker_index}] Applying random seed: {worker_seed}")
     apply_random_seed(worker_seed)
     if cfg.selection_baseline == "none":
-        ensure_gemini_key()
+        ensure_vlm_credentials()
     archive_client = RemoteArchiveClient(archive_conn)
     try:
         while True:

@@ -25,7 +25,7 @@ genomeAll
 archive
 archive_neat
 mutation_logs
-cross_eval
+cross_eval*
 clip_noun_niche_es_logs/*
 fer/src/archive*
 fer/src/lineages*

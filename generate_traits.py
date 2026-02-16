@@ -4,7 +4,7 @@ import re
 import time
 from typing import List, Optional
 
-from im_query import client, DEFAULT_MODEL, types, genai, _is_token_limit_error
+from im_query import DEFAULT_MODEL, get_genai_client, types, genai, _is_token_limit_error
 from prompts import DEFAULT_SYSTEM_INSTRUCTION
 
 MODEL_NAME = "gemini-3-pro-preview"
@@ -43,7 +43,7 @@ def send_text_prompt(
             if config is not None:
                 request_kwargs["config"] = config
 
-            response = client.models.generate_content(**request_kwargs)
+            response = get_genai_client().models.generate_content(**request_kwargs)
             response_text = getattr(response, "text", "") or ""
             break
         except Exception as exc:
@@ -142,7 +142,7 @@ def main(total_traits: int = 1_000):
         "Please generate a list of 100 unique personality traits, which you think may implicitly/indirectly affect the agent's behavior on the task at hand. "
         "They can be positive, negative, ambivalent, ambiguous; abstract or concrete; related or unrelated to the task at hand in a literal sense. "
         "Anything that might add some unique, more or less subtle quirk or quality to the agent's behavior in the given task. "
-        "The traits should be written in second person 'You like driving at night', 'Your favorite ice cream flavor is rocky road.', 'Sunsets remind you of your ex' etc."
+        "The traits should be written in second person: 'You like driving at night', 'Your favorite ice cream flavor is rocky road.', 'Sunsets remind you of your ex' etc."
         "Avoid giving explicit goals or optimization objectives, focus on individual traits that might influence behavior in various ways."
     )
     

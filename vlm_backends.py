@@ -34,6 +34,7 @@ from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union
 import PIL.Image
 
 from constants import MAX_MODEL_LEN
+import im_query
 
 # Type aliases
 ImageCaptionInput = Tuple[bytes, Optional[str]]
@@ -124,6 +125,98 @@ class VLMChatSession(ABC):
     def turn_history(self) -> List[StoredTurn]:
         """Access the current turn history."""
         pass
+
+
+class ProviderAwareGeminiChatSession(VLMChatSession):
+    """Gemini chat session delegated to im_query provider routing."""
+
+    def __init__(self, model: str, max_turns: Optional[int] = None):
+        self._session = im_query.create_chat_session(model=model, max_turns=max_turns)
+
+    def send(
+        self,
+        image_caption_pairs: Sequence[ImageCaptionInput],
+        prompt: Optional[str] = "",
+        history_turns: Optional[int] = 0,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+        temperature: Optional[float] = None,
+        thinking_budget: int = -1,
+    ) -> VLMResponse:
+        response = self._session.send(
+            image_caption_pairs=image_caption_pairs,
+            prompt=prompt,
+            history_turns=history_turns,
+            mime_type=mime_type,
+            system_instruction=system_instruction,
+            temperature=temperature,
+            thinking_budget=thinking_budget,
+        )
+        return VLMResponse(text=getattr(response, "text", "") or "", raw_response=response)
+
+    def load_history(self, turns: Iterable[HistoryTurnInput]) -> int:
+        return self._session.load_history(turns)
+
+    @property
+    def turn_history(self) -> List[StoredTurn]:
+        return list(getattr(self._session, "_turn_history", []))
+
+
+class PortkeyGeminiBackend(VLMBackend):
+    """Gemini models routed through Portkey via im_query."""
+
+    def __init__(self, model: str = "gemini-2.5-pro", **_unused_kwargs):
+        self._model = model
+
+    @property
+    def name(self) -> str:
+        return self._model
+
+    def query(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+    ) -> VLMResponse:
+        response = im_query.query_im(
+            image_bytes=image_bytes,
+            prompt=prompt,
+            mime_type=mime_type,
+            system_instruction=system_instruction,
+            model=self._model,
+        )
+        return VLMResponse(text=getattr(response, "text", "") or "", raw_response=response)
+
+    def query_multiple(
+        self,
+        image_bytes_list: Sequence[bytes],
+        captions: Sequence[str],
+        prompt: str,
+        mime_type: str = "image/png",
+        system_instruction: Optional[str] = None,
+    ) -> VLMResponse:
+        response = im_query.query_images_with_captions(
+            image_bytes_list=image_bytes_list,
+            captions=captions,
+            prompt=prompt,
+            mime_type=mime_type,
+            system_instruction=system_instruction,
+            model=self._model,
+        )
+        return VLMResponse(text=getattr(response, "text", "") or "", raw_response=response)
+
+    def create_chat_session(self, max_turns: Optional[int] = None) -> "ProviderAwareGeminiChatSession":
+        return ProviderAwareGeminiChatSession(model=self._model, max_turns=max_turns)
+
+
+def _create_gemini_backend(model: str, **kwargs) -> VLMBackend:
+    if "max_model_len" in kwargs:
+        kwargs.pop("max_model_len")
+    provider = im_query.get_vlm_provider()
+    if provider == "portkey":
+        return PortkeyGeminiBackend(model, **kwargs)
+    return GeminiBackend(model, **kwargs)
 
 
 class GeminiBackend(VLMBackend):
@@ -1558,14 +1651,11 @@ def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> V
         actual_model = model[7:]
         return VLLMClientBackend(actual_model, **kwargs)
 
+    if model.startswith("gemini"):
+        return _create_gemini_backend(model, **kwargs)
+
     # Check registry first
     if model in _BACKEND_REGISTRY:
-        if model.startswith("gemini"):
-            if kwargs:
-                if 'max_model_len' in kwargs:
-                    kwargs.pop('max_model_len')
-                return GeminiBackend(model, **kwargs)
-            return _BACKEND_REGISTRY[model]()
         if model.startswith("qwen"):
             resolved_model = _resolve_qwen_model_name(model)
             if backend_choice == "remote":
@@ -1580,7 +1670,7 @@ def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> V
     # Try to infer backend from model name
     model_lower = model.lower()
     if "gemini" in model_lower:
-        return GeminiBackend(model, **kwargs)
+        return _create_gemini_backend(model, **kwargs)
     elif "qwen" in model_lower:
         resolved_model = _resolve_qwen_model_name(model)
         if backend_choice == "remote":

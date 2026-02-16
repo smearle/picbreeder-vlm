@@ -630,9 +630,9 @@ def main(
     # print(f"Creating visualization (thumbnails limit={validated_cfg.thumbs_limit}) -> {viz_out}")
     # plot_coords(coords, list(image_paths), viz_out, thumbs_limit=validated_cfg.thumbs_limit)
 
-    # rect_grid_out = exp_dir / f"embed_grid_rect_{model_name_sanitized}_{validated_cfg.method}.pdf"
-    # print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
-    # render_rectangular_grid(coords, image_paths, rect_grid_out)
+    rect_grid_out = exp_dir / f"embed_grid_rect_{model_name_sanitized}_{validated_cfg.method}.png"
+    print(f"Rendering rectangular rasterfairy grid -> {rect_grid_out}")
+    render_rectangular_grid(coords, image_paths, rect_grid_out)
 
     if validated_cfg.representative_k > 0:
         print(f"Selecting {validated_cfg.representative_k} representative images via FPS...")
@@ -641,12 +641,12 @@ def main(
             rep_coords = coords[rep_indices]
             rep_paths = [image_paths[i] for i in rep_indices]
 
-            rep_grid_out = exp_dir / f"embed_grid_representative_{model_name_sanitized}_{validated_cfg.method}.pdf"
+            rep_grid_out = exp_dir / f"embed_grid_representative_{model_name_sanitized}_{validated_cfg.method}.png"
             print(f"Rendering representative grid -> {rep_grid_out}")
             render_rectangular_grid(rep_coords, rep_paths, rep_grid_out)
 
             # Non-rasterfairied simple grid for representatives
-            rep_simple_out = exp_dir / f"embed_grid_representative_simple_{model_name_sanitized}_{validated_cfg.method}.pdf"
+            rep_simple_out = exp_dir / f"embed_grid_representative_simple_{model_name_sanitized}_{validated_cfg.method}.png"
             print(f"Rendering simple representative grid -> {rep_simple_out}")
             render_simple_grid(rep_paths, rep_simple_out)
 
@@ -656,7 +656,7 @@ def main(
             if n_total > 0:
                 indices = np.linspace(0, n_total - 1, min(k, n_total), dtype=int)
                 interval_paths = [image_paths[i] for i in indices]
-                interval_out = exp_dir / f"embed_grid_uniform_interval_{model_name_sanitized}_{validated_cfg.method}.pdf"
+                interval_out = exp_dir / f"embed_grid_uniform_interval_{model_name_sanitized}_{validated_cfg.method}.png"
                 print(f"Rendering uniform interval grid -> {interval_out}")
                 render_simple_grid(interval_paths, interval_out)
 
@@ -670,7 +670,7 @@ def main(
                 # Sort indices to keep chronological order in the grid (optional, but cleaner)
                 rand_indices.sort()
                 rand_paths = [image_paths[i] for i in rand_indices]
-                rand_out = exp_dir / f"embed_grid_uniform_random_{model_name_sanitized}_{validated_cfg.method}.pdf"
+                rand_out = exp_dir / f"embed_grid_uniform_random_{model_name_sanitized}_{validated_cfg.method}.png"
                 print(f"Rendering uniform random grid -> {rand_out}")
                 render_simple_grid(rand_paths, rand_out)
 

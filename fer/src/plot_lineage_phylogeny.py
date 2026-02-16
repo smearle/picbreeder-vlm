@@ -13,6 +13,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+import traceback
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -125,6 +126,7 @@ def _load_lineage_info(pb_dir: Path, pid: str) -> Optional[LineageNode]:
     """
     main_zip = pb_dir / pid / "main.zip"
     if not main_zip.exists():
+        print(f"[WARN] main.zip not found for pid {pid}")
         return None
         
     try:
@@ -135,6 +137,9 @@ def _load_lineage_info(pb_dir: Path, pid: str) -> Optional[LineageNode]:
 
     genome_meta = main_data.get("genome", {})
     series = genome_meta.get("series", {})
+    # Fallback: sometimes info is directly in genome, not under series
+    if not series and "generation" in genome_meta:
+        series = genome_meta
     
     # Parent PID
     parent_pid = None
@@ -145,10 +150,12 @@ def _load_lineage_info(pb_dir: Path, pid: str) -> Optional[LineageNode]:
     # Find last generation
     generations = series.get("generation")
     if not generations:
+        print(f"[WARN] No generations found for pid {pid}")
         return None
     generations = _ensure_list(generations)
     
     if not generations:
+        print(f"[WARN] No generations found for pid {pid} after ensuring list")
         return None
         
     last_gen_meta = max(generations, key=lambda g: _safe_int(g.get("@number", -1)))
@@ -156,6 +163,7 @@ def _load_lineage_info(pb_dir: Path, pid: str) -> Optional[LineageNode]:
     last_gen_num = _safe_int(last_gen_meta.get("@number"))
     
     if storage_id is None:
+        print(f"[WARN] No storage ID found for last generation of pid {pid}")
         return None
         
     # Read storage zip
@@ -164,14 +172,20 @@ def _load_lineage_info(pb_dir: Path, pid: str) -> Optional[LineageNode]:
         # Fallback: maybe the storage id is an index into a file list?
         # But usually in PB it matches the filename.
         # Let's try to match blindly if 1.zip etc exists.
+        print(f"[WARN] Storage zip {storage_id}.zip not found for pid {pid}")
         return None
         
     try:
         storage_data = load_zip_xml_as_dict(str(storage_zip))
     except Exception:
+        traceback.print_exc()
         return None
         
-    storage_gens = storage_data.get("genome", {}).get("storage", {}).get("generation")
+    genome_data = storage_data.get("genome", {})
+    if "storage" not in genome_data:
+        storage_gens = genome_data["generation"]
+    else:
+        storage_gens = genome_data["storage"]["generation"]
     storage_gens = _ensure_list(storage_gens)
     
     # Find the specific generation in storage
@@ -189,6 +203,8 @@ def _load_lineage_info(pb_dir: Path, pid: str) -> Optional[LineageNode]:
             target_gen = storage_gens[-1]
             
     if target_gen is None:
+        breakpoint()
+        print(f"[WARN] Target generation {last_gen_num} not found in storage for pid {pid}")
         return None
         
     # Extract genome
@@ -221,6 +237,7 @@ def _load_lineage_info(pb_dir: Path, pid: str) -> Optional[LineageNode]:
             final_genome = target_gen
             
     if final_genome is None:
+        print(f"[WARN] Final genome not found for pid {pid} in generation {last_gen_num}")
         return None
         
     key = _extract_genome_key(final_genome)

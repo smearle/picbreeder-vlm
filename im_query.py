@@ -1,27 +1,103 @@
+import base64
 import os
 import re
 import time
-from typing import Iterable, List, Optional, Sequence, Tuple
+from functools import lru_cache
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import dotenv
 from google import genai
 from google.genai import types
-import dotenv
 
 
 dotenv.load_dotenv()
-api_key = os.environ.get('GEMINI_API_KEY')
-client = genai.Client(
-    api_key=api_key,
-    http_options={'api_version': 'v1alpha'}
-)
 
-DEFAULT_MODEL = 'gemini-2.5-pro'
+DEFAULT_MODEL = "gemini-2.5-pro"
+DEFAULT_VLM_API_PROVIDER = "portkey"
+VLM_API_PROVIDER = os.environ.get("VLM_API_PROVIDER", DEFAULT_VLM_API_PROVIDER).strip().lower()
+
+PORTKEY_BASE_URL = os.environ.get(
+    "PORTKEY_BASE_URL",
+    "https://ai-gateway.apps.cloud.rt.nyu.edu/v1",
+)
+PORTKEY_MODEL_NAMESPACE = os.environ.get("PORTKEY_MODEL_NAMESPACE", "@vertex-ai-3e806d")
+
+ImageCaptionInput = Tuple[bytes, Optional[str]]
+ImageCaptionPair = Tuple[bytes, str]
+StoredTurn = Tuple[List[ImageCaptionPair], str, str]
+HistoryTurnInput = Tuple[Sequence[ImageCaptionInput], str, str]
+
+
+class QueryResponse:
+    """Small compatibility wrapper for backends that do not expose `.text`."""
+
+    def __init__(self, text: str, raw_response: Any = None, provider: str = "") -> None:
+        self.text = text
+        self.raw_response = raw_response
+        self.provider = provider
+
+
+def get_vlm_provider() -> str:
+    provider = VLM_API_PROVIDER or DEFAULT_VLM_API_PROVIDER
+    provider = provider.strip().lower()
+    if provider in {"google", "google-genai", "gemini"}:
+        return "google-genai"
+    if provider == "portkey":
+        return "portkey"
+    raise ValueError(
+        f"Unsupported VLM_API_PROVIDER '{provider}'. Use 'portkey' or 'google-genai'."
+    )
+
+
+def set_vlm_provider(provider: str) -> str:
+    """Set provider at runtime. Accepted values: portkey, google-genai."""
+    global VLM_API_PROVIDER
+    VLM_API_PROVIDER = provider
+    return get_vlm_provider()
+
+
+@lru_cache(maxsize=1)
+def get_genai_client() -> genai.Client:
+    """Create and cache a Gemini client on first use."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Configure it before running Gemini VLM queries."
+        )
+    return genai.Client(
+        api_key=api_key,
+        http_options={"api_version": "v1alpha"},
+    )
+
+
+@lru_cache(maxsize=1)
+def get_portkey_client():
+    """Create and cache a Portkey client on first use."""
+    try:
+        from portkey_ai import Portkey
+    except ImportError as exc:
+        raise RuntimeError(
+            "portkey_ai is not installed. Install it to use VLM_API_PROVIDER=portkey."
+        ) from exc
+
+    api_key = os.environ.get("PORTKEY_BEARER") or os.environ.get("PORTKEY_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "PORTKEY_BEARER (or PORTKEY_API_KEY) is not set. Configure it before running Portkey VLM queries."
+        )
+    return Portkey(base_url=PORTKEY_BASE_URL, api_key=api_key)
+
+
+def _resolve_portkey_model(model: str) -> str:
+    if "/" in model or model.startswith("@"):
+        return model
+    return f"{PORTKEY_MODEL_NAMESPACE}/{model}"
 
 
 def _is_token_limit_error(exc: Exception) -> bool:
-    """Best-effort detection of Gemini token limit errors."""
+    """Best-effort detection of token limit errors across providers."""
     message = str(exc).lower()
-    if "token" in message and ("limit" in message or "exceed" in message):
+    if "token" in message and ("limit" in message or "exceed" in message or "maximum context length" in message):
         return True
     code = getattr(exc, "code", None)
     if isinstance(code, str) and code.lower() in {"400", "invalid_argument"} and "token" in message:
@@ -37,6 +113,22 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     if isinstance(code, int) and code == 429:
         return True
     if isinstance(code, str) and code.strip() == "429":
+        return True
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and status_code == 429:
+        return True
+    return False
+
+
+def _is_server_error(exc: Exception) -> bool:
+    code = getattr(exc, "code", None)
+    status_code = getattr(exc, "status_code", None)
+    message = str(exc).lower()
+    if isinstance(code, int) and 500 <= code < 600:
+        return True
+    if isinstance(status_code, int) and 500 <= status_code < 600:
+        return True
+    if "server error" in message or "internal error" in message:
         return True
     return False
 
@@ -61,14 +153,87 @@ def _extract_retry_delay_seconds(exc: Exception) -> Optional[float]:
     return None
 
 
-ImageCaptionInput = Tuple[bytes, Optional[str]]
-ImageCaptionPair = Tuple[bytes, str]
-StoredTurn = Tuple[List[ImageCaptionPair], str, str]
-HistoryTurnInput = Tuple[Sequence[ImageCaptionInput], str, str]
+def _normalise_pairs(image_caption_pairs: Sequence[ImageCaptionInput]) -> List[ImageCaptionPair]:
+    pair_list = list(image_caption_pairs or ())
+    if not pair_list:
+        raise ValueError("image_caption_pairs must include at least one entry.")
+
+    normalized_pairs: List[ImageCaptionPair] = []
+    for pair in pair_list:
+        try:
+            image_data, caption_text = pair
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Each image_caption_pair must contain an image and caption.") from exc
+        if image_data is None:
+            raise ValueError("Image data must not be None.")
+        caption_value = caption_text if caption_text is not None else ""
+        if not isinstance(caption_value, str):
+            caption_value = str(caption_value)
+        normalized_pairs.append((bytes(image_data), caption_value))
+    return normalized_pairs
+
+
+def _encode_data_url(image_bytes: bytes, mime_type: str) -> str:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _build_portkey_user_content(
+    image_caption_pairs: Sequence[ImageCaptionPair],
+    prompt: str,
+    mime_type: str,
+) -> List[Dict[str, Any]]:
+    content: List[Dict[str, Any]] = []
+    for idx, (image_data, caption_text) in enumerate(image_caption_pairs):
+        caption_to_use = caption_text or f"Image {idx + 1}:"
+        if caption_to_use:
+            content.append({"type": "text", "text": caption_to_use})
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": _encode_data_url(image_data, mime_type),
+                },
+            }
+        )
+    if prompt:
+        content.append({"type": "text", "text": prompt})
+    return content
+
+
+def _extract_portkey_response_text(response: Any) -> str:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+    first_choice = choices[0]
+    message = getattr(first_choice, "message", None)
+    if message is None and isinstance(first_choice, dict):
+        message = first_choice.get("message")
+    if message is None:
+        return ""
+
+    content = getattr(message, "content", None)
+    if content is None and isinstance(message, dict):
+        content = message.get("content")
+
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text" and item.get("text"):
+                    chunks.append(str(item["text"]))
+                elif isinstance(item.get("content"), str):
+                    chunks.append(item["content"])
+            elif isinstance(item, str):
+                chunks.append(item)
+        return "\n".join(chunk for chunk in chunks if chunk)
+    return str(content or "")
 
 
 class ImageChatSession:
-    """Maintains limited-turn chat history for Gemini image conversations."""
+    """Maintains limited-turn chat history for image conversations."""
 
     def __init__(self, model: str = DEFAULT_MODEL, max_turns: Optional[int] = None) -> None:
         self.model = model
@@ -88,16 +253,12 @@ class ImageChatSession:
         for image_caption_pairs, trailing_prompt, response_text in self._turn_history[start_index:]:
             user_parts: List[types.Part] = []
             extra_args = {}
-            if self.model == 'gemini-3-pro-preview':
+            if self.model == "gemini-3-pro-preview":
                 extra_args["media_resolution"] = {"level": "media_resolution_high"}
             for image_data, caption_text in image_caption_pairs:
                 if caption_text:
                     user_parts.append(types.Part(text=caption_text))
                 user_parts.append(
-                    # types.Part.from_bytes(
-                    #     data=image_data,
-                    #     mime_type="image/png",
-                    # )
                     types.Part(
                         inline_data=types.Blob(
                             mime_type="image/png",
@@ -123,9 +284,30 @@ class ImageChatSession:
                 )
         return contents
 
+    def _build_portkey_messages(
+        self,
+        start_index: int,
+        current_pairs: Sequence[ImageCaptionPair],
+        prompt_value: str,
+        system_instruction: Optional[str],
+        mime_type: str,
+    ) -> List[Dict[str, Any]]:
+        messages: List[Dict[str, Any]] = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+
+        for image_caption_pairs, trailing_prompt, response_text in self._turn_history[start_index:]:
+            user_content = _build_portkey_user_content(image_caption_pairs, trailing_prompt, mime_type)
+            messages.append({"role": "user", "content": user_content})
+            if response_text:
+                messages.append({"role": "assistant", "content": response_text})
+
+        current_user_content = _build_portkey_user_content(current_pairs, prompt_value, mime_type)
+        messages.append({"role": "user", "content": current_user_content})
+        return messages
+
     def load_history(self, turns: Iterable[HistoryTurnInput]) -> int:
         """Install a previously recorded sequence of multi-part chat turns."""
-
         normalised: List[StoredTurn] = []
         for turn in turns:
             try:
@@ -172,78 +354,79 @@ class ImageChatSession:
         system_instruction: Optional[str] = None,
         temperature: Optional[float] = None,
     ):
+        del thinking_budget
         requested_turns = self._resolve_requested_turns(history_turns)
         if requested_turns is None:
             start_index = 0
         else:
             start_index = max(len(self._turn_history) - requested_turns, 0)
 
-        config = None
-        config_kwargs = {}
-        if system_instruction:
-            config_kwargs["system_instruction"] = system_instruction
-        if temperature is not None:
-            config_kwargs["temperature"] = float(temperature)
-        if config_kwargs:
-            config = types.GenerateContentConfig(
-                **config_kwargs,
-                # thinking_config=types.ThinkingConfig(
-                #     thinking_budget=thinking_budget
-                # ),
-            )
-
-        pair_list = list(image_caption_pairs or ())
-        if not pair_list:
-            raise ValueError("image_caption_pairs must include at least one entry.")
-
         prompt_value = "" if prompt is None else str(prompt)
-
-        normalized_pairs: List[Tuple[bytes, str]] = []
-        for pair in pair_list:
-            try:
-                image_data, caption_text = pair
-            except (TypeError, ValueError) as exc:
-                raise ValueError("Each image_caption_pair must contain an image and caption.") from exc
-            if image_data is None:
-                raise ValueError("Image data must not be None.")
-            caption_value = caption_text if caption_text is not None else ""
-            if not isinstance(caption_value, str):
-                caption_value = str(caption_value)
-            normalized_pairs.append((bytes(image_data), caption_value))
-
-        parts: List[types.Part] = []
+        normalized_pairs = _normalise_pairs(image_caption_pairs)
         stored_pairs: List[ImageCaptionPair] = []
         for idx, (image_data, caption_text) in enumerate(normalized_pairs):
             caption_to_use = caption_text or f"Image {idx + 1}:"
-            if caption_to_use:
-                parts.append(types.Part(text=caption_to_use))
-            parts.append(
-                # types.Part.from_bytes(
-                #     data=image_data,
-                #     mime_type=mime_type,
-                # )
-                types.Part(
-                    inline_data=types.Blob(
-                        mime_type=mime_type,
-                        data=image_data,
-                    ),
-                )
-            )
             stored_pairs.append((bytes(image_data), caption_to_use))
 
-        if prompt_value:
-            parts.append(types.Part(text=prompt_value))
+        provider = get_vlm_provider()
 
         while True:
-            history_contents = self._build_history_contents(start_index)
-            create_kwargs = {"model": self.model}
-            if history_contents:
-                create_kwargs["history"] = history_contents
-            if config is not None:
-                create_kwargs["config"] = config
-            chat = client.chats.create(**create_kwargs)
             try:
-                response = chat.send_message(parts)
+                if provider == "portkey":
+                    messages = self._build_portkey_messages(
+                        start_index=start_index,
+                        current_pairs=stored_pairs,
+                        prompt_value=prompt_value,
+                        system_instruction=system_instruction,
+                        mime_type=mime_type,
+                    )
+                    request_kwargs: Dict[str, Any] = {
+                        "model": _resolve_portkey_model(self.model),
+                        "messages": messages,
+                    }
+                    if temperature is not None:
+                        request_kwargs["temperature"] = float(temperature)
+                    raw_response = get_portkey_client().chat.completions.create(**request_kwargs)
+                    response = QueryResponse(
+                        text=_extract_portkey_response_text(raw_response),
+                        raw_response=raw_response,
+                        provider="portkey",
+                    )
+                else:
+                    config = None
+                    config_kwargs = {}
+                    if system_instruction:
+                        config_kwargs["system_instruction"] = system_instruction
+                    if temperature is not None:
+                        config_kwargs["temperature"] = float(temperature)
+                    if config_kwargs:
+                        config = types.GenerateContentConfig(**config_kwargs)
+
+                    history_contents = self._build_history_contents(start_index)
+                    create_kwargs: Dict[str, Any] = {"model": self.model}
+                    if history_contents:
+                        create_kwargs["history"] = history_contents
+                    if config is not None:
+                        create_kwargs["config"] = config
+                    chat = get_genai_client().chats.create(**create_kwargs)
+
+                    parts: List[types.Part] = []
+                    for caption_to_use, image_data in [
+                        (caption, image) for image, caption in stored_pairs
+                    ]:
+                        if caption_to_use:
+                            parts.append(types.Part(text=caption_to_use))
+                        parts.append(
+                            types.Part(
+                                inline_data=types.Blob(
+                                    mime_type=mime_type,
+                                    data=image_data,
+                                ),
+                            )
+                        )
+                    if prompt_value:
+                        parts.append(types.Part(text=prompt_value))
+                    response = chat.send_message(parts)
                 break
             except genai.errors.ServerError:
                 time.sleep(10)
@@ -258,6 +441,13 @@ class ImageChatSession:
                     continue
                 raise
             except Exception as exc:
+                if _is_rate_limit_error(exc):
+                    delay = _extract_retry_delay_seconds(exc) or 5.0
+                    time.sleep(delay)
+                    continue
+                if _is_server_error(exc):
+                    time.sleep(5)
+                    continue
                 if _is_token_limit_error(exc) and start_index < len(self._turn_history):
                     start_index += 1
                     continue
@@ -271,42 +461,67 @@ class ImageChatSession:
             if self._max_turns == 0:
                 self._turn_history.clear()
             else:
-                self._turn_history = self._turn_history[-self._max_turns:]
+                self._turn_history = self._turn_history[-self._max_turns :]
         return response
 
 
-def create_chat_session(model: str = DEFAULT_MODEL, *, max_turns: Optional[int] = None) -> ImageChatSession:
-    return ImageChatSession(model=model, max_turns=max_turns)
+def _query_multimodal(
+    image_caption_pairs: Sequence[ImageCaptionInput],
+    prompt: str,
+    *,
+    mime_type: str = "image/png",
+    system_instruction: Optional[str] = None,
+    model: str = DEFAULT_MODEL,
+):
+    normalized_pairs = _normalise_pairs(image_caption_pairs)
+    prompt_value = "" if prompt is None else str(prompt)
+    provider = get_vlm_provider()
 
-
-def query_im(image_bytes, prompt: str, mime_type="image/png", system_instruction: Optional[str] = None):
-    parts = [
-        types.Part.from_bytes(
-            data=image_bytes,
-            mime_type=mime_type,
-        ),
-    ]
-    if prompt:
-        parts.append(types.Part(text=prompt))
-    config = types.GenerateContentConfig(
-        system_instruction=system_instruction
-    )
-    contents = [
-        types.Content(
-            role="user",
-            parts=parts,
-            media_resolution={"level": "media_resolution_high"},
-        )
-    ]
     while True:
         try:
+            if provider == "portkey":
+                messages: List[Dict[str, Any]] = []
+                if system_instruction:
+                    messages.append({"role": "system", "content": system_instruction})
+                user_content = _build_portkey_user_content(normalized_pairs, prompt_value, mime_type)
+                messages.append({"role": "user", "content": user_content})
+                raw_response = get_portkey_client().chat.completions.create(
+                    model=_resolve_portkey_model(model),
+                    messages=messages,
+                )
+                return QueryResponse(
+                    text=_extract_portkey_response_text(raw_response),
+                    raw_response=raw_response,
+                    provider="portkey",
+                )
+
+            parts: List[types.Part] = []
+            extra_args = {}
+            if model == "gemini-3-pro-preview":
+                extra_args["media_resolution"] = {"level": "media_resolution_high"}
+            for idx, (image_bytes, caption) in enumerate(normalized_pairs):
+                caption_text = caption or f"Image {idx + 1}:"
+                parts.append(types.Part(text=caption_text))
+                parts.append(
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type=mime_type,
+                            data=image_bytes,
+                            **extra_args,
+                        )
+                    )
+                )
+            if prompt_value:
+                parts.append(types.Part(text=prompt_value))
+
+            config = types.GenerateContentConfig(system_instruction=system_instruction)
+            contents = [types.Content(role="user", parts=parts, **extra_args)]
             request_kwargs = {
-                "model": DEFAULT_MODEL,
+                "model": model,
                 "contents": contents,
                 "config": config,
             }
-            response = client.models.generate_content(**request_kwargs)
-            return response
+            return get_genai_client().models.generate_content(**request_kwargs)
         except genai.errors.ServerError:
             time.sleep(10)
         except genai.errors.ClientError as exc:
@@ -315,6 +530,35 @@ def query_im(image_bytes, prompt: str, mime_type="image/png", system_instruction
                 time.sleep(delay)
                 continue
             raise
+        except Exception as exc:
+            if _is_rate_limit_error(exc):
+                delay = _extract_retry_delay_seconds(exc) or 5.0
+                time.sleep(delay)
+                continue
+            if _is_server_error(exc):
+                time.sleep(5)
+                continue
+            raise
+
+
+def create_chat_session(model: str = DEFAULT_MODEL, *, max_turns: Optional[int] = None) -> ImageChatSession:
+    return ImageChatSession(model=model, max_turns=max_turns)
+
+
+def query_im(
+    image_bytes: bytes,
+    prompt: str,
+    mime_type: str = "image/png",
+    system_instruction: Optional[str] = None,
+    model: str = DEFAULT_MODEL,
+):
+    return _query_multimodal(
+        image_caption_pairs=[(image_bytes, "Image 1:")],
+        prompt=prompt,
+        mime_type=mime_type,
+        system_instruction=system_instruction,
+        model=model,
+    )
 
 
 def query_images_with_captions(
@@ -336,41 +580,50 @@ def query_images_with_captions(
     if not image_bytes_list:
         raise ValueError("At least one image must be provided.")
 
-    parts: List[types.Part] = []
-    extra_args = {}
-    if model == 'gemini-3-pro-preview':
-        extra_args["media_resolution"] = {"level": "media_resolution_high"}
-    for idx, (image_bytes, caption) in enumerate(zip(image_bytes_list, captions)):
-        caption_text = caption or f"Image {idx + 1}:"
-        parts.append(types.Part(text=caption_text))
-        parts.append(
-            # types.Part.from_bytes(
-            #     data=image_bytes,
-            #     mime_type=mime_type,
-            # )
-            types.Part(
-                inline_data=types.Blob(
-                    mime_type=mime_type,
-                    data=image_bytes,
-                    **extra_args,
-                )
-            )
-        )
+    pairs: List[ImageCaptionInput] = []
+    for image_bytes, caption in zip(image_bytes_list, captions):
+        pairs.append((image_bytes, caption))
+    return _query_multimodal(
+        image_caption_pairs=pairs,
+        prompt=prompt,
+        mime_type=mime_type,
+        system_instruction=system_instruction,
+        model=model,
+    )
 
-    if prompt:
-        parts.append(types.Part(text=prompt))
 
-    config = types.GenerateContentConfig(system_instruction=system_instruction)
-    contents = [types.Content(role="user", parts=parts, **extra_args)]
+def query_text(
+    prompt: str,
+    system_instruction: Optional[str] = None,
+    model: str = DEFAULT_MODEL,
+):
+    provider = get_vlm_provider()
+    prompt_value = "" if prompt is None else str(prompt)
 
     while True:
         try:
-            request_kwargs = {
-                "model": model,
-                "contents": contents,
-                "config": config,
-            }
-            response = client.models.generate_content(**request_kwargs)
+            if provider == "portkey":
+                messages: List[Dict[str, Any]] = []
+                if system_instruction:
+                    messages.append({"role": "system", "content": system_instruction})
+                messages.append({"role": "user", "content": prompt_value})
+                raw_response = get_portkey_client().chat.completions.create(
+                    model=_resolve_portkey_model(model),
+                    messages=messages,
+                )
+                return QueryResponse(
+                    text=_extract_portkey_response_text(raw_response),
+                    raw_response=raw_response,
+                    provider="portkey",
+                )
+
+            content_parts = [types.Part(text=prompt_value)]
+            config = types.GenerateContentConfig(system_instruction=system_instruction)
+            response = get_genai_client().models.generate_content(
+                model=model,
+                contents=[types.Content(role="user", parts=content_parts)],
+                config=config,
+            )
             return response
         except genai.errors.ServerError:
             time.sleep(10)
@@ -380,9 +633,19 @@ def query_images_with_captions(
                 time.sleep(delay)
                 continue
             raise
+        except Exception as exc:
+            if _is_rate_limit_error(exc):
+                delay = _extract_retry_delay_seconds(exc) or 5.0
+                time.sleep(delay)
+                continue
+            if _is_server_error(exc):
+                time.sleep(5)
+                continue
+            raise
 
-if __name__ == '__main__':
-    with open('rendered/rendered-34589-116.png', 'rb') as f:
+
+if __name__ == "__main__":
+    with open("rendered/rendered-34589-116.png", "rb") as f:
         image_bytes = f.read()
 
     response = query_im(image_bytes, prompt="Describe this image in detail.")

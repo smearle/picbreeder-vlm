@@ -29,6 +29,7 @@ DEFAULT_BASELINE_SELECTION_LIMIT = 1
 _CHAT_SESSION: Optional[VLMChatSession] = None
 _CHAT_SESSION_MAX_TURNS: Optional[int] = None
 _CHAT_SESSION_MODEL: Optional[str] = None
+_CHAT_SESSION_PROVIDER: Optional[str] = None
 
 
 class GeminiPromptBlockedError(RuntimeError):
@@ -137,10 +138,11 @@ def _session_max_turns(chat_history_turns: Optional[int]) -> Optional[int]:
 def reset_chat_session() -> None:
     """Clear any cached chat session so the next request starts fresh."""
 
-    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS, _CHAT_SESSION_MODEL
+    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS, _CHAT_SESSION_MODEL, _CHAT_SESSION_PROVIDER
     _CHAT_SESSION = None
     _CHAT_SESSION_MAX_TURNS = None
     _CHAT_SESSION_MODEL = None
+    _CHAT_SESSION_PROVIDER = None
 
 
 # Cache for VLM backends (avoid re-loading models)
@@ -149,19 +151,28 @@ _BACKEND_CACHE: Dict[str, VLMBackend] = {}
 
 def _get_backend(model: str) -> VLMBackend:
     """Get or create a cached VLM backend."""
-    if model not in _BACKEND_CACHE:
-        _BACKEND_CACHE[model] = create_vlm_backend(model)
-    return _BACKEND_CACHE[model]
+    provider = im_query.get_vlm_provider()
+    cache_key = f"{provider}:{model}"
+    if cache_key not in _BACKEND_CACHE:
+        _BACKEND_CACHE[cache_key] = create_vlm_backend(model)
+    return _BACKEND_CACHE[cache_key]
 
 
 def _ensure_chat_session(model: str, chat_history_turns: Optional[int]) -> VLMChatSession:
-    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS, _CHAT_SESSION_MODEL
+    global _CHAT_SESSION, _CHAT_SESSION_MAX_TURNS, _CHAT_SESSION_MODEL, _CHAT_SESSION_PROVIDER
     max_turns = _session_max_turns(chat_history_turns)
-    if _CHAT_SESSION is None or _CHAT_SESSION_MAX_TURNS != max_turns or _CHAT_SESSION_MODEL != model:
+    provider = im_query.get_vlm_provider()
+    if (
+        _CHAT_SESSION is None
+        or _CHAT_SESSION_MAX_TURNS != max_turns
+        or _CHAT_SESSION_MODEL != model
+        or _CHAT_SESSION_PROVIDER != provider
+    ):
         backend = _get_backend(model)
         _CHAT_SESSION = backend.create_chat_session(max_turns=max_turns)
         _CHAT_SESSION_MAX_TURNS = max_turns
         _CHAT_SESSION_MODEL = model
+        _CHAT_SESSION_PROVIDER = provider
     return _CHAT_SESSION
 
 
@@ -766,8 +777,27 @@ def compute_population_structure_stats(
     }
 
 
-def ensure_gemini_key() -> None:
+def ensure_vlm_credentials() -> None:
     if im_query is None:
         raise ImportError("im_query module is not available. Install required dependencies.")
-    if not getattr(im_query, "api_key", None):
-        raise EnvironmentError("Environment variable GEMINI_API_KEY is not set.")
+
+    provider = im_query.get_vlm_provider()
+    if provider == "portkey":
+        portkey_key = os.environ.get("PORTKEY_BEARER") or os.environ.get("PORTKEY_API_KEY")
+        if not portkey_key:
+            raise EnvironmentError(
+                "Environment variable PORTKEY_BEARER (or PORTKEY_API_KEY) is not set."
+            )
+        return
+
+    if provider == "google-genai":
+        if not os.environ.get("GEMINI_API_KEY"):
+            raise EnvironmentError("Environment variable GEMINI_API_KEY is not set.")
+        return
+
+    raise EnvironmentError(f"Unsupported VLM provider: {provider}")
+
+
+def ensure_gemini_key() -> None:
+    """Backward-compatible alias."""
+    ensure_vlm_credentials()
