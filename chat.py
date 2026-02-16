@@ -176,6 +176,71 @@ def _ensure_chat_session(model: str, chat_history_turns: Optional[int]) -> VLMCh
     return _CHAT_SESSION
 
 
+def _normalize_history_turn(
+    turn: Optional[im_query.HistoryTurnInput],
+) -> Optional[Tuple[List[im_query.ImageCaptionInput], str, str]]:
+    if turn is None:
+        return None
+    try:
+        image_payload, trailing_prompt, response_text = turn
+    except (TypeError, ValueError):
+        return None
+
+    normalized_pairs: List[im_query.ImageCaptionInput] = []
+    for pair in image_payload:
+        try:
+            image_bytes, caption_text = pair
+        except (TypeError, ValueError):
+            continue
+        if image_bytes is None:
+            continue
+        caption_value = str(caption_text) if caption_text is not None else ""
+        normalized_pairs.append((bytes(image_bytes), caption_value))
+    if not normalized_pairs:
+        return None
+
+    return (normalized_pairs, str(trailing_prompt or ""), str(response_text or ""))
+
+
+def _history_contains_any_reference_image(
+    turns: Sequence[Tuple[List[im_query.ImageCaptionInput], str, str]],
+    reference_images: Sequence[bytes],
+) -> bool:
+    if not reference_images:
+        return False
+    for image_pairs, _, _ in turns:
+        for image_bytes, _ in image_pairs:
+            if any(image_bytes == ref for ref in reference_images):
+                return True
+    return False
+
+
+def _prepend_history_turn_if_missing(
+    session: VLMChatSession,
+    chat_history_turns: Optional[int],
+    prepended_history_turn: Optional[im_query.HistoryTurnInput],
+) -> None:
+    max_turns = _session_max_turns(chat_history_turns)
+    if max_turns is None or max_turns <= 0:
+        return
+
+    normalized_turn = _normalize_history_turn(prepended_history_turn)
+    if normalized_turn is None:
+        return
+
+    existing_turns = list(session.turn_history)
+    requested_turns = existing_turns[-max_turns:]
+    reference_images = [image_bytes for image_bytes, _ in normalized_turn[0]]
+    if _history_contains_any_reference_image(requested_turns, reference_images):
+        return
+
+    if max_turns > 1:
+        recent_turns = requested_turns[-(max_turns - 1) :]
+    else:
+        recent_turns = []
+    session.load_history([normalized_turn, *recent_turns])
+
+
 def query_with_history(
     model: str,
     image_caption_pairs: Sequence[im_query.ImageCaptionInput],
@@ -184,8 +249,10 @@ def query_with_history(
     system_instruction: Optional[str],
     chat_history_turns: Optional[int],
     temperature: float,
+    prepended_history_turn: Optional[im_query.HistoryTurnInput] = None,
 ) -> Any:
     session = _ensure_chat_session(model, chat_history_turns)
+    _prepend_history_turn_if_missing(session, chat_history_turns, prepended_history_turn)
     return session.send(
         image_caption_pairs=image_caption_pairs,
         thinking_budget=thinking_budget,
@@ -218,6 +285,8 @@ def select_parents_from_grid(
     log_raw_response: bool = False,
     raw_response_dir: Optional[Path] = None,
     run_label: str = "",
+    leading_image_caption_pairs: Optional[Sequence[im_query.ImageCaptionInput]] = None,
+    prepended_history_turn: Optional[im_query.HistoryTurnInput] = None,
 ) -> Dict[str, Any]:
 
     query_dir.mkdir(parents=True, exist_ok=True)
@@ -236,6 +305,29 @@ def select_parents_from_grid(
 
     image_caption_pairs: List[im_query.ImageCaptionInput] = []
     input_parts_metadata: List[Dict[str, Any]] = []
+
+    if leading_image_caption_pairs:
+        for lead_idx, lead_pair in enumerate(leading_image_caption_pairs):
+            try:
+                lead_bytes, lead_caption = lead_pair
+            except (TypeError, ValueError):
+                continue
+            if lead_bytes is None:
+                continue
+            caption_text = str(lead_caption) if lead_caption is not None else ""
+            image_caption_pairs.append((bytes(lead_bytes), caption_text))
+            input_parts_metadata.append(
+                {
+                    "index": None,
+                    "caption": caption_text,
+                    "width": None,
+                    "height": None,
+                    "image_path": None,
+                    "kind": "branched_reference",
+                    "leading_index": lead_idx,
+                }
+            )
+
     for i, image in enumerate(population_images):
         buffer = BytesIO()
         image.save(buffer, format="PNG")
@@ -311,6 +403,7 @@ def select_parents_from_grid(
             system_instruction=system_instruction,
             chat_history_turns=chat_history_turns,
             temperature=temperature,
+            prepended_history_turn=prepended_history_turn,
         )
         attempt_latencies.append(time.perf_counter() - start_time)
         response_diagnostics = _extract_response_diagnostics(response)

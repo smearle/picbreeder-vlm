@@ -124,6 +124,9 @@ class AgentRunner:
         self.request_rationale = bool(getattr(self.config, "request_rationale", True))
         self.log_raw_responses = bool(getattr(self.config, "log_raw_responses", False))
         self.fixed_session_lengths = bool(getattr(self.config, "fixed_session_lengths", True))
+        self.always_include_branched_image = bool(
+            getattr(self.config, "always_include_branched_image", False)
+        )
         val = float(getattr(self.config, "rand_select_prob", 0.0) or 0.0)
         if val == 2.0:
             self.rand_select_prob = 2.0
@@ -181,6 +184,8 @@ class AgentRunner:
 
         if self.chat_history_turns == -1 and self.request_rationale:
             archive_novelty_prompt = ARCHIVE_NOVELTY_PROMPT
+        elif self.config.always_include_branched_image:
+            archive_novelty_prompt = " Try to publish an image that is meaningfully different from the image from which you branched. Do not publish a duplicate or near-duplicate image with insignificant variations. "
         else:
             archive_novelty_prompt = ""
 
@@ -295,6 +300,8 @@ class AgentRunner:
         self._quit_requested = False
         self._quit_reason: Optional[str] = None
         self._quit_generation: Optional[int] = None
+        self._branched_reference_image_pairs: List[Tuple[bytes, str]] = []
+        self._branched_reference_history_turn: Optional[Tuple[List[Tuple[bytes, str]], str, str]] = None
         self._load_branching_snapshot()
         if self.resume_mode:
             self._load_existing_publication_state()
@@ -564,6 +571,43 @@ class AgentRunner:
                 }
             )
         return parts, metadata
+
+    def _clear_branched_reference_image(self) -> None:
+        self._branched_reference_image_pairs = []
+        self._branched_reference_history_turn = None
+
+    def _set_branched_reference_image(self, entry: Dict[str, Any]) -> None:
+        self._clear_branched_reference_image()
+        image_path = self._resolve_archive_image_path(entry.get("image_path"))
+        if image_path is None:
+            return
+        try:
+            image_bytes = image_path.read_bytes()
+        except OSError:
+            return
+
+        caption = "Here is the image you branched from the archive (this is for reference only; you cannot select it now):"
+        image_pairs: List[Tuple[bytes, str]] = [(image_bytes, caption)]
+        self._branched_reference_image_pairs = image_pairs
+        self._branched_reference_history_turn = (
+            list(image_pairs),
+            "Reference image selected during branching from the archive.",
+            "",
+        )
+
+    def _branched_image_context_for_generation(
+        self,
+    ) -> Tuple[Optional[List[Tuple[bytes, str]]], Optional[Tuple[List[Tuple[bytes, str]], str, str]]]:
+        if not self.always_include_branched_image:
+            return None, None
+        if not self._branched_reference_image_pairs:
+            return None, None
+
+        if self.chat_history_turns == 0:
+            return list(self._branched_reference_image_pairs), None
+        if self.chat_history_turns is None or self.chat_history_turns < 0:
+            return None, None
+        return None, self._branched_reference_history_turn
 
     def _color_output_keys(self) -> Tuple[int, ...]:
         output_keys = list(getattr(self.neat_config.genome_config, "output_keys", ()))
@@ -1309,6 +1353,7 @@ class AgentRunner:
     def initialise_population(self, decision: Dict[str, Any]) -> None:
         self._archive_seed_map.clear()
         self._genome_lineage.clear()
+        self._clear_branched_reference_image()
         # Default to grayscale view unless overridden by branching metadata.
         self._color_enabled = False
         self._update_mutation_mode(self._mutation_mode)
@@ -1348,6 +1393,8 @@ class AgentRunner:
             self._enforce_structure_only_population()
             self._write_generation_checkpoint(int(self.population.generation))
             return
+
+        self._set_branched_reference_image(selected_records[0][0])
 
         population_keys = list(self.population.population.keys())
         random.shuffle(population_keys)
@@ -1463,6 +1510,7 @@ class AgentRunner:
         prompt_template = self._apply_pending_prompt_notes(prompt_template)
 
         population_images = color_images if self._color_enabled else gray_images
+        leading_image_pairs, prepended_history_turn = self._branched_image_context_for_generation()
         grid_path: Optional[Path] = None
         view_index = 0
 
@@ -1563,6 +1611,8 @@ class AgentRunner:
                             image_path_map=variant_image_map,
                             log_raw_response=self.log_raw_responses,
                             run_label=run_label,
+                            leading_image_caption_pairs=leading_image_pairs,
+                            prepended_history_turn=prepended_history_turn,
                         )
                         fallback_invoked = False
                     except GeminiPromptBlockedError as exc:

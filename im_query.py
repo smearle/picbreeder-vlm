@@ -16,11 +16,8 @@ DEFAULT_MODEL = "gemini-2.5-pro"
 DEFAULT_VLM_API_PROVIDER = "portkey"
 VLM_API_PROVIDER = os.environ.get("VLM_API_PROVIDER", DEFAULT_VLM_API_PROVIDER).strip().lower()
 
-PORTKEY_BASE_URL = os.environ.get(
-    "PORTKEY_BASE_URL",
-    "https://ai-gateway.apps.cloud.rt.nyu.edu/v1",
-)
-PORTKEY_MODEL_NAMESPACE = os.environ.get("PORTKEY_MODEL_NAMESPACE", "@vertex-ai-3e806d")
+PORTKEY_BASE_URL = os.environ.get("PORTKEY_BASE_URL")
+PORTKEY_MODEL_NAMESPACE = os.environ.get("PORTKEY_MODEL_NAMESPACE")
 
 ImageCaptionInput = Tuple[bytes, Optional[str]]
 ImageCaptionPair = Tuple[bytes, str]

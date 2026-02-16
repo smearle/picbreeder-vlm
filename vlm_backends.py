@@ -1669,9 +1669,7 @@ def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> V
     
     # Try to infer backend from model name
     model_lower = model.lower()
-    if "gemini" in model_lower:
-        return _create_gemini_backend(model, **kwargs)
-    elif "qwen" in model_lower:
+    if "qwen" in model_lower:
         resolved_model = _resolve_qwen_model_name(model)
         if backend_choice == "remote":
             return VLLMClientBackend(resolved_model, **kwargs)
@@ -1681,15 +1679,8 @@ def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> V
             return VLLMQwen3VLBackend(resolved_model)
         return Qwen3VLBackend(resolved_model, **kwargs)
     
-    # Allow remote backend for unknown models too (might be custom model on server)
-    if backend_choice == "remote":
-        return VLLMClientBackend(model, **kwargs)
-    
-    raise ValueError(
-        f"Unknown model: {model}. "
-        f"Available models: {list(_BACKEND_REGISTRY.keys())}. "
-        "Or use a full HuggingFace model path for Qwen."
-    )
+    else:
+        return _create_gemini_backend(model, **kwargs)
 
 
 def list_available_models() -> List[str]:

@@ -19,6 +19,7 @@ class PicbreederConfig:
     cols: int = 5  # Columns in the CPPN grid
     thumb_size: int = 128  # Pixel size for rendered genome thumbnails
     chat_history_turns: int = 1  # How many prior turns each agent sees (-1 keeps all)
+    always_include_branched_image: bool = False  # Keep selected branch image as reference once branch sample falls out of chat history
     model: str = "gemini-2.5-pro"
     temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
     thinking_budget: int = -1
@@ -184,6 +185,8 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         experiment_name += "_norationale" if not cfg.request_rationale else ""
         if cfg.fixed_session_lengths:
             experiment_name += "_fixed-sesh"
+        if cfg.always_include_branched_image:
+            experiment_name += "_include-branch-img"
         # experiment_name += f"_{timestamp}"
         experiment_name += f"_s{cfg.seed}"
         relative = Path(cfg.log_dir) / experiment_name

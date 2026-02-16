@@ -11,6 +11,7 @@ from config import PicbreederConfig
 class SweepConfig(PicbreederConfig):
     seed: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
     chat_history_turns: List[int] = field(default_factory=lambda: [1])  # Chat history lengths to evaluate
+    always_include_branched_image: List[bool] = field(default_factory=lambda: [False])  # Preserve branched image reference after branch archive sample leaves chat history
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])  # Probability of random parent selection
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])  # Sampling temperature values to evaluate
     thumb_size: List[int] = field(default_factory=lambda: [128])  # Thumbnail sizes to evaluate
@@ -102,6 +103,23 @@ class ChatHistoryTurnsSweep(SweepConfig):
     seed: List[int] = field(default_factory=lambda: [3, 4, 5, 6, 7, 8])
     num_agents: int = 2_000
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.06, 0.09])
+
+
+@dataclass
+class IncludeBranchedImageSweep(SweepConfig):
+    chat_history_turns: List[int] = field(default_factory=lambda: [
+                                                                1, 
+    ])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    num_agents: int = 2_000
+    always_include_branched_image: List[bool] = field(default_factory=lambda: [
+        True,
+        # False,
+    ])
 
 
 @dataclass
@@ -300,4 +318,5 @@ _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "long_sweep": LongSweep,
     "long_sweep_2": LongSweep2,
     "objective_free": ObjectiveFreeSweep,
+    "include_branched_image": IncludeBranchedImageSweep,
 }
