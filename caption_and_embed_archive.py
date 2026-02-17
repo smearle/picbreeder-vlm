@@ -144,7 +144,7 @@ def caption_images(
                     batch_images.append(f.read())
                 batch_labels.append(f"Image {idx+1}")
             except Exception as e:
-                logger.error(f"Failed to read image {p}: {e}")
+                raise RuntimeError(f"Failed to read image {p}: {e}") from e
 
         if not batch_images:
             continue
@@ -171,13 +171,11 @@ def caption_images(
             batch_captions = result.get("captions", [])
             
             if len(batch_captions) != len(batch_paths):
-                logger.warning(f"Mismatch in captions count: expected {len(batch_paths)}, got {len(batch_captions)}. Saving raw response text as caption.")
-                # Fallback or manual handle? We'll skip or use empty strings to keep alignment if partial? 
-                # If mismatch, it's safer to discard or try to align if close.
-                # For now, if mismatch, just log error and maybe set empty for this batch to avoid shifting.
-                # Actually, better to retry or fail? 
-                # Let's try to map what we have.
-                pass
+                logger.warning(
+                    f"Mismatch in captions count: expected {len(batch_paths)}, got {len(batch_captions)}. "
+                    "Skipping this batch."
+                )
+                continue
             
             for p, cap in zip(batch_paths, batch_captions):
                 captions[p.name] = cap

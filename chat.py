@@ -202,17 +202,25 @@ def _normalize_history_turn(
     return (normalized_pairs, str(trailing_prompt or ""), str(response_text or ""))
 
 
-def _history_contains_any_reference_image(
+def _history_contains_all_reference_images(
     turns: Sequence[Tuple[List[im_query.ImageCaptionInput], str, str]],
     reference_images: Sequence[bytes],
 ) -> bool:
     if not reference_images:
         return False
+    remaining = list(reference_images)
     for image_pairs, _, _ in turns:
         for image_bytes, _ in image_pairs:
-            if any(image_bytes == ref for ref in reference_images):
-                return True
-    return False
+            matched_idx = None
+            for idx, ref in enumerate(remaining):
+                if image_bytes == ref:
+                    matched_idx = idx
+                    break
+            if matched_idx is not None:
+                remaining.pop(matched_idx)
+                if not remaining:
+                    return True
+    return not remaining
 
 
 def _prepend_history_turn_if_missing(
@@ -231,7 +239,7 @@ def _prepend_history_turn_if_missing(
     existing_turns = list(session.turn_history)
     requested_turns = existing_turns[-max_turns:]
     reference_images = [image_bytes for image_bytes, _ in normalized_turn[0]]
-    if _history_contains_any_reference_image(requested_turns, reference_images):
+    if _history_contains_all_reference_images(requested_turns, reference_images):
         return
 
     if max_turns > 1:

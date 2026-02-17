@@ -1711,6 +1711,8 @@ class CollaborativeMultiAgentOrchestrator:
             runner.branching_decision = decision
             if population is None:
                 runner.initialise_population(decision)
+            else:
+                runner.restore_reference_context(decision)
         favorite_selection = record.favorite_selection
         if favorite_selection is not None:
             runner.favorite_decision = favorite_selection
@@ -2007,7 +2009,7 @@ def _perform_rating(
     if model == "gemini-random":
         model = random.choice(GEMINI_RANDOM_MODELS)
     
-    print(f"Generating ratings with model: {model}")
+    # print(f"Generating ratings with model: {model}")
 
     if not targets:
         return {}
@@ -2345,6 +2347,8 @@ def _execute_agent_task(
             runner.branching_decision = decision
             if population is None:
                 runner.initialise_population(decision)
+            else:
+                runner.restore_reference_context(decision)
         if task.favorite_selection is not None:
             runner.favorite_decision = task.favorite_selection
         if task.archive_entry is not None:

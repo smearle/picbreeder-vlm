@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 from dataclasses import dataclass, field
+import os
 from typing import List, Union, Optional, Dict
 
+import dotenv
 from hydra.conf import HelpConf, HydraConf
 
 from config import PicbreederConfig
 
+dotenv.load_dotenv()
 
 @dataclass
 class SweepConfig(PicbreederConfig):
     seed: List[int] = field(default_factory=lambda: [0])  # Random seeds swept over collaborative runs
     chat_history_turns: List[int] = field(default_factory=lambda: [1])  # Chat history lengths to evaluate
     always_include_branched_image: List[bool] = field(default_factory=lambda: [False])  # Preserve branched image reference after branch archive sample leaves chat history
+    always_include_archive_sample: List[bool] = field(default_factory=lambda: [False])  # Preserve archive branching sample turn once it falls out of chat history
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])  # Probability of random parent selection
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])  # Sampling temperature values to evaluate
     thumb_size: List[int] = field(default_factory=lambda: [128])  # Thumbnail sizes to evaluate
@@ -41,7 +45,7 @@ class SweepConfig(PicbreederConfig):
     partition: str = "cpu"  # SLURM partition name
     gpu: bool = False
     # account: Optional[str] = None  # Optional SLURM account override
-    account: Optional[str] = "pr_174_tandon_advanced"  # Optional SLURM account override
+    account: Optional[str] = os.environ.get("SLURM_ACCOUNT")  # Optional SLURM account override
     timeout_hours: int = 24  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
     num_proc: int = 10  # Number of parallel processes per task
@@ -269,14 +273,15 @@ class ObjectiveFreeSweep(SweepConfig):
 @dataclass
 class ModelSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: [
-        # "gemini-2.5-pro",
+        "gemini-2.5-pro",
         "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro-preview",
         "gemini-random",
-        # "qwen3-vl-8b",
+        "qwen3-vl-8b",
+        "qwen3-vl-30b-fp8",
     ])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
-    num_agents: int = 1_500
+    num_agents: int = 1_000
 
 
 @dataclass

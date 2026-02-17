@@ -127,6 +127,9 @@ class AgentRunner:
         self.always_include_branched_image = bool(
             getattr(self.config, "always_include_branched_image", False)
         )
+        self.always_include_archive_sample = bool(
+            getattr(self.config, "always_include_archive_sample", False)
+        )
         val = float(getattr(self.config, "rand_select_prob", 0.0) or 0.0)
         if val == 2.0:
             self.rand_select_prob = 2.0
@@ -183,6 +186,8 @@ class AgentRunner:
             color_prompt = ""
 
         if self.chat_history_turns == -1 and self.request_rationale:
+            archive_novelty_prompt = ARCHIVE_NOVELTY_PROMPT
+        elif self.always_include_archive_sample:
             archive_novelty_prompt = ARCHIVE_NOVELTY_PROMPT
         elif self.config.always_include_branched_image:
             archive_novelty_prompt = " Try to publish an image that is meaningfully different from the image from which you branched. Do not publish a duplicate or near-duplicate image with insignificant variations. "
@@ -302,10 +307,14 @@ class AgentRunner:
         self._quit_generation: Optional[int] = None
         self._branched_reference_image_pairs: List[Tuple[bytes, str]] = []
         self._branched_reference_history_turn: Optional[Tuple[List[Tuple[bytes, str]], str, str]] = None
+        self._archive_sample_reference_image_pairs: List[Tuple[bytes, str]] = []
+        self._archive_sample_reference_history_turn: Optional[Tuple[List[Tuple[bytes, str]], str, str]] = None
+        self._publication_reference_image_pairs: List[Tuple[bytes, str]] = []
         self._load_branching_snapshot()
         if self.resume_mode:
             self._load_existing_publication_state()
             self._restore_selection_settings()
+        self._refresh_publication_references_from_history()
 
         # Lazily populated state for CLIP noun baseline (selection_baseline == "clip-nouns")
         self._clip_model = None
@@ -576,6 +585,10 @@ class AgentRunner:
         self._branched_reference_image_pairs = []
         self._branched_reference_history_turn = None
 
+    def _clear_archive_sample_reference(self) -> None:
+        self._archive_sample_reference_image_pairs = []
+        self._archive_sample_reference_history_turn = None
+
     def _set_branched_reference_image(self, entry: Dict[str, Any]) -> None:
         self._clear_branched_reference_image()
         image_path = self._resolve_archive_image_path(entry.get("image_path"))
@@ -595,19 +608,143 @@ class AgentRunner:
             "",
         )
 
-    def _branched_image_context_for_generation(
+    def _set_archive_sample_reference(self, decision: Dict[str, Any]) -> None:
+        self._clear_archive_sample_reference()
+        input_parts = decision.get("input_parts")
+        if not isinstance(input_parts, list):
+            return
+
+        image_pairs: List[Tuple[bytes, str]] = []
+        for idx, part in enumerate(input_parts):
+            if not isinstance(part, dict):
+                continue
+            path_value = part.get("image_path")
+            if not path_value:
+                continue
+            image_path = Path(path_value)
+            try:
+                image_bytes = image_path.read_bytes()
+            except OSError:
+                continue
+            caption = str(part.get("caption") or f"Archive sample {idx}")
+            image_pairs.append((image_bytes, f"[Archive sample] {caption}"))
+
+        if not image_pairs:
+            return
+
+        prompt_text = str(decision.get("archive_prompt") or "Archive branching step context.")
+        response_text = str(decision.get("raw_response") or "")
+        self._archive_sample_reference_image_pairs = image_pairs
+        self._archive_sample_reference_history_turn = (
+            list(image_pairs),
+            prompt_text,
+            response_text,
+        )
+
+    def _refresh_publication_references_from_history(self) -> None:
+        self._publication_reference_image_pairs = []
+        if self.fixed_session_lengths:
+            return
+        if not self.publication_history_path.exists():
+            return
+
+        seen_entry_ids: Set[str] = set()
+        with self.publication_history_path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+
+                entry_id = payload.get("archive_entry_id")
+                if not isinstance(entry_id, str) or not entry_id or entry_id in seen_entry_ids:
+                    continue
+                seen_entry_ids.add(entry_id)
+                entry = self.archive_manager.get_entry(entry_id)
+                if entry is None:
+                    continue
+                image_path = self._resolve_archive_image_path(entry.image_path)
+                if image_path is None:
+                    continue
+                try:
+                    image_bytes = image_path.read_bytes()
+                except OSError:
+                    continue
+
+                generation_value = payload.get("generation")
+                index_value = payload.get("index")
+                caption = f"Prior publication (gen {generation_value}, idx {index_value})"
+                self._publication_reference_image_pairs.append((image_bytes, caption))
+
+    def _reference_context_for_generation(
         self,
     ) -> Tuple[Optional[List[Tuple[bytes, str]]], Optional[Tuple[List[Tuple[bytes, str]], str, str]]]:
-        if not self.always_include_branched_image:
-            return None, None
-        if not self._branched_reference_image_pairs:
+        leading_pairs: List[Tuple[bytes, str]] = []
+        history_prompt = ""
+        history_response = ""
+        if self.always_include_branched_image:
+            leading_pairs.extend(self._branched_reference_image_pairs)
+            if self._branched_reference_history_turn is not None:
+                history_prompt = self._branched_reference_history_turn[1]
+                history_response = self._branched_reference_history_turn[2]
+        elif self.always_include_archive_sample:
+            leading_pairs.extend(self._archive_sample_reference_image_pairs)
+            if self._archive_sample_reference_history_turn is not None:
+                history_prompt = self._archive_sample_reference_history_turn[1]
+                history_response = self._archive_sample_reference_history_turn[2]
+
+        if not self.fixed_session_lengths and self._publication_reference_image_pairs:
+            leading_pairs.extend(self._publication_reference_image_pairs)
+            if not history_prompt:
+                history_prompt = (
+                    "These are your prior in-session publications. Keep them in mind and continue exploring new directions."
+                )
+
+        if not leading_pairs:
             return None, None
 
         if self.chat_history_turns == 0:
-            return list(self._branched_reference_image_pairs), None
+            return list(leading_pairs), None
         if self.chat_history_turns is None or self.chat_history_turns < 0:
             return None, None
-        return None, self._branched_reference_history_turn
+        return None, (list(leading_pairs), history_prompt, history_response)
+
+    def restore_reference_context(self, decision: Optional[Dict[str, Any]]) -> None:
+        """Rebuild prepended reference context from a saved branching decision."""
+        self._clear_branched_reference_image()
+        self._clear_archive_sample_reference()
+        self._refresh_publication_references_from_history()
+        if not isinstance(decision, dict):
+            return
+        self._set_archive_sample_reference(decision)
+        if decision.get("choice") != "branch" or not decision.get("selected_images"):
+            return
+
+        selected_entry_ids = decision.get("selected_entry_ids") or []
+        if isinstance(selected_entry_ids, list):
+            for entry_id in selected_entry_ids:
+                archive_entry = self.archive_manager.get_entry(entry_id)
+                if archive_entry is None:
+                    continue
+                self._set_branched_reference_image(archive_entry.as_dict())
+                if self._branched_reference_image_pairs:
+                    return
+
+        archive_entries = self.archive_manager.entries
+        selected_indices = decision.get("selected_images", [])
+        if not isinstance(selected_indices, list):
+            return
+        for idx in selected_indices:
+            if not isinstance(idx, int) or not (0 <= idx < len(archive_entries)):
+                continue
+            self._set_branched_reference_image(archive_entries[idx])
+            if self._branched_reference_image_pairs:
+                return
 
     def _color_output_keys(self) -> Tuple[int, ...]:
         output_keys = list(getattr(self.neat_config.genome_config, "output_keys", ()))
@@ -887,7 +1024,7 @@ class AgentRunner:
             if entry_archive_index is not None:
                 input_parts_metadata[display_index]["archive_index"] = entry_archive_index
 
-        print(f"[{self.agent_id}] Deciding branching with model: {self.config.model}")
+        # print(f"[{self.agent_id}] Deciding branching with model: {self.config.model}")
         response = query_with_history(
             self.config.model,
             image_caption_pairs,
@@ -921,6 +1058,7 @@ class AgentRunner:
             "selected_images": selected_images,
             "rationale": rationale,
             "raw_response": response_text,
+            "archive_prompt": archive_prompt,
             "timestamp": timestamp,
             "archive_elite_names": list(elite_name_list),
             "archive_display_order": list(working_display_order),
@@ -1354,6 +1492,8 @@ class AgentRunner:
         self._archive_seed_map.clear()
         self._genome_lineage.clear()
         self._clear_branched_reference_image()
+        self._clear_archive_sample_reference()
+        self._set_archive_sample_reference(decision)
         # Default to grayscale view unless overridden by branching metadata.
         self._color_enabled = False
         self._update_mutation_mode(self._mutation_mode)
@@ -1510,7 +1650,7 @@ class AgentRunner:
         prompt_template = self._apply_pending_prompt_notes(prompt_template)
 
         population_images = color_images if self._color_enabled else gray_images
-        leading_image_pairs, prepended_history_turn = self._branched_image_context_for_generation()
+        leading_image_pairs, prepended_history_turn = self._reference_context_for_generation()
         grid_path: Optional[Path] = None
         view_index = 0
 
@@ -1583,7 +1723,7 @@ class AgentRunner:
                     break
 
                 else:
-                    print(f"[{self.agent_id}] Selecting parents/publishing with model: {self.config.model}")
+                    # print(f"[{self.agent_id}] Selecting parents/publishing with model: {self.config.model}")
                     prompt_with_settings = self._prompt_with_settings(prompt_template)
                     variant_key = "color" if self._color_enabled else "gray"
                     population_images = color_images if self._color_enabled else gray_images
@@ -2266,6 +2406,7 @@ class AgentRunner:
                 "generation": payload.get("generation"),
             }
         self._append_publication_history(payload)
+        self._refresh_publication_references_from_history()
         self.favorite_archive_entry = entry
         self.favorite_decision = payload
         print(

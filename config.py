@@ -20,6 +20,7 @@ class PicbreederConfig:
     thumb_size: int = 128  # Pixel size for rendered genome thumbnails
     chat_history_turns: int = 1  # How many prior turns each agent sees (-1 keeps all)
     always_include_branched_image: bool = False  # Keep selected branch image as reference once branch sample falls out of chat history
+    always_include_archive_sample: bool = False  # Keep the branching archive-sample step in context once it falls out of chat history
     model: str = "gemini-2.5-pro"
     temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
     thinking_budget: int = -1
@@ -125,6 +126,16 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         raise ValueError("rand-select-prob must be between 0 and 1, or exactly 2")
     if cfg.rand_select_mode not in {"select-only", "all"}:
         raise ValueError("rand-select-mode must be 'select-only' or 'all'")
+    if cfg.always_include_branched_image and cfg.always_include_archive_sample:
+        raise ValueError(
+            "always_include_branched_image and always_include_archive_sample cannot both be true."
+        )
+    if cfg.chat_history_turns == -1 and (
+        cfg.always_include_branched_image or cfg.always_include_archive_sample
+    ):
+        raise ValueError(
+            "always_include_branched_image/always_include_archive_sample are incompatible with chat_history_turns=-1."
+        )
 
     is_hack_mode = (cfg.rand_select_prob == 2 and cfg.rand_select_mode == "all")
     if is_hack_mode and cfg.model != "gemini-2.5-pro":
@@ -187,6 +198,8 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
             experiment_name += "_fixed-sesh"
         if cfg.always_include_branched_image:
             experiment_name += "_include-branch-img"
+        if cfg.always_include_archive_sample:
+            experiment_name += "_include-archive-sample"
         # experiment_name += f"_{timestamp}"
         experiment_name += f"_s{cfg.seed}"
         relative = Path(cfg.log_dir) / experiment_name

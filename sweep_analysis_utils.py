@@ -92,6 +92,12 @@ def compute_varying_fields(group_keys: Sequence[Tuple[Tuple[str, Any], ...]]) ->
     varying.sort()
     return varying
 
+def should_rotate_x_tick_labels(labels: Sequence[str]) -> bool:
+    if not labels:
+        return False
+    lengths = [len(str(label)) for label in labels]
+    return max(lengths) > 12 or sum(lengths) > 40
+
 def format_group_label(group_key: Tuple[Tuple[str, Any], ...], varying_fields: Sequence[str]) -> str:
     values = dict(group_key)
     
@@ -417,8 +423,10 @@ def write_scalar_bar_plot(
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
-    # ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.set_xticklabels(labels)
+    if should_rotate_x_tick_labels(labels):
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+    else:
+        ax.set_xticklabels(labels)
     ax.set_xlabel(" | ".join([pretty_hyperparam_name(f) for f in varying_fields]))
     ax.grid(True, axis="y", alpha=0.3)
 
@@ -643,7 +651,10 @@ def write_combined_plot_and_bar(
         ax_bar.set_title("Final score")
         # ax_bar.set_ylabel(ylabel_bar)
         ax_bar.set_xticks(x)
-        ax_bar.set_xticklabels(x_tick_labels)
+        if should_rotate_x_tick_labels(x_tick_labels):
+            ax_bar.set_xticklabels(x_tick_labels, rotation=45, ha="right")
+        else:
+            ax_bar.set_xticklabels(x_tick_labels)
         ax_bar.set_xlabel(x_axis_label)
         ax_bar.grid(True, axis="y", alpha=0.3)
 

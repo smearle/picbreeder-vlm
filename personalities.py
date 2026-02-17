@@ -4,7 +4,7 @@ import re
 import time
 from typing import List, Optional
 
-from im_query import client, DEFAULT_MODEL, types, genai, _is_token_limit_error
+from im_query import DEFAULT_MODEL, get_genai_client, types, genai, _is_token_limit_error
 
 
 OUTPUT_DIR = "outputs"
@@ -43,7 +43,7 @@ def send_text_prompt(
             if config is not None:
                 request_kwargs["config"] = config
 
-            response = client.models.generate_content(**request_kwargs)
+            response = get_genai_client().models.generate_content(**request_kwargs)
             response_text = getattr(response, "text", "") or ""
             break
         except Exception as exc:

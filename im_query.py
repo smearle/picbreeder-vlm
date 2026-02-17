@@ -1,4 +1,6 @@
 import base64
+import json
+import logging
 import os
 import re
 import time
@@ -11,6 +13,7 @@ from google.genai import types
 
 
 dotenv.load_dotenv()
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gemini-2.5-pro"
 DEFAULT_VLM_API_PROVIDER = "portkey"
@@ -148,6 +151,114 @@ def _extract_retry_delay_seconds(exc: Exception) -> Optional[float]:
     if match:
         return float(match.group(1))
     return None
+
+
+def _truncate_exception_message(message: str, *, limit: int = 400) -> str:
+    if len(message) <= limit:
+        return message
+    return message[: limit - 3] + "..."
+
+
+@lru_cache(maxsize=1)
+def _max_retry_attempts() -> Optional[int]:
+    raw_value = os.environ.get("VLM_MAX_RETRY_ATTEMPTS")
+    if raw_value is None or not str(raw_value).strip():
+        return None
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        logger.warning("Ignoring invalid VLM_MAX_RETRY_ATTEMPTS value: %r", raw_value)
+        return None
+    return parsed if parsed > 0 else None
+
+
+@lru_cache(maxsize=1)
+def _retry_log_path() -> Optional[str]:
+    value = os.environ.get("VLM_RETRY_LOG_PATH")
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _append_retry_event_to_file(payload: Dict[str, Any]) -> None:
+    log_path = _retry_log_path()
+    if not log_path:
+        return
+    try:
+        with open(log_path, "a", encoding="utf-8") as fp:
+            fp.write(json.dumps(payload, ensure_ascii=True))
+            fp.write("\n")
+    except OSError as file_error:
+        logger.warning("Failed writing retry event to VLM_RETRY_LOG_PATH: %s", file_error)
+
+
+def _log_retry_event(
+    *,
+    context: str,
+    provider: str,
+    model: str,
+    retry_count: int,
+    retry_delay_seconds: float,
+    category: str,
+    exc: Exception,
+) -> None:
+    exc_message = _truncate_exception_message(str(exc))
+    event = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "event": "vlm_retry",
+        "context": context,
+        "provider": provider,
+        "model": model,
+        "pid": os.getpid(),
+        "retry_count": retry_count,
+        "retry_delay_seconds": float(retry_delay_seconds),
+        "error_category": category,
+        "error_type": type(exc).__name__,
+        "error": exc_message,
+    }
+    logger.warning(
+        "[VLM RETRY] context=%s provider=%s model=%s pid=%s retry=%d delay=%.2fs category=%s error=%s",
+        context,
+        provider,
+        model,
+        event["pid"],
+        retry_count,
+        retry_delay_seconds,
+        category,
+        exc_message,
+    )
+    _append_retry_event_to_file(event)
+
+
+def _apply_retry_delay_or_raise(
+    *,
+    context: str,
+    provider: str,
+    model: str,
+    retry_count: int,
+    default_delay_seconds: float,
+    category: str,
+    exc: Exception,
+) -> int:
+    delay = _extract_retry_delay_seconds(exc) or default_delay_seconds
+    next_retry_count = retry_count + 1
+    _log_retry_event(
+        context=context,
+        provider=provider,
+        model=model,
+        retry_count=next_retry_count,
+        retry_delay_seconds=delay,
+        category=category,
+        exc=exc,
+    )
+    retry_limit = _max_retry_attempts()
+    if retry_limit is not None and next_retry_count >= retry_limit:
+        raise RuntimeError(
+            f"{context} exceeded VLM retry limit ({retry_limit}) for {provider}:{model}."
+        ) from exc
+    time.sleep(delay)
+    return next_retry_count
 
 
 def _normalise_pairs(image_caption_pairs: Sequence[ImageCaptionInput]) -> List[ImageCaptionPair]:
@@ -366,6 +477,7 @@ class ImageChatSession:
             stored_pairs.append((bytes(image_data), caption_to_use))
 
         provider = get_vlm_provider()
+        retry_count = 0
 
         while True:
             try:
@@ -424,28 +536,80 @@ class ImageChatSession:
                     if prompt_value:
                         parts.append(types.Part(text=prompt_value))
                     response = chat.send_message(parts)
+                if retry_count > 0:
+                    logger.info(
+                        "[VLM RETRY RECOVERED] context=ImageChatSession.send provider=%s model=%s retries=%d pid=%s",
+                        provider,
+                        self.model,
+                        retry_count,
+                        os.getpid(),
+                    )
                 break
-            except genai.errors.ServerError:
-                time.sleep(10)
+            except genai.errors.ServerError as exc:
+                retry_count = _apply_retry_delay_or_raise(
+                    context="ImageChatSession.send",
+                    provider=provider,
+                    model=self.model,
+                    retry_count=retry_count,
+                    default_delay_seconds=10.0,
+                    category="server_error",
+                    exc=exc,
+                )
                 continue
             except genai.errors.ClientError as exc:
                 if _is_rate_limit_error(exc):
-                    delay = _extract_retry_delay_seconds(exc) or 5.0
-                    time.sleep(delay)
+                    retry_count = _apply_retry_delay_or_raise(
+                        context="ImageChatSession.send",
+                        provider=provider,
+                        model=self.model,
+                        retry_count=retry_count,
+                        default_delay_seconds=5.0,
+                        category="rate_limit",
+                        exc=exc,
+                    )
                     continue
                 if _is_token_limit_error(exc) and start_index < len(self._turn_history):
+                    logger.warning(
+                        "[VLM TOKEN LIMIT] context=ImageChatSession.send provider=%s model=%s pid=%s trimming_history_from=%d",
+                        provider,
+                        self.model,
+                        os.getpid(),
+                        start_index,
+                    )
                     start_index += 1
                     continue
                 raise
             except Exception as exc:
                 if _is_rate_limit_error(exc):
-                    delay = _extract_retry_delay_seconds(exc) or 5.0
-                    time.sleep(delay)
+                    retry_count = _apply_retry_delay_or_raise(
+                        context="ImageChatSession.send",
+                        provider=provider,
+                        model=self.model,
+                        retry_count=retry_count,
+                        default_delay_seconds=5.0,
+                        category="rate_limit",
+                        exc=exc,
+                    )
                     continue
                 if _is_server_error(exc):
-                    time.sleep(5)
+                    retry_count = _apply_retry_delay_or_raise(
+                        context="ImageChatSession.send",
+                        provider=provider,
+                        model=self.model,
+                        retry_count=retry_count,
+                        default_delay_seconds=5.0,
+                        category="server_error",
+                        exc=exc,
+                    )
                     continue
                 if _is_token_limit_error(exc) and start_index < len(self._turn_history):
+                    logger.warning(
+                        "[VLM TOKEN LIMIT] context=ImageChatSession.send provider=%s model=%s pid=%s trimming_history_from=%d",
+                        provider,
+                        self.model,
+                        os.getpid(),
+                        start_index,
+                    )
                     start_index += 1
                     continue
                 raise
@@ -473,6 +637,7 @@ def _query_multimodal(
     normalized_pairs = _normalise_pairs(image_caption_pairs)
     prompt_value = "" if prompt is None else str(prompt)
     provider = get_vlm_provider()
+    retry_count = 0
 
     while True:
         try:
@@ -518,22 +683,61 @@ def _query_multimodal(
                 "contents": contents,
                 "config": config,
             }
-            return get_genai_client().models.generate_content(**request_kwargs)
-        except genai.errors.ServerError:
-            time.sleep(10)
+            response = get_genai_client().models.generate_content(**request_kwargs)
+            if retry_count > 0:
+                logger.info(
+                    "[VLM RETRY RECOVERED] context=_query_multimodal provider=%s model=%s retries=%d pid=%s",
+                    provider,
+                    model,
+                    retry_count,
+                    os.getpid(),
+                )
+            return response
+        except genai.errors.ServerError as exc:
+            retry_count = _apply_retry_delay_or_raise(
+                context="_query_multimodal",
+                provider=provider,
+                model=model,
+                retry_count=retry_count,
+                default_delay_seconds=10.0,
+                category="server_error",
+                exc=exc,
+            )
         except genai.errors.ClientError as exc:
             if _is_rate_limit_error(exc):
-                delay = _extract_retry_delay_seconds(exc) or 5.0
-                time.sleep(delay)
+                retry_count = _apply_retry_delay_or_raise(
+                    context="_query_multimodal",
+                    provider=provider,
+                    model=model,
+                    retry_count=retry_count,
+                    default_delay_seconds=5.0,
+                    category="rate_limit",
+                    exc=exc,
+                )
                 continue
             raise
         except Exception as exc:
             if _is_rate_limit_error(exc):
-                delay = _extract_retry_delay_seconds(exc) or 5.0
-                time.sleep(delay)
+                retry_count = _apply_retry_delay_or_raise(
+                    context="_query_multimodal",
+                    provider=provider,
+                    model=model,
+                    retry_count=retry_count,
+                    default_delay_seconds=5.0,
+                    category="rate_limit",
+                    exc=exc,
+                )
                 continue
             if _is_server_error(exc):
-                time.sleep(5)
+                retry_count = _apply_retry_delay_or_raise(
+                    context="_query_multimodal",
+                    provider=provider,
+                    model=model,
+                    retry_count=retry_count,
+                    default_delay_seconds=5.0,
+                    category="server_error",
+                    exc=exc,
+                )
                 continue
             raise
 
@@ -596,6 +800,7 @@ def query_text(
 ):
     provider = get_vlm_provider()
     prompt_value = "" if prompt is None else str(prompt)
+    retry_count = 0
 
     while True:
         try:
@@ -621,22 +826,60 @@ def query_text(
                 contents=[types.Content(role="user", parts=content_parts)],
                 config=config,
             )
+            if retry_count > 0:
+                logger.info(
+                    "[VLM RETRY RECOVERED] context=query_text provider=%s model=%s retries=%d pid=%s",
+                    provider,
+                    model,
+                    retry_count,
+                    os.getpid(),
+                )
             return response
-        except genai.errors.ServerError:
-            time.sleep(10)
+        except genai.errors.ServerError as exc:
+            retry_count = _apply_retry_delay_or_raise(
+                context="query_text",
+                provider=provider,
+                model=model,
+                retry_count=retry_count,
+                default_delay_seconds=10.0,
+                category="server_error",
+                exc=exc,
+            )
         except genai.errors.ClientError as exc:
             if _is_rate_limit_error(exc):
-                delay = _extract_retry_delay_seconds(exc) or 5.0
-                time.sleep(delay)
+                retry_count = _apply_retry_delay_or_raise(
+                    context="query_text",
+                    provider=provider,
+                    model=model,
+                    retry_count=retry_count,
+                    default_delay_seconds=5.0,
+                    category="rate_limit",
+                    exc=exc,
+                )
                 continue
             raise
         except Exception as exc:
             if _is_rate_limit_error(exc):
-                delay = _extract_retry_delay_seconds(exc) or 5.0
-                time.sleep(delay)
+                retry_count = _apply_retry_delay_or_raise(
+                    context="query_text",
+                    provider=provider,
+                    model=model,
+                    retry_count=retry_count,
+                    default_delay_seconds=5.0,
+                    category="rate_limit",
+                    exc=exc,
+                )
                 continue
             if _is_server_error(exc):
-                time.sleep(5)
+                retry_count = _apply_retry_delay_or_raise(
+                    context="query_text",
+                    provider=provider,
+                    model=model,
+                    retry_count=retry_count,
+                    default_delay_seconds=5.0,
+                    category="server_error",
+                    exc=exc,
+                )
                 continue
             raise
 

@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import json
+import signal
 import multiprocessing
 import numpy as np
 from dataclasses import replace, fields, asdict
@@ -40,6 +41,29 @@ from sweep_analysis_utils import (
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
+
+
+def _format_process_exit(eval_name: str, exitcode: Optional[int]) -> str:
+    """Build a more actionable error message for subprocess failures."""
+    if exitcode is None:
+        return f"{eval_name} did not report an exit code."
+    if exitcode == 0:
+        return f"{eval_name} completed successfully."
+    if exitcode > 0:
+        return f"{eval_name} failed with exit status {exitcode}."
+
+    sig_num = -exitcode
+    try:
+        sig_name = signal.Signals(sig_num).name
+    except ValueError:
+        sig_name = "UNKNOWN"
+
+    msg = f"{eval_name} was terminated by signal {sig_num} ({sig_name})."
+    if sig_num == signal.SIGKILL:
+        msg += " This is commonly caused by the OS/scheduler killing the process (often out-of-memory)."
+    elif sig_num == signal.SIGTERM:
+        msg += " This often indicates an external timeout, preemption, or manual termination."
+    return msg
 
 
 class CollaborativeRun:
@@ -2181,7 +2205,11 @@ def main(cfg: SweepConfig) -> None:
             p1.start()
             p1.join()
             if p1.exitcode != 0:
-                print(f"Visual coverage eval failed with exit code {p1.exitcode}")
+                print(_format_process_exit("Visual coverage eval", p1.exitcode))
+                if p1.exitcode == -signal.SIGKILL:
+                    print(
+                        "Hint: try a smaller embedding model or lower archive_limit to reduce memory usage."
+                    )
 
         if cfg.eval_noun_coverage:
             p2 = ctx.Process(
@@ -2191,7 +2219,11 @@ def main(cfg: SweepConfig) -> None:
             p2.start()
             p2.join()
             if p2.exitcode != 0:
-                print(f"Noun coverage eval failed with exit code {p2.exitcode}")
+                print(_format_process_exit("Noun coverage eval", p2.exitcode))
+                if p2.exitcode == -signal.SIGKILL:
+                    print(
+                        "Hint: this stage loads image/text embeddings together; reduce archive_limit or switch to a lighter model."
+                    )
 
         if cfg.eval_captions:
             p3 = ctx.Process(
@@ -2201,7 +2233,9 @@ def main(cfg: SweepConfig) -> None:
             p3.start()
             p3.join()
             if p3.exitcode != 0:
-                print(f"Caption eval failed with exit code {p3.exitcode}")
+                print(_format_process_exit("Caption eval", p3.exitcode))
+                if p3.exitcode == -signal.SIGKILL:
+                    print("Hint: caption evaluation may have exceeded memory limits.")
 
         if cfg.render_archive:
             _run_render_archive(cfg, run_configs, original_cwd, cross_eval_dir)

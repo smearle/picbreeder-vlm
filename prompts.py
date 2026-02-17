@@ -51,7 +51,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
 )
 
 ARCHIVE_NOVELTY_PROMPT = (
-    "When justifying your publication choice, explain why the selected contribution is valuable to the archive. "
+    " When justifying your publication choice, explain why the selected contribution is valuable to the archive. "
     "Identify the most similar entry in the archive (or the most similar of your prior publications) and explain how your selection meaningfully differs from it. "
     "Do not publish images that are redundant or boring. You will be judged by a discerning online community for your contributions. "
 )
