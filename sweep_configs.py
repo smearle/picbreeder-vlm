@@ -16,6 +16,7 @@ class SweepConfig(PicbreederConfig):
     chat_history_turns: List[int] = field(default_factory=lambda: [1])  # Chat history lengths to evaluate
     always_include_branched_image: List[bool] = field(default_factory=lambda: [False])  # Preserve branched image reference after branch archive sample leaves chat history
     always_include_archive_sample: List[bool] = field(default_factory=lambda: [False])  # Preserve archive branching sample turn once it falls out of chat history
+    allow_restart_from_publications: List[bool] = field(default_factory=lambda: [True])  # Allow restart branching from an agent's own prior publications
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])  # Probability of random parent selection
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])  # Sampling temperature values to evaluate
     thumb_size: List[int] = field(default_factory=lambda: [128])  # Thumbnail sizes to evaluate

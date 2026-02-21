@@ -37,6 +37,9 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     # "It's better to contribute nothing than to contribute garbage. "
     "If you ever want to abandon the current evolutionary trajectory, include a `\"restart\"` object in your JSON. "
     '{{"restart": {{"mode": "fresh"}}}} seeds a brand-new random population, while {{"restart": {{"mode": "branch", "selected": [archive_indices]}}}} branches directly from the archive images (omit \"selected\" to re-open the archive and pick at the next step). '
+    "If you have prior in-session publications, you may restart from one of them by returning "
+    '{{"restart": {{"mode": "publication", "selected": [publication_indices]}}}}. '
+    "Use the publication index shown in the prior-publication captions. "
     "Respond with JSON only: {{\"selected\": [indices]{selection_json_suffix}}}. "
     "(During branching, you may select only one image from which to branch; "
     " set \"selected\" to null to start from a fresh population.) "

@@ -153,6 +153,8 @@ class AgentRunner:
             self.logs_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
+        # Route VLM retry events to this agent's logs to avoid cross-process collisions.
+        os.environ["VLM_RETRY_LOG_PATH"] = str(self.logs_dir / "vlm_retry_events.jsonl")
 
         # Reporter & population
         if population is None:
@@ -310,6 +312,7 @@ class AgentRunner:
         self._archive_sample_reference_image_pairs: List[Tuple[bytes, str]] = []
         self._archive_sample_reference_history_turn: Optional[Tuple[List[Tuple[bytes, str]], str, str]] = None
         self._publication_reference_image_pairs: List[Tuple[bytes, str]] = []
+        self._publication_reference_entries: List[Dict[str, Any]] = []
         self._load_branching_snapshot()
         if self.resume_mode:
             self._load_existing_publication_state()
@@ -643,6 +646,7 @@ class AgentRunner:
 
     def _refresh_publication_references_from_history(self) -> None:
         self._publication_reference_image_pairs = []
+        self._publication_reference_entries = []
         if self.fixed_session_lengths:
             return
         if not self.publication_history_path.exists():
@@ -678,8 +682,21 @@ class AgentRunner:
 
                 generation_value = payload.get("generation")
                 index_value = payload.get("index")
-                caption = f"Prior publication (gen {generation_value}, idx {index_value})"
+                title_value = str(payload.get("title") or "").strip()
+                publication_index = len(self._publication_reference_entries)
+                caption = f"Prior publication {publication_index} (gen {generation_value}, idx {index_value})"
+                if title_value:
+                    caption = f"{caption}, title: {title_value}"
                 self._publication_reference_image_pairs.append((image_bytes, caption))
+                self._publication_reference_entries.append(
+                    {
+                        "publication_index": publication_index,
+                        "archive_entry_id": entry_id,
+                        "generation": generation_value,
+                        "index": index_value,
+                        "title": title_value,
+                    }
+                )
 
     def _reference_context_for_generation(
         self,
@@ -1244,10 +1261,13 @@ class AgentRunner:
         mode: Optional[str] = None
         reason: Optional[str] = None
         selected_indices: List[int] = []
+        selected_entry_ids: List[str] = []
         if isinstance(payload, str):
             value = payload.strip().lower()
             if value in {"branch", "archive", "rebranch"}:
                 mode = "branch"
+            elif value in {"publication", "publications", "prior_publication", "self"}:
+                mode = "publication"
             elif value in {"fresh", "random", "reset", "restart", "new"}:
                 mode = "fresh"
         elif isinstance(payload, bool):
@@ -1258,6 +1278,8 @@ class AgentRunner:
                 value = raw_mode.strip().lower()
                 if value in {"branch", "archive", "rebranch"}:
                     mode = "branch"
+                elif value in {"publication", "publications", "prior_publication", "self"}:
+                    mode = "publication"
                 elif value in {"fresh", "random", "reset", "restart", "new"}:
                     mode = "fresh"
             reason_value = payload.get("reason") or payload.get("rationale") or payload.get("why")
@@ -1270,19 +1292,30 @@ class AgentRunner:
                 or payload.get("indices")
                 or payload.get("selection")
                 or payload.get("archive_indices")
+                or payload.get("publication_indices")
             )
             if selected_value is not None:
                 selected_indices = _ensure_int_list(selected_value)
+            selected_entry_ids_value = payload.get("entry_ids") or payload.get("publication_entry_ids")
+            if isinstance(selected_entry_ids_value, (list, tuple)):
+                selected_entry_ids = [
+                    str(value).strip()
+                    for value in selected_entry_ids_value
+                    if str(value).strip()
+                ]
         elif isinstance(payload, (list, tuple)):
             selected_indices = _ensure_int_list(payload)
             if selected_indices:
                 mode = mode or "branch"
         if mode is None:
             return None
+        if mode == "publication" and not self.allow_restart_from_publications:
+            return None
         return {
             "mode": mode,
             "reason": reason,
             "selected_indices": selected_indices,
+            "selected_entry_ids": selected_entry_ids,
             "generation": generation,
             "timestamp": datetime.now().isoformat(),
         }
@@ -1314,12 +1347,19 @@ class AgentRunner:
         self._restart_history.append(log_entry)
         self._append_restart_log(log_entry)
         self._restart_counter += 1
+        print(
+            f"[{self.agent_id}] Applying restart #{self._restart_counter}: "
+            f"mode={request.get('mode')}, choice={decision.get('choice')}, "
+            f"selected_entry_ids={decision.get('selected_entry_ids') or []}"
+        )
         return decision
 
     def _build_restart_decision(self, request: Dict[str, Any]) -> Dict[str, Any]:
         mode = request.get("mode") or "fresh"
         if mode == "branch":
             decision = self._build_restart_branch_decision(request)
+        elif mode == "publication":
+            decision = self._build_restart_publication_decision(request)
         else:
             decision = self._build_restart_fresh_decision(request)
         if not decision.get("selected_entry_ids"):
@@ -1479,6 +1519,105 @@ class AgentRunner:
             request,
             rationale=fallback_rationale,
         )
+
+    def _build_restart_publication_decision(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.allow_restart_from_publications:
+            return self._build_restart_fresh_decision(
+                request,
+                rationale="Restart-from-publication mode is disabled; starting from a fresh random population.",
+            )
+
+        if not self._publication_reference_entries:
+            self._refresh_publication_references_from_history()
+        candidates = list(self._publication_reference_entries)
+        if not candidates:
+            return self._build_restart_fresh_decision(
+                request,
+                rationale="Restart requested from prior publications, but no prior publications were found; starting fresh instead.",
+            )
+
+        candidate_by_index = {
+            int(candidate["publication_index"]): candidate
+            for candidate in candidates
+            if isinstance(candidate, dict) and isinstance(candidate.get("publication_index"), int)
+        }
+        requested_indices = _ensure_int_list(request.get("selected_indices") or [])
+        requested_entry_ids = {
+            str(entry_id).strip()
+            for entry_id in (request.get("selected_entry_ids") or [])
+            if str(entry_id).strip()
+        }
+
+        selected_entry_ids: List[str] = []
+        invalid_indices: List[int] = []
+        for publication_index in requested_indices:
+            candidate = candidate_by_index.get(publication_index)
+            if candidate is None:
+                invalid_indices.append(publication_index)
+                continue
+            entry_id = str(candidate.get("archive_entry_id") or "").strip()
+            if entry_id and entry_id not in selected_entry_ids:
+                selected_entry_ids.append(entry_id)
+
+        if requested_entry_ids:
+            known_entry_ids = {
+                str(candidate.get("archive_entry_id") or "").strip()
+                for candidate in candidates
+            }
+            for entry_id in requested_entry_ids:
+                if entry_id in known_entry_ids and entry_id not in selected_entry_ids:
+                    selected_entry_ids.append(entry_id)
+
+        if not selected_entry_ids:
+            # Default to most recent prior publication when no explicit valid selection is provided.
+            most_recent = candidates[-1]
+            fallback_entry_id = str(most_recent.get("archive_entry_id") or "").strip()
+            if fallback_entry_id:
+                selected_entry_ids = [fallback_entry_id]
+
+        selected_entry_ids = [
+            entry_id
+            for entry_id in selected_entry_ids
+            if self.archive_manager.get_entry(entry_id) is not None
+        ]
+        if not selected_entry_ids:
+            return self._build_restart_fresh_decision(
+                request,
+                rationale=(
+                    "Restart requested from prior publications, but matching archive entries were unavailable; "
+                    "starting fresh instead."
+                ),
+            )
+
+        selected_publication_indices: List[int] = []
+        index_by_entry_id = {
+            str(candidate.get("archive_entry_id") or "").strip(): int(candidate["publication_index"])
+            for candidate in candidates
+            if isinstance(candidate, dict)
+            and isinstance(candidate.get("publication_index"), int)
+            and str(candidate.get("archive_entry_id") or "").strip()
+        }
+        for entry_id in selected_entry_ids:
+            publication_index = index_by_entry_id.get(entry_id)
+            if publication_index is not None:
+                selected_publication_indices.append(publication_index)
+
+        rationale_parts = ["Restart requested; branching from prior in-session publication(s)."]
+        if request.get("reason"):
+            rationale_parts.append(f"Reason: {request['reason']}")
+        if invalid_indices:
+            rationale_parts.append(f"Ignored invalid publication indices: {invalid_indices}")
+        return {
+            "choice": "branch",
+            "selected_images": [],
+            "selected_entry_ids": selected_entry_ids,
+            "selected_publication_indices": selected_publication_indices,
+            "rationale": " ".join(rationale_parts),
+            "raw_response": None,
+            "timestamp": datetime.now().isoformat(),
+            "archive_elite_names": list(self._initial_branch_elite_names),
+            "archive_subset_counts": dict(self._initial_branch_subset_counts),
+        }
 
     def _append_restart_log(self, payload: Dict[str, Any]) -> None:
         try:
@@ -1822,9 +1961,22 @@ class AgentRunner:
             if selection_meta.get("quit"):
                 print(f"[{self.agent_id}] Ignoring quit request in fixed session mode at generation {generation_i}")
         else:
-            restart_request = self._normalize_restart_request(selection_meta_raw.get("restart"), generation_i)
+            restart_payload_raw = selection_meta_raw.get("restart")
+            restart_request = self._normalize_restart_request(restart_payload_raw, generation_i)
             if restart_request:
                 self._pending_restart_request = restart_request
+                print(
+                    f"[{self.agent_id}] Restart requested at generation {generation_i}: "
+                    f"mode={restart_request.get('mode')}, "
+                    f"selected={restart_request.get('selected_indices') or []}, "
+                    f"entry_ids={restart_request.get('selected_entry_ids') or []}, "
+                    f"reason={restart_request.get('reason') or ''}"
+                )
+            elif restart_payload_raw not in (None, False, "", [], {}):
+                print(
+                    f"[{self.agent_id}] Received unrecognized/disabled restart request at generation {generation_i}: "
+                    f"{restart_payload_raw!r}"
+                )
             quit_requested = bool(selection_meta.get("quit"))
             quit_reason = selection_meta.get("quit_reason")
             if quit_requested:
@@ -1833,6 +1985,10 @@ class AgentRunner:
                     self._quit_reason = reason_text or None
                     self._quit_generation = generation_i
                 self._quit_requested = True
+                print(
+                    f"[{self.agent_id}] Quit requested at generation {generation_i}: "
+                    f"{reason_text or 'no reason provided'}"
+                )
         resolved_mode = self._update_mutation_mode(selection_meta.get("mutation_mode"))
         selection_meta["mutation_mode"] = resolved_mode
         resolved_strength = self._update_mutation_strength(selection_meta.get("mutation_strength"))
@@ -1991,7 +2147,6 @@ class AgentRunner:
         self._append_selection_history(generation_i, selection_meta)
         if quit_requested:
             message = self._quit_reason or "Agent requested to end the session."
-            print(f"[{self.agent_id}] Quit requested at generation {generation_i}: {message}")
             raise AgentQuitRequested(message)
         if restart_request:
             raise AgentRestartRequested(restart_request)

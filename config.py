@@ -21,6 +21,7 @@ class PicbreederConfig:
     chat_history_turns: int = 1  # How many prior turns each agent sees (-1 keeps all)
     always_include_branched_image: bool = False  # Keep selected branch image as reference once branch sample falls out of chat history
     always_include_archive_sample: bool = False  # Keep the branching archive-sample step in context once it falls out of chat history
+    allow_restart_from_publications: bool = True  # Allow restart branching from this agent's own prior publications
     model: str = "gemini-2.5-pro"
     temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
     thinking_budget: int = -1
