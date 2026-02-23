@@ -155,6 +155,7 @@ class AgentRunner:
             directory.mkdir(parents=True, exist_ok=True)
         # Route VLM retry events to this agent's logs to avoid cross-process collisions.
         os.environ["VLM_RETRY_LOG_PATH"] = str(self.logs_dir / "vlm_retry_events.jsonl")
+        os.environ["VLM_EVENT_LOG_PATH"] = str(self.logs_dir / "vlm_error_events.jsonl")
 
         # Reporter & population
         if population is None:

@@ -3,9 +3,11 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from queue import Empty, Queue
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
 import dotenv
 from google import genai
@@ -26,6 +28,11 @@ ImageCaptionInput = Tuple[bytes, Optional[str]]
 ImageCaptionPair = Tuple[bytes, str]
 StoredTurn = Tuple[List[ImageCaptionPair], str, str]
 HistoryTurnInput = Tuple[Sequence[ImageCaptionInput], str, str]
+T = TypeVar("T")
+
+
+class VLMAPITimeoutError(TimeoutError):
+    """Raised when an outbound VLM API call exceeds configured wall-clock timeout."""
 
 
 class QueryResponse:
@@ -191,6 +198,123 @@ def _append_retry_event_to_file(payload: Dict[str, Any]) -> None:
             fp.write("\n")
     except OSError as file_error:
         logger.warning("Failed writing retry event to VLM_RETRY_LOG_PATH: %s", file_error)
+
+
+@lru_cache(maxsize=1)
+def _event_log_path() -> Optional[str]:
+    explicit_path = os.environ.get("VLM_EVENT_LOG_PATH")
+    if explicit_path and explicit_path.strip():
+        return explicit_path.strip()
+    retry_path = _retry_log_path()
+    if not retry_path:
+        return None
+    parent = os.path.dirname(retry_path)
+    if not parent:
+        return "vlm_error_events.jsonl"
+    return os.path.join(parent, "vlm_error_events.jsonl")
+
+
+@lru_cache(maxsize=1)
+def _api_timeout_seconds() -> float:
+    raw_value = os.environ.get("VLM_API_TIMEOUT_SECONDS")
+    if raw_value is None or not str(raw_value).strip():
+        return 180.0
+    try:
+        parsed = float(raw_value)
+    except ValueError:
+        logger.warning("Ignoring invalid VLM_API_TIMEOUT_SECONDS value: %r", raw_value)
+        return 180.0
+    if parsed <= 0:
+        logger.warning("Ignoring non-positive VLM_API_TIMEOUT_SECONDS value: %r", raw_value)
+        return 180.0
+    return parsed
+
+
+def _append_event_to_file(payload: Dict[str, Any]) -> None:
+    log_path = _event_log_path()
+    if not log_path:
+        return
+    try:
+        with open(log_path, "a", encoding="utf-8") as fp:
+            fp.write(json.dumps(payload, ensure_ascii=True))
+            fp.write("\n")
+    except OSError as file_error:
+        logger.warning("Failed writing event to VLM_EVENT_LOG_PATH: %s", file_error)
+
+
+def _log_vlm_error_event(
+    *,
+    event_type: str,
+    context: str,
+    provider: str,
+    model: str,
+    error_category: str,
+    exc: Exception,
+) -> None:
+    event = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "event": event_type,
+        "context": context,
+        "provider": provider,
+        "model": model,
+        "pid": os.getpid(),
+        "error_category": error_category,
+        "error_type": type(exc).__name__,
+        "error": _truncate_exception_message(str(exc)),
+    }
+    _append_event_to_file(event)
+
+
+def _call_with_timeout(
+    *,
+    call: Callable[[], T],
+    context: str,
+    provider: str,
+    model: str,
+) -> T:
+    timeout_seconds = _api_timeout_seconds()
+    result_queue: "Queue[Tuple[bool, Any]]" = Queue(maxsize=1)
+
+    def _runner() -> None:
+        try:
+            result_queue.put((True, call()))
+        except Exception as exc:  # pragma: no cover - API-layer passthrough
+            result_queue.put((False, exc))
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        timeout_exc = VLMAPITimeoutError(
+            f"{context} timed out after {timeout_seconds:.1f}s for {provider}:{model}."
+        )
+        _log_vlm_error_event(
+            event_type="vlm_timeout",
+            context=context,
+            provider=provider,
+            model=model,
+            error_category="timeout",
+            exc=timeout_exc,
+        )
+        raise timeout_exc
+
+    try:
+        ok, payload = result_queue.get_nowait()
+    except Empty as exc:  # pragma: no cover - defensive guard
+        unknown_exc = RuntimeError(f"{context} finished without returning a result.")
+        _log_vlm_error_event(
+            event_type="vlm_error",
+            context=context,
+            provider=provider,
+            model=model,
+            error_category="unknown",
+            exc=unknown_exc,
+        )
+        raise unknown_exc from exc
+
+    if ok:
+        return payload
+    raise payload
 
 
 def _log_retry_event(
@@ -495,7 +619,12 @@ class ImageChatSession:
                     }
                     if temperature is not None:
                         request_kwargs["temperature"] = float(temperature)
-                    raw_response = get_portkey_client().chat.completions.create(**request_kwargs)
+                    raw_response = _call_with_timeout(
+                        call=lambda: get_portkey_client().chat.completions.create(**request_kwargs),
+                        context="ImageChatSession.send",
+                        provider=provider,
+                        model=self.model,
+                    )
                     response = QueryResponse(
                         text=_extract_portkey_response_text(raw_response),
                         raw_response=raw_response,
@@ -535,7 +664,12 @@ class ImageChatSession:
                         )
                     if prompt_value:
                         parts.append(types.Part(text=prompt_value))
-                    response = chat.send_message(parts)
+                    response = _call_with_timeout(
+                        call=lambda: chat.send_message(parts),
+                        context="ImageChatSession.send",
+                        provider=provider,
+                        model=self.model,
+                    )
                 if retry_count > 0:
                     logger.info(
                         "[VLM RETRY RECOVERED] context=ImageChatSession.send provider=%s model=%s retries=%d pid=%s",
@@ -578,8 +712,18 @@ class ImageChatSession:
                     )
                     start_index += 1
                     continue
+                _log_vlm_error_event(
+                    event_type="vlm_error",
+                    context="ImageChatSession.send",
+                    provider=provider,
+                    model=self.model,
+                    error_category="client_error",
+                    exc=exc,
+                )
                 raise
             except Exception as exc:
+                if isinstance(exc, VLMAPITimeoutError):
+                    raise
                 if _is_rate_limit_error(exc):
                     retry_count = _apply_retry_delay_or_raise(
                         context="ImageChatSession.send",
@@ -612,6 +756,14 @@ class ImageChatSession:
                     )
                     start_index += 1
                     continue
+                _log_vlm_error_event(
+                    event_type="vlm_error",
+                    context="ImageChatSession.send",
+                    provider=provider,
+                    model=self.model,
+                    error_category="unhandled_error",
+                    exc=exc,
+                )
                 raise
 
         response_text = getattr(response, "text", "") or ""
@@ -647,9 +799,14 @@ def _query_multimodal(
                     messages.append({"role": "system", "content": system_instruction})
                 user_content = _build_portkey_user_content(normalized_pairs, prompt_value, mime_type)
                 messages.append({"role": "user", "content": user_content})
-                raw_response = get_portkey_client().chat.completions.create(
-                    model=_resolve_portkey_model(model),
-                    messages=messages,
+                raw_response = _call_with_timeout(
+                    call=lambda: get_portkey_client().chat.completions.create(
+                        model=_resolve_portkey_model(model),
+                        messages=messages,
+                    ),
+                    context="_query_multimodal",
+                    provider=provider,
+                    model=model,
                 )
                 return QueryResponse(
                     text=_extract_portkey_response_text(raw_response),
@@ -683,7 +840,12 @@ def _query_multimodal(
                 "contents": contents,
                 "config": config,
             }
-            response = get_genai_client().models.generate_content(**request_kwargs)
+            response = _call_with_timeout(
+                call=lambda: get_genai_client().models.generate_content(**request_kwargs),
+                context="_query_multimodal",
+                provider=provider,
+                model=model,
+            )
             if retry_count > 0:
                 logger.info(
                     "[VLM RETRY RECOVERED] context=_query_multimodal provider=%s model=%s retries=%d pid=%s",
@@ -715,8 +877,18 @@ def _query_multimodal(
                     exc=exc,
                 )
                 continue
+            _log_vlm_error_event(
+                event_type="vlm_error",
+                context="_query_multimodal",
+                provider=provider,
+                model=model,
+                error_category="client_error",
+                exc=exc,
+            )
             raise
         except Exception as exc:
+            if isinstance(exc, VLMAPITimeoutError):
+                raise
             if _is_rate_limit_error(exc):
                 retry_count = _apply_retry_delay_or_raise(
                     context="_query_multimodal",
@@ -739,6 +911,14 @@ def _query_multimodal(
                     exc=exc,
                 )
                 continue
+            _log_vlm_error_event(
+                event_type="vlm_error",
+                context="_query_multimodal",
+                provider=provider,
+                model=model,
+                error_category="unhandled_error",
+                exc=exc,
+            )
             raise
 
 
@@ -809,9 +989,14 @@ def query_text(
                 if system_instruction:
                     messages.append({"role": "system", "content": system_instruction})
                 messages.append({"role": "user", "content": prompt_value})
-                raw_response = get_portkey_client().chat.completions.create(
-                    model=_resolve_portkey_model(model),
-                    messages=messages,
+                raw_response = _call_with_timeout(
+                    call=lambda: get_portkey_client().chat.completions.create(
+                        model=_resolve_portkey_model(model),
+                        messages=messages,
+                    ),
+                    context="query_text",
+                    provider=provider,
+                    model=model,
                 )
                 return QueryResponse(
                     text=_extract_portkey_response_text(raw_response),
@@ -821,10 +1006,15 @@ def query_text(
 
             content_parts = [types.Part(text=prompt_value)]
             config = types.GenerateContentConfig(system_instruction=system_instruction)
-            response = get_genai_client().models.generate_content(
+            response = _call_with_timeout(
+                call=lambda: get_genai_client().models.generate_content(
+                    model=model,
+                    contents=[types.Content(role="user", parts=content_parts)],
+                    config=config,
+                ),
+                context="query_text",
+                provider=provider,
                 model=model,
-                contents=[types.Content(role="user", parts=content_parts)],
-                config=config,
             )
             if retry_count > 0:
                 logger.info(
@@ -857,8 +1047,18 @@ def query_text(
                     exc=exc,
                 )
                 continue
+            _log_vlm_error_event(
+                event_type="vlm_error",
+                context="query_text",
+                provider=provider,
+                model=model,
+                error_category="client_error",
+                exc=exc,
+            )
             raise
         except Exception as exc:
+            if isinstance(exc, VLMAPITimeoutError):
+                raise
             if _is_rate_limit_error(exc):
                 retry_count = _apply_retry_delay_or_raise(
                     context="query_text",
@@ -881,6 +1081,14 @@ def query_text(
                     exc=exc,
                 )
                 continue
+            _log_vlm_error_event(
+                event_type="vlm_error",
+                context="query_text",
+                provider=provider,
+                model=model,
+                error_category="unhandled_error",
+                exc=exc,
+            )
             raise
 
 
