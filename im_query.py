@@ -679,6 +679,17 @@ class ImageChatSession:
                         os.getpid(),
                     )
                 break
+            except VLMAPITimeoutError as exc:
+                retry_count = _apply_retry_delay_or_raise(
+                    context="ImageChatSession.send",
+                    provider=provider,
+                    model=self.model,
+                    retry_count=retry_count,
+                    default_delay_seconds=5.0,
+                    category="timeout",
+                    exc=exc,
+                )
+                continue
             except genai.errors.ServerError as exc:
                 retry_count = _apply_retry_delay_or_raise(
                     context="ImageChatSession.send",
@@ -722,8 +733,6 @@ class ImageChatSession:
                 )
                 raise
             except Exception as exc:
-                if isinstance(exc, VLMAPITimeoutError):
-                    raise
                 if _is_rate_limit_error(exc):
                     retry_count = _apply_retry_delay_or_raise(
                         context="ImageChatSession.send",
@@ -855,6 +864,17 @@ def _query_multimodal(
                     os.getpid(),
                 )
             return response
+        except VLMAPITimeoutError as exc:
+            retry_count = _apply_retry_delay_or_raise(
+                context="_query_multimodal",
+                provider=provider,
+                model=model,
+                retry_count=retry_count,
+                default_delay_seconds=5.0,
+                category="timeout",
+                exc=exc,
+            )
+            continue
         except genai.errors.ServerError as exc:
             retry_count = _apply_retry_delay_or_raise(
                 context="_query_multimodal",
@@ -887,8 +907,6 @@ def _query_multimodal(
             )
             raise
         except Exception as exc:
-            if isinstance(exc, VLMAPITimeoutError):
-                raise
             if _is_rate_limit_error(exc):
                 retry_count = _apply_retry_delay_or_raise(
                     context="_query_multimodal",
@@ -1025,6 +1043,17 @@ def query_text(
                     os.getpid(),
                 )
             return response
+        except VLMAPITimeoutError as exc:
+            retry_count = _apply_retry_delay_or_raise(
+                context="query_text",
+                provider=provider,
+                model=model,
+                retry_count=retry_count,
+                default_delay_seconds=5.0,
+                category="timeout",
+                exc=exc,
+            )
+            continue
         except genai.errors.ServerError as exc:
             retry_count = _apply_retry_delay_or_raise(
                 context="query_text",
@@ -1057,8 +1086,6 @@ def query_text(
             )
             raise
         except Exception as exc:
-            if isinstance(exc, VLMAPITimeoutError):
-                raise
             if _is_rate_limit_error(exc):
                 retry_count = _apply_retry_delay_or_raise(
                     context="query_text",
