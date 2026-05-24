@@ -247,7 +247,7 @@ class AgentRunner:
         # And from now on, always be running qwen in multi_proc>0 anyway.
         # (I think qwen3-vl-8b chat history turns sweep ran for 500 agents with this enabled, which I suspect caused it to be all but incapable of branching,
         # since it would instead opt to try to activate color on this step. In any case, we should probably leave this and re-run qwen3-vl-8b sweep with multi_proc>0)
-        if 'qwen3' in config.model:
+        if config.color_nudge and 'qwen' in config.model.lower():
             instruction_body += """ NOTE: You have a bad habit of only evolving grayscale images. PLEASE, spend AT LEAST SOME time evolving in color. In this case: if `Color: OFF`, then respond `{"color": "true"}` to turn it back on."""
 
         if self.personality_prompt:

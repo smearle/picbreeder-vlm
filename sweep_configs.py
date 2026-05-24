@@ -47,7 +47,7 @@ class SweepConfig(PicbreederConfig):
     gpu: bool = False
     # account: Optional[str] = None  # Optional SLURM account override
     account: Optional[str] = os.environ.get("SLURM_ACCOUNT")  # Optional SLURM account override
-    timeout_hours: int = 24  # Wall-time limit in hours
+    timeout_hours: int = 120  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
     num_proc: int = 10  # Number of parallel processes per task
     render_archive: bool = False  # If true, run evaluation instead of training
@@ -105,8 +105,11 @@ class ChatHistoryTurnsSweep(SweepConfig):
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
-    seed: List[int] = field(default_factory=lambda: [3, 4, 5, 6, 7, 8])
-    num_agents: int = 2_000
+    seed: List[int] = field(default_factory=lambda: [
+        3, 4, 5,
+        # 6, 7, 8
+    ])
+    num_agents: int = 10_000
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.06, 0.09])
 
 
@@ -123,7 +126,7 @@ class IncludeBranchedImageSweep(SweepConfig):
     num_agents: int = 2_000
     always_include_branched_image: List[bool] = field(default_factory=lambda: [
         True,
-        # False,
+        False,
     ])
 
 
@@ -195,11 +198,14 @@ class ChatHistoryTurnsQwen30BSweep(SweepConfig):
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
     rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    # Registry name so each SLURM job auto-starts its own vLLM server (set VLLM_TP_SIZE
+    # if the model needs >1 GPU). For the local shared server, override model=remote:Qwen/...
     model: List[str] = field(default_factory=lambda: ["qwen3-vl-30b-fp8"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     num_agents: int = 1_000
     num_proc: int = 10
     gpu: bool = True
+    partition: str = "h100_tandon"
     novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.6, 0.93])
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.04, 0.080])
 
@@ -211,11 +217,37 @@ class FullRandSelectProbQwen30b(SweepConfig):
     rand_select_prob: List[float] = field(default_factory=lambda: [0.05, 0.1, 0.25, 0.5])
     rand_select_mode: str = 'all'
     goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    # Registry name so each SLURM job auto-starts its own vLLM server (set VLLM_TP_SIZE
+    # if the model needs >1 GPU). For the local shared server, override model=remote:Qwen/...
     model: List[str] = field(default_factory=lambda: ["qwen3-vl-30b-fp8"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     num_agents: int = 1_000
     num_proc: int = 10
     gpu: bool = True
+    partition: str = "h100_tandon"
+    novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.6, 0.93])
+    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.04, 0.080])
+
+
+@dataclass
+class ChatHistoryTurnsQwenColorSweep(SweepConfig):
+    """Probe Qwen color usage across chat-history lengths (nudge OFF by default).
+
+    Each SLURM job auto-starts its own 1-GPU vLLM server (registry model names).
+    Run nudge-off first; if no color appears, re-run with color_nudge=true (CLI override
+    or set it here) — the experiment dir gets a `_colornudge` suffix so runs don't collide.
+    """
+    chat_history_turns: List[int] = field(default_factory=lambda: [0, 1, 2, 10, -1])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["qwen3-vl-8b", "qwen3-vl-30b-fp8"])
+    color_nudge: bool = False
+    seed: List[int] = field(default_factory=lambda: [3, 4, 5])
+    num_agents: int = 1_000
+    num_proc: int = 10
+    gpu: bool = True
+    partition: str = "h100_tandon"
     novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.6, 0.93])
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.04, 0.080])
 
@@ -254,14 +286,14 @@ class RandBaselineSweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["gemini-2.5-pro"])
     seed: List[int] = field(default_factory=lambda: [3, 4, 5])
     thumb_size: List[int] = field(default_factory=lambda: [128,])
-    num_agents: int = 9_377
+    num_agents: int = 10_000
 
 
 @dataclass
 class ObjectiveFreeSweep(SweepConfig):
     goal: List[str] = field(default_factory=lambda: [
         "none",
-        # "familiar_objects", 
+        "familiar_objects", 
     ])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
@@ -314,6 +346,7 @@ _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "chat_history_turns_gemini3": ChatHistoryTurnsGemini3Sweep,
     "chat_history_turns_qwen": ChatHistoryTurnsQwenSweep,
     "chat_history_turns_qwen_30b": ChatHistoryTurnsQwen30BSweep,
+    "chat_history_turns_qwen_color": ChatHistoryTurnsQwenColorSweep,
     "temperature": TemperatureSweep,
     "rand_select_prob": RandSelectProbSweep,
     "full_rand_select_prob": FullRandSelectProbSweep,

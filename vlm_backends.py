@@ -1689,8 +1689,17 @@ def list_available_models() -> List[str]:
 
 
 def is_local_model(model: str) -> bool:
-    """Check if a model runs locally (vs API-based)."""
+    """Check if a model needs a locally-managed vLLM server (vs API-based or an
+    already-running external endpoint).
+
+    A ``remote:`` model points at an existing OpenAI-compatible server (e.g. one
+    started via serve_local_vlm.sh), so the orchestrator must NOT auto-start its
+    own competing server for it — return False so all workers just hit the shared
+    endpoint at VLLM_BASE_URL.
+    """
     model_lower = model.lower()
+    if model_lower.startswith("remote:"):
+        return False
     return "qwen" in model_lower
 
 

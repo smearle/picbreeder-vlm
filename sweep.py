@@ -2057,12 +2057,11 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         name=cfg.sweep_name,
     )
     if cfg.gpu:
-        # Check if any config uses a Qwen model, which requires specific GPUs (rtx8000)
-        # use_qwen = any("qwen" in run_cfg.model.lower() for run_cfg in configs)
         gres_params = {'slurm_gres': 'gpu:1'}
-        # if use_qwen:
-        #     gres_params['slurm_constraint'] = 'rtx8000'
-
+        # Pass an explicit GPU partition when one is configured (the default "cpu" is
+        # only meaningful for CPU sweeps; leaving it unset falls back to the cluster default).
+        if cfg.partition and cfg.partition != "cpu":
+            gres_params['slurm_partition'] = cfg.partition
         executor.update_parameters(**gres_params)
 
     jobs = [CollaborativeRun(cfg, run_cfg) for run_cfg in configs]

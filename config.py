@@ -1,4 +1,5 @@
 import copy
+import re
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,16 @@ from hydra.core.config_store import ConfigStore
 
 from constants import REPO_ROOT, SELECTION_BASELINES
 from utils import _ensure_absolute
+
+
+# Short, path-safe aliases for known local model ids, used in experiment dir names
+# so they match the existing scheme (e.g. .../model-qwen3-vl-30b-fp8_...).
+_MODEL_DIR_ALIASES = {
+    "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8": "qwen3-vl-30b-fp8",
+    "Qwen/Qwen3-VL-8B-Instruct": "qwen3-vl-8b",
+    "Qwen/Qwen3-VL-4B-Instruct": "qwen3-vl-4b",
+    "Qwen/Qwen3-VL-2B-Instruct": "qwen3-vl-2b",
+}
 
 
 @dataclass
@@ -22,13 +33,14 @@ class PicbreederConfig:
     always_include_branched_image: bool = False  # Keep selected branch image as reference once branch sample falls out of chat history
     always_include_archive_sample: bool = False  # Keep the branching archive-sample step in context once it falls out of chat history
     allow_restart_from_publications: bool = True  # Allow restart branching from this agent's own prior publications
-    model: str = "gemini-2.5-pro"
+    model: str = "remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"  # local vLLM server (serve_local_vlm.sh); was "gemini-2.5-pro"
     temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
     thinking_budget: int = -1
     request_rationale: bool = True  # Request natural-language reasoning in agent selections
     keep_query_images: bool = False  # Preserve query images/logs for post-run inspection
     compress_completed_agents: bool = True  # Zip completed agent dirs to reduce inode count
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
+    color_nudge: bool = False  # Append a Qwen-specific addendum nudging the model to use color (off by default)
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = 200  # Generations executed for each agent
     negative_anchors: Optional[str] = "negative_anchors"  # Filename for negative anchors list (in noun_lists/)
@@ -170,7 +182,15 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         if is_hack_mode:
             experiment_name = f"ag{cfg.agent_generations}"
         else:
-            experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_model-{cfg.model}"
+            # Build a path-safe model tag. Prefer the short registry alias for known
+            # local models so dirs match the existing naming scheme
+            # (remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 -> qwen3-vl-30b-fp8); otherwise
+            # strip any "remote:" prefix and replace path-unsafe chars ("/" and ":").
+            _model_for_tag = cfg.model[len("remote:"):] if cfg.model.startswith("remote:") else cfg.model
+            model_tag = _MODEL_DIR_ALIASES.get(
+                _model_for_tag, re.sub(r"[^A-Za-z0-9._-]", "-", _model_for_tag)
+            )
+            experiment_name = f"th{cfg.chat_history_turns}_ag{cfg.agent_generations}_model-{model_tag}"
 
         experiment_name += f"_tb{cfg.thinking_budget}"
         if cfg.goal != "familiar_objects":
@@ -201,6 +221,8 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
             experiment_name += "_include-branch-img"
         if cfg.always_include_archive_sample:
             experiment_name += "_include-archive-sample"
+        if cfg.color_nudge:
+            experiment_name += "_colornudge"
         # experiment_name += f"_{timestamp}"
         experiment_name += f"_s{cfg.seed}"
         relative = Path(cfg.log_dir) / experiment_name

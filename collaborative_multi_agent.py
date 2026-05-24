@@ -202,14 +202,28 @@ def _start_vlm_server(model: str, port: int) -> subprocess.Popen:
         'qwen3-vl-8b': 'qwen/qwen3-vl-8b-instruct'
     }
     full_model_name = full_model_names.get(model, model)
+    # Multi-GPU / memory knobs (env-gated so single-GPU and SLURM nodes are unaffected):
+    #   VLLM_TP_SIZE       tensor-parallel size across visible GPUs (default 1).
+    #                      e.g. 2 to shard a model across both local RTX 4090s; this is
+    #                      required to fit qwen3-vl-30b-fp8 and to give qwen3-vl-8b the
+    #                      full MAX_MODEL_LEN context (KV cache doesn't fit on one 24GB card).
+    #   VLLM_MAX_NUM_SEQS  cap concurrent sequences (avoids the sampler-warmup OOM that the
+    #                      30B FP8 MoE hits with vLLM's default of 256).
+    #   VLLM_GPU_MEM_UTIL  gpu-memory-utilization (default 0.9).
+    tp_size = os.environ.get("VLLM_TP_SIZE", "1")
+    gpu_mem_util = os.environ.get("VLLM_GPU_MEM_UTIL", "0.9")
     cmd = [
         sys.executable, "-m", "vllm.entrypoints.openai.api_server",
         "--model", full_model_name,
         "--port", str(port),
         "--trust-remote-code",
-        "--gpu-memory-utilization", "0.9",
+        "--gpu-memory-utilization", gpu_mem_util,
         "--max-model-len", f"{MAX_MODEL_LEN}",
+        "--tensor-parallel-size", tp_size,
     ]
+    max_num_seqs = os.environ.get("VLLM_MAX_NUM_SEQS")
+    if max_num_seqs:
+        cmd += ["--max-num-seqs", max_num_seqs]
     print(f"Starting vLLM server: {' '.join(cmd)}")
     log_path = f"vllm_server_{port}.log"
     log_file = open(log_path, "w")
@@ -1207,6 +1221,7 @@ class CollaborativeMultiAgentOrchestrator:
                 print(f"Error starting vLLM server: {e}")
                 if vllm_process:
                     vllm_process.kill()
+                traceback.print_exc()
                 raise e
 
         worker_states: List[WorkerState] = []
