@@ -197,7 +197,30 @@ def _wait_for_vlm_server(base_url: str, timeout: int = 600) -> bool:
     return False
 
 
-def _start_vlm_server(model: str, port: int) -> subprocess.Popen:
+def _max_model_len_for_history(chat_history_turns) -> int:
+    """Per-run context window keyed on chat_history_turns.
+
+    Full history (-1) accumulates every prior turn's images and can far exceed the
+    default window (overflow -> vLLM HTTP 400 -> job crash). Give it a much larger
+    window; bounded histories keep the lean MAX_MODEL_LEN so their per-job servers
+    reserve a small KV cache and throughput is unaffected. Since each job auto-starts
+    its OWN server, this is per-job and the th values don't share/compete.
+    """
+    try:
+        th = int(chat_history_turns)
+    except (TypeError, ValueError):
+        return MAX_MODEL_LEN
+    if th < 0:
+        return int(os.environ.get("VLLM_FULL_HISTORY_MODEL_LEN", "131072"))
+    return MAX_MODEL_LEN
+
+
+def _start_vlm_server(
+    model: str,
+    port: int,
+    max_model_len: Optional[int] = None,
+    max_num_seqs: Optional[str] = None,
+) -> subprocess.Popen:
     full_model_names = {
         'qwen3-vl-8b': 'qwen/qwen3-vl-8b-instruct'
     }
@@ -210,20 +233,25 @@ def _start_vlm_server(model: str, port: int) -> subprocess.Popen:
     #   VLLM_MAX_NUM_SEQS  cap concurrent sequences (avoids the sampler-warmup OOM that the
     #                      30B FP8 MoE hits with vLLM's default of 256).
     #   VLLM_GPU_MEM_UTIL  gpu-memory-utilization (default 0.9).
+    # max_model_len/max_num_seqs are passed per-job (see _max_model_len_for_history) so a
+    # full-history (-1) run gets a big window without bloating the bounded-history servers.
     tp_size = os.environ.get("VLLM_TP_SIZE", "1")
     gpu_mem_util = os.environ.get("VLLM_GPU_MEM_UTIL", "0.9")
+    if max_model_len is None:
+        max_model_len = int(os.environ.get("VLLM_MAX_MODEL_LEN", str(MAX_MODEL_LEN)))
     cmd = [
         sys.executable, "-m", "vllm.entrypoints.openai.api_server",
         "--model", full_model_name,
         "--port", str(port),
         "--trust-remote-code",
         "--gpu-memory-utilization", gpu_mem_util,
-        "--max-model-len", f"{MAX_MODEL_LEN}",
+        "--max-model-len", f"{max_model_len}",
         "--tensor-parallel-size", tp_size,
     ]
-    max_num_seqs = os.environ.get("VLLM_MAX_NUM_SEQS")
+    if max_num_seqs is None:
+        max_num_seqs = os.environ.get("VLLM_MAX_NUM_SEQS")
     if max_num_seqs:
-        cmd += ["--max-num-seqs", max_num_seqs]
+        cmd += ["--max-num-seqs", str(max_num_seqs)]
     print(f"Starting vLLM server: {' '.join(cmd)}")
     log_path = f"vllm_server_{port}.log"
     log_file = open(log_path, "w")
@@ -1191,7 +1219,15 @@ class CollaborativeMultiAgentOrchestrator:
                 # Resolve model name to ensure consistency between server and client
                 resolved_model = _resolve_qwen_model_name(self.config.model)
                 port = _find_free_port()
-                vllm_process = _start_vlm_server(resolved_model, port)
+                # Size the context window per chat_history_turns: full history (-1) needs a
+                # big window (else it overflows and the server 400s); bounded histories keep
+                # the small default so their servers stay lean (no throughput hit).
+                mml = _max_model_len_for_history(self.config.chat_history_turns)
+                mns = os.environ.get("VLLM_MAX_NUM_SEQS")
+                if mml > MAX_MODEL_LEN and not mns:
+                    # big-context server: cap concurrent seqs so warmup doesn't OOM
+                    mns = os.environ.get("VLLM_FULL_HISTORY_MAX_NUM_SEQS", "16")
+                vllm_process = _start_vlm_server(resolved_model, port, max_model_len=mml, max_num_seqs=mns)
                 base_url = f"http://localhost:{port}/v1"
                 if not _wait_for_vlm_server(base_url):
                     raise RuntimeError("Failed to start vLLM server.")
