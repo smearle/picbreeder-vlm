@@ -182,8 +182,12 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_vlm_server(base_url: str, timeout: int = 600) -> bool:
-    print(f"Waiting for vLLM server at {base_url}...")
+def _wait_for_vlm_server(base_url: str, timeout: Optional[int] = None) -> bool:
+    # Big models (e.g. Qwen3-VL-235B) can take >10 min to download + load shards.
+    # Env-override the readiness timeout for those; default keeps existing 600s.
+    if timeout is None:
+        timeout = int(os.environ.get("VLLM_SERVER_WAIT_TIMEOUT", "600"))
+    print(f"Waiting for vLLM server at {base_url} (timeout={timeout}s)...")
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
