@@ -2048,20 +2048,34 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         raise RuntimeError("submitit is required when using --slurm") from exc
 
     executor = submitit.AutoExecutor(folder=cfg.submitit_log_dir)
-    executor.update_parameters(
+    base_params = dict(
         timeout_min=cfg.timeout_hours * 60,
         mem_gb=cfg.mem_gb,
         cpus_per_task=cfg.num_proc,
-        # slurm_partition=cfg.partition,
         slurm_account=cfg.account,
         name=cfg.sweep_name,
+        # Auto-requeue preempted jobs so the sweep is fairshare-resilient; combined
+        # with the orchestrator's resume=True (auto when exp_dir exists) the run
+        # continues from its last saved agents.
+        slurm_requeue=True,
     )
+    # Optional QOS (e.g. "gpu168" for >48h 4-GPU/user jobs on torch).
+    qos = getattr(cfg, "qos", None)
+    if qos:
+        base_params["slurm_qos"] = qos
+    # Throttle concurrent array tasks (max_concurrent=0 = no throttle). Useful for
+    # one-at-a-time sequential sweeps so fairshare doesn't tank.
+    max_concurrent = int(getattr(cfg, "max_concurrent", 0) or 0)
+    if max_concurrent > 0:
+        base_params["slurm_array_parallelism"] = max_concurrent
+    executor.update_parameters(**base_params)
     if cfg.gpu:
-        gres_params = {'slurm_gres': 'gpu:1'}
+        gpus_per_task = int(getattr(cfg, "gpus_per_task", 1) or 1)
+        gres_params = {"slurm_gres": f"gpu:{gpus_per_task}"}
         # Pass an explicit GPU partition when one is configured (the default "cpu" is
         # only meaningful for CPU sweeps; leaving it unset falls back to the cluster default).
         if cfg.partition and cfg.partition != "cpu":
-            gres_params['slurm_partition'] = cfg.partition
+            gres_params["slurm_partition"] = cfg.partition
         executor.update_parameters(**gres_params)
 
     jobs = [CollaborativeRun(cfg, run_cfg) for run_cfg in configs]

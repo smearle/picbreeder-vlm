@@ -50,6 +50,11 @@ class SweepConfig(PicbreederConfig):
     timeout_hours: int = 120  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
     num_proc: int = 10  # Number of parallel processes per task
+    # SLURM controls for large/restricted jobs (e.g. torch's gpu168 QOS allows
+    # 4 GPU/user for >48h jobs); leave qos=None to use the cluster default.
+    qos: Optional[str] = None  # e.g. "gpu168" for 4-GPU/user >48h jobs
+    gpus_per_task: int = 1  # GPUs per array task (e.g. 4 for TP=4 on a 235B model)
+    max_concurrent: int = 0  # Cap concurrent array tasks (0 = unlimited); set 1 for sequential
     render_archive: bool = False  # If true, run evaluation instead of training
     eval_tree: bool = False  # If true, run phylogeny visualization instead of training
     eval_visual_coverage: bool = False  # If true, run visual coverage evaluation
@@ -253,6 +258,35 @@ class ChatHistoryTurnsQwenColorSweep(SweepConfig):
 
 
 @dataclass
+class Qwen235BBf16Sweep(SweepConfig):
+    """Longer-term sweep on Qwen3-VL-235B-A22B-Instruct (bf16) across history lengths.
+
+    Sequential (max_concurrent=1) on h200_tandon / qos=gpu168 with 4 GPUs per task
+    (TP=4) and --time=49h so each job stays under the gpu168 walltime band. Each job
+    auto-resumes on preemption (slurm_requeue=True + collaborative_multi_agent's
+    resume=True when dir exists). One seed for now; cross-eval natural via sweep_logs.
+    """
+    chat_history_turns: List[int] = field(default_factory=lambda: [1, -1, 10, 0, 2])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    model: List[str] = field(default_factory=lambda: ["Qwen/Qwen3-VL-235B-A22B-Instruct"])
+    seed: List[int] = field(default_factory=lambda: [0])
+    num_agents: int = 2_000
+    num_proc: int = 10
+    gpu: bool = True
+    gpus_per_task: int = 4
+    partition: str = "h200_tandon"
+    qos: str = "gpu168"
+    timeout_hours: int = 49  # >48h is required for gpu168
+    mem_gb: int = 480
+    max_concurrent: int = 1  # sequential -> fairshare-friendly + cross-eval natural
+    log_dir: str = "sweep_logs_qwen_235b_bf16"
+    novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.6, 0.93])
+    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.04, 0.080])
+
+
+@dataclass
 class TemperatureSweep(SweepConfig):
     temperature: List[Union[int, float, str]] = field(default_factory=lambda: [0.0, 1.0, 2.0, "random"])
     chat_history_turns: List[int] = field(default_factory=lambda: [1])
@@ -347,6 +381,7 @@ _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "chat_history_turns_qwen": ChatHistoryTurnsQwenSweep,
     "chat_history_turns_qwen_30b": ChatHistoryTurnsQwen30BSweep,
     "chat_history_turns_qwen_color": ChatHistoryTurnsQwenColorSweep,
+    "qwen_235b_bf16": Qwen235BBf16Sweep,
     "temperature": TemperatureSweep,
     "rand_select_prob": RandSelectProbSweep,
     "full_rand_select_prob": FullRandSelectProbSweep,

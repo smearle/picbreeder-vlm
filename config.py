@@ -19,6 +19,9 @@ _MODEL_DIR_ALIASES = {
     "Qwen/Qwen3-VL-8B-Instruct": "qwen3-vl-8b",
     "Qwen/Qwen3-VL-4B-Instruct": "qwen3-vl-4b",
     "Qwen/Qwen3-VL-2B-Instruct": "qwen3-vl-2b",
+    "Qwen/Qwen3-VL-32B-Instruct": "qwen3-vl-32b",
+    "Qwen/Qwen3-VL-235B-A22B-Instruct": "qwen3-vl-235b-bf16",
+    "Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": "qwen3-vl-235b-fp8",
 }
 
 
