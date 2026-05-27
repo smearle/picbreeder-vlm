@@ -2056,8 +2056,9 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         name=cfg.sweep_name,
         # Auto-requeue preempted jobs so the sweep is fairshare-resilient; combined
         # with the orchestrator's resume=True (auto when exp_dir exists) the run
-        # continues from its last saved agents.
-        slurm_requeue=True,
+        # continues from its last saved agents. submitit exposes requeue via
+        # additional_parameters rather than a direct slurm_requeue arg.
+        slurm_additional_parameters={"requeue": True},
     )
     # Optional QOS (e.g. "gpu168" for >48h 4-GPU/user jobs on torch).
     qos = getattr(cfg, "qos", None)
