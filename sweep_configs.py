@@ -273,7 +273,10 @@ class Qwen235BBf16Sweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["Qwen/Qwen3-VL-235B-A22B-Instruct"])
     seed: List[int] = field(default_factory=lambda: [0])
     num_agents: int = 2_000
-    num_proc: int = 10
+    # NYU torch cancels GPU jobs averaging <60% util over 2h. With num_proc=10 the
+    # 4xH200 sat ~52% (agents are CPU-bound between VLM calls). 32 keeps >=16 agents
+    # queued so the vLLM 16-slot batch (max_num_seqs=16, KV-limited on bf16) stays full.
+    num_proc: int = 32
     gpu: bool = True
     gpus_per_task: int = 4
     partition: str = "h200_tandon"
