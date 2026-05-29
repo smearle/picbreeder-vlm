@@ -54,6 +54,42 @@ class AgentRestartRequested(RuntimeError):
         self.payload = payload
 
 
+# Per-candidate fields in a branching decision's `input_parts` that we persist:
+# just enough to recover the archive-sample *membership, order and subset* the
+# agent saw. Everything else (image_path, caption, title, width/height,
+# average_rating, rating_count) is reconstructable from the archive entry at
+# `archive_index` on resume — and the ratings were never shown to the branching
+# agent in the first place, so they carry no decision provenance.
+_BRANCH_INPUT_PART_KEEP = (
+    "index", "archive_index", "archive_sample_index",
+    "subset", "subset_label", "kind", "leading_index",
+)
+
+
+def slim_branching_decision(decision: Any) -> Any:
+    """Strip the bulky, reconstructable fields from a branching decision.
+
+    Drops `archive_elite_names` (the full archive-title snapshot at branch time,
+    which is never read back) and reduces each `input_parts` entry to its
+    membership/order/subset pointers. This makes a persisted decision O(1)
+    instead of O(archive size), so the orchestrator's `agents_metadata.json`
+    stops growing as O(n_agents^2). The runner reconstructs the dropped fields
+    from the archive when it replays the decision (see `_set_archive_sample_reference`).
+    """
+    if not isinstance(decision, dict):
+        return decision
+    slim = dict(decision)
+    slim.pop("archive_elite_names", None)
+    parts = slim.get("input_parts")
+    if isinstance(parts, list):
+        slim["input_parts"] = [
+            {k: p[k] for k in _BRANCH_INPUT_PART_KEEP if k in p}
+            for p in parts
+            if isinstance(p, dict)
+        ]
+    return slim
+
+
 @dataclass
 class ImageVariantPaths:
     color: Path
@@ -618,19 +654,32 @@ class AgentRunner:
         if not isinstance(input_parts, list):
             return
 
+        archive_entries = self.archive_manager.entries
         image_pairs: List[Tuple[bytes, str]] = []
         for idx, part in enumerate(input_parts):
             if not isinstance(part, dict):
                 continue
             path_value = part.get("image_path")
+            caption = part.get("caption")
+            if not path_value:
+                # Slim decision: rebuild the path/caption from the archive entry
+                # this candidate pointed at (membership/order is all we stored).
+                ai = part.get("archive_index")
+                if ai is None:
+                    ai = part.get("archive_sample_index")
+                if isinstance(ai, int) and 0 <= ai < len(archive_entries):
+                    path_value = archive_entries[ai].get("image_path")
+                    if not caption:
+                        label = part.get("subset_label") or "Archive sample"
+                        caption = f"{label}: Image {part.get('index', idx)}"
             if not path_value:
                 continue
-            image_path = Path(path_value)
+            image_path = self._resolve_archive_image_path(path_value) or Path(path_value)
             try:
                 image_bytes = image_path.read_bytes()
             except OSError:
                 continue
-            caption = str(part.get("caption") or f"Archive sample {idx}")
+            caption = str(caption or f"Archive sample {idx}")
             image_pairs.append((image_bytes, f"[Archive sample] {caption}"))
 
         if not image_pairs:
@@ -2321,7 +2370,9 @@ class AgentRunner:
 
     def _write_branching_log(self, payload: Dict[str, Any]) -> None:
         path = self.logs_dir / "branching_selection.json"
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # Drop the reconstructable archive snapshot here too (downstream readers
+        # use only choice/selected_entry_ids/timestamp; resume rebuilds the rest).
+        path.write_text(json.dumps(slim_branching_decision(payload), indent=2), encoding="utf-8")
 
     def _write_branching_summary(self, decision: Dict[str, Any], seeded: int) -> None:
         summary = {

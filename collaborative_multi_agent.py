@@ -46,7 +46,7 @@ from itertools import count
 import hydra
 from hydra.utils import get_original_cwd
 
-from agent_runner import AgentRunner, AgentQuitRequested, AgentRestartRequested
+from agent_runner import AgentRunner, AgentQuitRequested, AgentRestartRequested, slim_branching_decision
 from config import PicbreederConfig, _deserialize_config_for_worker, _serialize_config_for_worker, ensure_valid_config
 import personalities
 
@@ -621,7 +621,15 @@ class CollaborativeMultiAgentOrchestrator:
     def _write_metadata_file(self, metadata: Dict[str, Any]) -> None:
         serializable = dict(metadata)
         agents = serializable.get("agents", {})
-        serializable["agents"] = {agent_id: asdict(entry) if isinstance(entry, AgentRecord) else entry for agent_id, entry in agents.items()}
+        out: Dict[str, Any] = {}
+        for agent_id, entry in agents.items():
+            d = asdict(entry) if isinstance(entry, AgentRecord) else (dict(entry) if isinstance(entry, dict) else entry)
+            # Persist only the lean branching decision; the bulky archive snapshot
+            # is reconstructable on resume (keeps this file from going O(n_agents^2)).
+            if isinstance(d, dict) and d.get("branching_decision"):
+                d["branching_decision"] = slim_branching_decision(d["branching_decision"])
+            out[agent_id] = d
+        serializable["agents"] = out
         atomic_write_json(self.metadata_path, serializable)
 
     def _reload_metadata(self) -> Dict[str, Any]:
