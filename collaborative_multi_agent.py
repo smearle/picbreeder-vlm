@@ -1913,6 +1913,11 @@ def _generate_personalities_for_run(cfg: PicbreederConfig) -> None:
 
 
 def run(cfg: PicbreederConfig) -> None:
+    # Wait for a remote vLLM daemon to come up if the agent is configured to use one.
+    # Idempotent when VLLM_BASE_URL is already responsive. No-op when model is local.
+    # Important: this lives in run() (not main()) so sweep.py:CollaborativeRun.__call__
+    # -- which invokes run() directly via submitit, bypassing main() -- also waits.
+    _wait_for_remote_vllm_daemon(cfg)
     if cfg.generate_personalities and not cfg.resume:
         _generate_personalities_for_run(cfg)
     apply_random_seed(cfg.seed)
@@ -2598,10 +2603,9 @@ def _wait_for_remote_vllm_daemon(cfg: PicbreederConfig) -> None:
 def main(cfg: PicbreederConfig) -> None:
     original_cwd = Path(get_original_cwd())
     cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
-    _wait_for_remote_vllm_daemon(cfg)
     os.makedirs(cfg.experiment_dir, exist_ok=True)
     print(f"Experiment directory: {cfg.experiment_dir}")
-    run(cfg)
+    run(cfg)  # run() invokes _wait_for_remote_vllm_daemon internally.
 
 
 if __name__ == "__main__":
