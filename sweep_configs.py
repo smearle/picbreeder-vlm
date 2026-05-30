@@ -273,10 +273,12 @@ class Qwen235BBf16Sweep(SweepConfig):
     model: List[str] = field(default_factory=lambda: ["Qwen/Qwen3-VL-235B-A22B-Instruct"])
     seed: List[int] = field(default_factory=lambda: [0])
     num_agents: int = 2_000
-    # NYU torch cancels GPU jobs averaging <60% util over 2h. With num_proc=10 the
-    # 4xH200 sat ~52% (agents are CPU-bound between VLM calls). 32 keeps >=16 agents
-    # queued so the vLLM 16-slot batch (max_num_seqs=16, KV-limited on bf16) stays full.
-    num_proc: int = 32
+    # NYU torch cancels GPU jobs averaging <60% util over 2h. num_proc=10 left util at
+    # ~52% and num_proc=32 STILL got th2 killed at 58% (email 2026-05-30). Short-prompt
+    # configs (th1/th2) finish each VLM call fast so CPU-side work between calls is a
+    # bigger fraction → vLLM's 16 batch slots starve unless many agents are queued.
+    # 64 gives generous slack (32+ agents waiting at any time over the 16-slot batch).
+    num_proc: int = 64
     gpu: bool = True
     gpus_per_task: int = 4
     partition: str = "h200_tandon"
@@ -285,6 +287,51 @@ class Qwen235BBf16Sweep(SweepConfig):
     mem_gb: int = 480
     max_concurrent: int = 1  # sequential -> fairshare-friendly + cross-eval natural
     log_dir: str = "sweep_logs_qwen_235b_bf16"
+    novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.6, 0.93])
+    noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.04, 0.080])
+
+
+@dataclass
+class Qwen235BBf16DaemonSweep(SweepConfig):
+    """CPU-only agent jobs that connect to a persistent vLLM daemon (daemon_vllm_235b.sbatch).
+
+    Avoids both pitfalls of Qwen235BBf16Sweep on torch:
+      - the 30-min vLLM cold-load each cycle (the daemon loads ONCE)
+      - the GPU-util killer firing at ~2h17 (agents have no GPU; the daemon's util
+        stays high because all 5 configs constantly feed it)
+
+    Resumes the SAME exp dirs as Qwen235BBf16Sweep: config.py:_resolve_model strips
+    the "remote:" prefix and resolves the alias so dir names match.
+
+    Launch order:
+      1. sbatch daemon_vllm_235b.sbatch ; wait for vllm_daemon.endpoint to exist
+         AND for the URL inside it to respond on /v1/models.
+      2. export VLLM_BASE_URL=$(cat vllm_daemon.endpoint) ; .venv/bin/python sweep.py
+         sweep_name=qwen_235b_bf16_daemon slurm=true partition=cpu_short
+    """
+    chat_history_turns: List[int] = field(default_factory=lambda: [1, -1, 10, 0, 2])
+    temperature: List[Union[int, float, str]] = field(default_factory=lambda: [1.0])
+    rand_select_prob: List[float] = field(default_factory=lambda: [0.0])
+    goal: List[str] = field(default_factory=lambda: ["familiar_objects"])
+    # The "remote:" prefix routes vlm_backends to the OpenAI-compatible client; the
+    # orchestrator's is_local_model returns False and skips _start_vlm_server.
+    model: List[str] = field(default_factory=lambda: ["remote:Qwen/Qwen3-VL-235B-A22B-Instruct"])
+    seed: List[int] = field(default_factory=lambda: [0])
+    num_agents: int = 2_000
+    # cpu_short QOS limits: MaxWall=6h, MaxCPUsPU=32. So 5 parallel configs × 6 cpus
+    # each = 30 CPUs (under the 32 cap), and submitit auto-requeues at the 6h boundary
+    # via slurm_additional_parameters={"requeue": True} + CollaborativeRun.checkpoint().
+    # 5 configs × 6 agents = 30 total agents queuing on the daemon's 16-slot batch —
+    # ~2x oversupply keeps the daemon saturated.
+    num_proc: int = 6
+    gpu: bool = False  # CPU-only agent jobs; daemon owns the GPUs.
+    gpus_per_task: int = 0
+    partition: str = "cpu_short"
+    qos: Optional[str] = None  # default QOS for cpu_short (only one available to our account)
+    timeout_hours: int = 6  # cpu_short MaxWall=6h
+    mem_gb: int = 8  # CPU-only HTTP client + NEAT/CPPN render is small
+    max_concurrent: int = 5  # all 5 configs in parallel (5 × 6 cpus = 30, under 32 cap)
+    log_dir: str = "sweep_logs_qwen_235b_bf16"  # same as GPU sweep -> resume picks up
     novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.6, 0.93])
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.04, 0.080])
 
@@ -385,6 +432,7 @@ _NAMED_SWEEPS: Dict[str, type[SweepConfig]] = {
     "chat_history_turns_qwen_30b": ChatHistoryTurnsQwen30BSweep,
     "chat_history_turns_qwen_color": ChatHistoryTurnsQwenColorSweep,
     "qwen_235b_bf16": Qwen235BBf16Sweep,
+    "qwen_235b_bf16_daemon": Qwen235BBf16DaemonSweep,
     "temperature": TemperatureSweep,
     "rand_select_prob": RandSelectProbSweep,
     "full_rand_select_prob": FullRandSelectProbSweep,

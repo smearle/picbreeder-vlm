@@ -2078,6 +2078,12 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         if cfg.partition and cfg.partition != "cpu":
             gres_params["slurm_partition"] = cfg.partition
         executor.update_parameters(**gres_params)
+    else:
+        # CPU-only sweeps (e.g. the daemon-mode Qwen235BBf16DaemonSweep where agents
+        # connect to an external vLLM and need no GPUs) — still honour an explicit
+        # partition so the job lands on cpu_short/cpu_prem instead of the default.
+        if cfg.partition and cfg.partition != "cpu":
+            executor.update_parameters(slurm_partition=cfg.partition)
 
     jobs = [CollaborativeRun(cfg, run_cfg) for run_cfg in configs]
     futures = executor.map_array(_execute_job, jobs)

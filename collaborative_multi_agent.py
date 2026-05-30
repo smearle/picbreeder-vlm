@@ -2529,10 +2529,76 @@ def _continual_agent_worker(
         except Exception:
             pass
 
+def _wait_for_remote_vllm_daemon(cfg: PicbreederConfig) -> None:
+    """When a remote: model is configured and VLLM_BASE_URL isn't set or isn't yet
+    responding, poll vllm_daemon.endpoint (written by daemon_vllm_*.sbatch at job start,
+    *before* the model loads) and then poll the URL's /models endpoint until it responds.
+
+    Lets CPU-only agent jobs be launched concurrently with the daemon's GPU job — the
+    agents queue or wait politely instead of failing their first VLM call. The wait
+    budget (REMOTE_VLLM_WAIT_TIMEOUT, default 7200 s) covers the daemon's PENDING time
+    + the ~30 min weight load.
+    """
+    model = str(getattr(cfg, "model", "") or "")
+    if not model.startswith("remote:"):
+        return
+    timeout = float(os.environ.get("REMOTE_VLLM_WAIT_TIMEOUT", "7200"))
+    deadline = time.time() + timeout
+
+    endpoint_candidates = [
+        Path("vllm_daemon.endpoint"),
+        Path("/scratch/se2161/picbreeder-vlm/vllm_daemon.endpoint"),
+    ]
+    base_url = os.environ.get("VLLM_BASE_URL", "").strip()
+    if not base_url:
+        printed_wait = False
+        while time.time() < deadline:
+            for p in endpoint_candidates:
+                try:
+                    if p.is_file():
+                        base_url = p.read_text().strip()
+                        break
+                except OSError:
+                    continue
+            if base_url:
+                break
+            if not printed_wait:
+                print(f"[remote-vllm] waiting for daemon endpoint file ({endpoint_candidates[1]}) ...")
+                printed_wait = True
+            time.sleep(15)
+        if not base_url:
+            raise RuntimeError(
+                f"Timed out after {timeout:.0f}s waiting for vllm_daemon.endpoint; "
+                "is the daemon sbatch job queued/running?"
+            )
+        os.environ["VLLM_BASE_URL"] = base_url
+        print(f"[remote-vllm] discovered daemon endpoint: {base_url}")
+
+    # Poll /models until the daemon's vLLM finishes loading and responds.
+    models_url = base_url.rstrip("/") + "/models"
+    print(f"[remote-vllm] probing {models_url} for readiness ...")
+    last_msg = ""
+    while time.time() < deadline:
+        try:
+            resp = requests.get(models_url, timeout=5)
+            if 200 <= resp.status_code < 300:
+                print(f"[remote-vllm] daemon ready at {base_url}")
+                return
+            msg = f"HTTP {resp.status_code}"
+        except Exception as exc:  # connection refused / read timeout — expected while loading
+            msg = f"{type(exc).__name__}: {exc}"
+        if msg != last_msg:
+            print(f"[remote-vllm] daemon not ready yet ({msg}); retrying ...")
+            last_msg = msg
+        time.sleep(15)
+    raise RuntimeError(f"Timed out after {timeout:.0f}s waiting for remote vLLM at {base_url}")
+
+
 @hydra.main(version_base="1.3", config_path=None, config_name="collaborative_base")
 def main(cfg: PicbreederConfig) -> None:
     original_cwd = Path(get_original_cwd())
     cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
+    _wait_for_remote_vllm_daemon(cfg)
     os.makedirs(cfg.experiment_dir, exist_ok=True)
     print(f"Experiment directory: {cfg.experiment_dir}")
     run(cfg)
