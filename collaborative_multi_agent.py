@@ -2541,13 +2541,14 @@ def _wait_for_remote_vllm_daemon(cfg: PicbreederConfig) -> None:
 
     Lets CPU-only agent jobs be launched concurrently with the daemon's GPU job — the
     agents queue or wait politely instead of failing their first VLM call. The wait
-    budget (REMOTE_VLLM_WAIT_TIMEOUT, default 7200 s) covers the daemon's PENDING time
-    + the ~30 min weight load.
+    budget (REMOTE_VLLM_WAIT_TIMEOUT, default 86400 s = 24h) is intentionally long so
+    that the SLURM walltime trips FIRST and submitit's auto-requeue kicks in (a
+    Python RuntimeError raised here, in contrast, FAILS the job permanently).
     """
     model = str(getattr(cfg, "model", "") or "")
     if not model.startswith("remote:"):
         return
-    timeout = float(os.environ.get("REMOTE_VLLM_WAIT_TIMEOUT", "7200"))
+    timeout = float(os.environ.get("REMOTE_VLLM_WAIT_TIMEOUT", "86400"))
     deadline = time.time() + timeout
 
     endpoint_candidates = [
