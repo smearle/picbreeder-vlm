@@ -252,6 +252,10 @@ def _start_vlm_server(
         "--max-model-len", f"{max_model_len}",
         "--tensor-parallel-size", tp_size,
     ]
+    # Bind to all interfaces only when this server is meant to accept follower-job
+    # connections (PUBLISH_VLM_ENDPOINT=1). Solo runs stay localhost-only.
+    if os.environ.get("PUBLISH_VLM_ENDPOINT", "").lower() in ("1", "true", "yes"):
+        cmd += ["--host", "0.0.0.0"]
     if max_num_seqs is None:
         max_num_seqs = os.environ.get("VLLM_MAX_NUM_SEQS")
     if max_num_seqs:
@@ -1243,6 +1247,22 @@ class CollaborativeMultiAgentOrchestrator:
                 base_url = f"http://localhost:{port}/v1"
                 if not _wait_for_vlm_server(base_url):
                     raise RuntimeError("Failed to start vLLM server.")
+
+                # Optionally publish the externally-reachable URL so concurrent CPU-only
+                # follower jobs (Qwen235BBf16DaemonSweep variants using remote:<hf-id>)
+                # can connect to this leader's vLLM. Gated on env to keep solo runs noise-free.
+                if os.environ.get("PUBLISH_VLM_ENDPOINT", "").lower() in ("1", "true", "yes"):
+                    try:
+                        public_host = subprocess.check_output(["hostname", "-s"], text=True).strip()
+                        public_url = f"http://{public_host}:{port}/v1"
+                        endpoint_path = Path("/scratch/se2161/picbreeder-vlm/vllm_daemon.endpoint")
+                        tmp = endpoint_path.with_suffix(endpoint_path.suffix + f".tmp.{os.getpid()}")
+                        tmp.write_text(public_url)
+                        tmp.replace(endpoint_path)
+                        print(f"[leader-vllm] published endpoint {public_url} -> {endpoint_path}")
+                        atexit.register(lambda p=endpoint_path: p.unlink(missing_ok=True))
+                    except Exception as exc:
+                        print(f"[leader-vllm] WARN: failed to publish endpoint: {exc}")
                 
                 # Wrap config payload
                 # Note: We need to modify the config to use 'remote:' prefix for the model
