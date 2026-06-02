@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Picbreeder-VLM · archive gallery prototype</title>
+<style>
+  :root { --accent:#FF6C00; --ink:#222; --muted:#777; --line:#e6e6e6; }
+  body { font-family:"PT Sans",-apple-system,system-ui,sans-serif; color:var(--ink);
+         margin:0; padding:24px 28px 64px; background:#fff; }
+  h1 { font-size:20px; font-weight:700; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 18px; }
+  .bar { display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+         padding:12px 0 16px; border-bottom:1px solid var(--line); margin-bottom:16px; }
+  select, button { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { cursor:pointer; }
+  .src { font-size:12px; color:var(--muted); }
+  .src code { background:#f4f4f4; padding:1px 5px; border-radius:4px; }
+  #status { font-size:13px; color:var(--muted); margin:6px 0 14px; }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr));
+          gap:6px; }
+  #grid img { width:100%; aspect-ratio:1/1; object-fit:cover; image-rendering:pixelated;
+              background:#f0f0f0; border:1px solid var(--line); border-radius:3px; }
+  .err { color:#c0392b; }
+</style>
+</head>
+<body>
+  <h1>Picbreeder-VLM &middot; archive gallery <span style="color:var(--accent)">prototype</span></h1>
+  <p class="sub">Published images for a run, fetched on demand from the Hugging Face dataset &mdash; no images bundled on the page.</p>
+
+  <div class="bar">
+    <label>Run: <select id="run"></select></label>
+    <span id="count" class="src"></span>
+    <span style="flex:1"></span>
+    <span class="src">source: <code id="base"></code></span>
+  </div>
+  <div id="status">Loading run index&hellip;</div>
+  <div id="grid"></div>
+
+<script>
+(function () {
+  const HF_BASE = "https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive/resolve/main";
+  const params = new URLSearchParams(location.search);
+  // Production default = HF. For local dev against a mirror: ?archiveBase=.  (or a localhost URL)
+  const ARCHIVE_BASE = (params.get("archiveBase") || HF_BASE).replace(/\/$/, "");
+
+  const $ = (id) => document.getElementById(id);
+  $("base").textContent = ARCHIVE_BASE;
+  const status = (msg, isErr) => { $("status").innerHTML = msg; $("status").className = isErr ? "err" : ""; };
+
+  async function getJSON(path) {
+    const r = await fetch(ARCHIVE_BASE + path, { mode: "cors" });
+    if (!r.ok) throw new Error(`HTTP ${r.status} for ${path}`);
+    return r.json();
+  }
+
+  function renderRun(run, manifest) {
+    $("count").textContent = manifest.n_images + " published images";
+    const grid = $("grid");
+    grid.textContent = "";
+    const frag = document.createDocumentFragment();
+    for (const fname of manifest.images) {
+      const img = document.createElement("img");
+      img.loading = "lazy";              // browser fetches only as cells scroll into view
+      img.decoding = "async";
+      img.src = `${ARCHIVE_BASE}/runs/${run}/images/${fname}`;
+      img.alt = fname;
+      frag.appendChild(img);
+    }
+    grid.appendChild(frag);
+    status(`Showing <b>${manifest.n_images}</b> images for <code>${run}</code> (lazy-loaded).`);
+  }
+
+  async function loadRun(run) {
+    status("Loading manifest&hellip;");
+    try {
+      const m = await getJSON(`/runs/${run}/manifest.json`);
+      renderRun(run, m);
+    } catch (e) { status("Failed to load run: " + e.message, true); }
+  }
+
+  (async function init() {
+    try {
+      const idx = await getJSON("/runs/index.json");
+      const sel = $("run");
+      idx.runs.forEach((r) => {
+        const o = document.createElement("option");
+        o.value = r.run; o.textContent = r.label || r.run;
+        sel.appendChild(o);
+      });
+      sel.onchange = () => loadRun(sel.value);
+      if (idx.runs.length) loadRun(idx.runs[0].run);
+      else status("Run index is empty.", true);
+    } catch (e) {
+      status("Failed to load run index: " + e.message +
+             (ARCHIVE_BASE === HF_BASE ? " (the HF dataset is still private — use ?archiveBase=. against a local mirror, or make the dataset public)" : ""), true);
+    }
+  })();
+})();
+</script>
+</body>
+</html>

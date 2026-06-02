@@ -1,0 +1,156 @@
+{
+ "dataset": "picbreeder-vlm/picbreeder-vlm-archive",
+ "n_runs": 15,
+ "runs": [
+  {
+   "run": "ag20_tb-1_scheme-toggle_randp2_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "random",
+   "seed": 4,
+   "label": "random",
+   "n_images": 3568,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_20",
+   "seed": 4,
+   "label": "mem_20",
+   "n_images": 3071,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_0",
+   "seed": 4,
+   "label": "mem_0",
+   "n_images": 3427,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_10",
+   "seed": 4,
+   "label": "mem_10",
+   "n_images": 3220,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "label": "default",
+   "n_images": 3206,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh_s4",
+   "arc": "agents_1000",
+   "seed": 4,
+   "label": "agents_1000",
+   "n_images": 2001,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh_s4",
+   "arc": "agents_100",
+   "seed": 4,
+   "label": "agents_100",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh_s4",
+   "arc": "agents_10",
+   "seed": 4,
+   "label": "agents_10",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.05",
+   "seed": 4,
+   "label": "noise_0.05",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.25",
+   "seed": 4,
+   "label": "noise_0.25",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.5",
+   "seed": 4,
+   "label": "noise_0.5",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.75",
+   "seed": 4,
+   "label": "noise_0.75",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_1.0",
+   "seed": 4,
+   "label": "noise_1.0",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th2_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_2",
+   "seed": 4,
+   "label": "mem_2",
+   "n_images": 2691,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "human",
+   "arc": "human",
+   "seed": null,
+   "label": "Human Picbreeder archive",
+   "n_images": 9375,
+   "has": {
+    "sprite": true
+   }
+  }
+ ]
+}

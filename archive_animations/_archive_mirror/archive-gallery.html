@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Picbreeder-VLM · published archive</title>
+<style>
+  :root { --accent:#FF6C00; --ink:#222; --muted:#777; --line:#e6e6e6; }
+  body { font-family:"PT Sans",-apple-system,system-ui,sans-serif; color:var(--ink);
+         margin:0; padding:22px 26px 64px; background:#fff; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .top { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+         border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:14px; }
+  h1 { font-size:19px; font-weight:700; margin:0; }
+  .top .back { font-size:13px; }
+  .meta { color:var(--muted); font-size:13px; margin:0 0 12px; }
+  .meta code { background:#f4f4f4; padding:1px 5px; border-radius:4px; }
+  #status { font-size:13px; color:var(--muted); margin:8px 0 14px; }
+  #status.err { color:#c0392b; }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:6px; }
+  #grid img { width:100%; aspect-ratio:1/1; object-fit:cover; image-rendering:pixelated;
+              background:#f0f0f0; border:1px solid var(--line); border-radius:3px; cursor:zoom-in; }
+  #lb { position:fixed; inset:0; background:rgba(0,0,0,.85); display:none;
+        align-items:center; justify-content:center; cursor:zoom-out; }
+  #lb.on { display:flex; }
+  #lb img { max-width:90vw; max-height:90vh; image-rendering:pixelated; background:#fff; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1 id="h1">Published archive</h1>
+    <a class="back" id="back" href="./">&larr; back to the article</a>
+  </div>
+  <p class="meta"><span id="metatext"></span> <span style="float:right">source: <code id="base"></code></span></p>
+  <div id="status">Loading&hellip;</div>
+  <div id="grid"></div>
+  <div id="lb"><img alt=""></div>
+
+<script>
+(function () {
+  const HF_BASE = "https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive/resolve/main";
+  const params = new URLSearchParams(location.search);
+  // Production default = HF. Local dev against a mirror: ?archiveBase=.  (or a localhost URL)
+  const ARCHIVE_BASE = (params.get("archiveBase") || HF_BASE).replace(/\/$/, "");
+  const wantRun  = params.get("run");
+  const wantArc  = params.get("arc");
+  const wantSeed = params.get("seed");
+
+  const $ = (id) => document.getElementById(id);
+  $("base").textContent = ARCHIVE_BASE;
+  const status = (m, err) => { $("status").innerHTML = m; $("status").className = err ? "err" : ""; };
+
+  async function getJSON(path) {
+    const r = await fetch(ARCHIVE_BASE + path, { mode: "cors" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+
+  // Resolve the target run: explicit ?run= wins; otherwise match ?arc=&seed= against the index.
+  async function resolveRun() {
+    if (wantRun) return { run: wantRun };
+    const idx = await getJSON("/runs/index.json");
+    if (wantArc) {
+      let entry = idx.runs.find((r) =>
+        r.arc === wantArc && (wantSeed == null || String(r.seed) === String(wantSeed)));
+      if (!entry) entry = idx.runs.find((r) => r.arc === wantArc); // any seed for this arc
+      return entry || null;        // requested arc not in the dataset yet — don't silently swap runs
+    }
+    return idx.runs[0] || null;     // bare gallery -> first available run
+  }
+
+  function lightbox(src) {
+    const lb = $("lb"); lb.querySelector("img").src = src; lb.classList.add("on");
+  }
+  $("lb").addEventListener("click", () => $("lb").classList.remove("on"));
+
+  function render(entry, manifest) {
+    const run = entry.run;
+    $("h1").textContent = "Published archive";
+    if (entry.label) { document.title = "Picbreeder-VLM · " + entry.label;
+      $("h1").textContent = entry.label; }
+    const c = entry.config || manifest.config || {};
+    const bits = [];
+    if (c.model) bits.push(c.model);
+    if (c.memory_cl != null) bits.push("memory CL=" + c.memory_cl);
+    if (c.noise_eps != null) bits.push("noise &epsilon;=" + c.noise_eps);
+    if (c.personalities) bits.push(c.personalities + " personalities");
+    if (c.seed != null) bits.push("seed " + c.seed);
+    $("metatext").innerHTML = manifest.n_images + " published images" +
+      (bits.length ? " &middot; " + bits.join(", ") : "") + " &middot; <code>" + run + "</code>";
+
+    const grid = $("grid"); grid.textContent = "";
+    const frag = document.createDocumentFragment();
+    for (const f of manifest.images) {
+      const img = document.createElement("img");
+      img.loading = "lazy"; img.decoding = "async";
+      img.src = ARCHIVE_BASE + "/runs/" + run + "/images/" + f;
+      img.alt = f;
+      img.addEventListener("click", () => lightbox(img.src));
+      frag.appendChild(img);
+    }
+    grid.appendChild(frag);
+    status("Showing <b>" + manifest.n_images + "</b> published images (lazy-loaded; click any to enlarge).");
+  }
+
+  (async function () {
+    try {
+      const entry = await resolveRun();
+      if (!entry) {
+        return status(wantArc
+          ? "This run isn't in the dataset yet (arc “" + wantArc + "”" +
+            (wantSeed ? ", seed " + wantSeed : "") + "). More runs are being uploaded."
+          : "No run specified and the index is empty.", true);
+      }
+      const manifest = await getJSON("/runs/" + entry.run + "/manifest.json");
+      render(entry, manifest);
+    } catch (e) {
+      const priv = ARCHIVE_BASE === HF_BASE;
+      status("Couldn't load this archive (" + e.message + ")." +
+        (priv ? " The dataset may not be public yet — this page goes live when the Hugging Face dataset is made public."
+              : ""), true);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
