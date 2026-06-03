@@ -2601,10 +2601,28 @@ def _wait_for_remote_vllm_daemon(cfg: PicbreederConfig) -> None:
         print(f"[remote-vllm] discovered daemon endpoint: {base_url}")
 
     # Poll /models until the daemon's vLLM finishes loading and responds.
+    # IMPORTANT: re-read the endpoint file each iteration so we follow leader
+    # restarts (the new leader picks a different node and port, so the URL
+    # changes). Without this, a follower that latched onto the previous leader's
+    # URL keeps probing a dead server until its 24h wait timeout.
     models_url = base_url.rstrip("/") + "/models"
     print(f"[remote-vllm] probing {models_url} for readiness ...")
     last_msg = ""
     while time.time() < deadline:
+        # Refresh from endpoint file in case the leader was restarted on a new node.
+        for p in endpoint_candidates:
+            try:
+                if p.is_file():
+                    fresh = p.read_text().strip()
+                    if fresh and fresh != base_url:
+                        print(f"[remote-vllm] endpoint file changed: {base_url} -> {fresh}")
+                        base_url = fresh
+                        os.environ["VLLM_BASE_URL"] = base_url
+                        models_url = base_url.rstrip("/") + "/models"
+                        last_msg = ""  # reset so the next probe error prints
+                    break
+            except OSError:
+                continue
         try:
             resp = requests.get(models_url, timeout=5)
             if 200 <= resp.status_code < 300:
