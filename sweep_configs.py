@@ -50,6 +50,10 @@ class SweepConfig(PicbreederConfig):
     timeout_hours: int = 120  # Wall-time limit in hours
     mem_gb: int = 30  # Memory requested per task (GB)
     num_proc: int = 10  # Number of parallel processes per task
+    # Allow oversubscribing num_proc agents onto fewer SLURM CPUs when the per-job
+    # cpu cap (e.g. cpu_short=32) limits raw cpu allocation but agents are mostly
+    # blocked on VLM I/O. None → fall back to num_proc (the legacy 1:1 tie).
+    cpus_per_task: Optional[int] = None
     # SLURM controls for large/restricted jobs (e.g. torch's gpu168 QOS allows
     # 4 GPU/user for >48h jobs); leave qos=None to use the cluster default.
     qos: Optional[str] = None  # e.g. "gpu168" for 4-GPU/user >48h jobs

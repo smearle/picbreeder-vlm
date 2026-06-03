@@ -2048,10 +2048,14 @@ def launch_slurm(cfg: SweepConfig, log_dir: Path, configs: Sequence[PicbreederCo
         raise RuntimeError("submitit is required when using --slurm") from exc
 
     executor = submitit.AutoExecutor(folder=cfg.submitit_log_dir)
+    # Honor SweepConfig.cpus_per_task when set so a job can oversubscribe num_proc
+    # agents onto fewer SLURM CPUs (e.g. cpu_short QOS caps cpus_per_task at 32 but
+    # agents are mostly blocked on VLM I/O — packing 64 agents on 32 cpus is fine).
+    cpus_per_task = getattr(cfg, "cpus_per_task", None) or cfg.num_proc
     base_params = dict(
         timeout_min=cfg.timeout_hours * 60,
         mem_gb=cfg.mem_gb,
-        cpus_per_task=cfg.num_proc,
+        cpus_per_task=cpus_per_task,
         slurm_account=cfg.account,
         name=cfg.sweep_name,
         # Auto-requeue preempted jobs so the sweep is fairshare-resilient; combined
