@@ -166,13 +166,15 @@ def create_numbered_grid(
     margin: int = 12,
     font_size: int = 22,
     selected: Optional[Sequence[int]] = None,
+    bg: Sequence[int] = (16, 16, 20, 255),
+    draw_numbers: bool = True,
 ) -> Image.Image:
     font = try_load_font(font_size)
     selected_set = set(int(s) for s in selected) if selected else set()
 
     width = (cols * thumb_size) + ((cols + 1) * margin)
     height = (rows * thumb_size) + ((rows + 1) * margin)
-    canvas = Image.new("RGBA", (width, height), (16, 16, 20, 255))
+    canvas = Image.new("RGBA", (width, height), tuple(bg))
     draw = ImageDraw.Draw(canvas)
 
     for i, image in enumerate(population_images):
@@ -182,8 +184,9 @@ def create_numbered_grid(
         y = margin + row * (thumb_size + margin)
         canvas.paste(image, (x, y))
 
-        label = str(i)
-        draw_label(draw, (x + 6, y + 6), label, font)
+        if draw_numbers:
+            label = str(i)
+            draw_label(draw, (x + 6, y + 6), label, font)
 
         if i in selected_set:
             draw.rectangle(
