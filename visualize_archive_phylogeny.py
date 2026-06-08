@@ -23,6 +23,7 @@ from utils import _ensure_absolute, _resolve_image_path, _resolve_source_experim
 VALID_FORMATS: Tuple[str, ...] = ("png", "pdf", "svg")
 VALID_MODES: Tuple[str, ...] = ("annotated", "images")
 VALID_SCOPES: Tuple[str, ...] = ("archive", "full")
+VALID_LAYOUTS: Tuple[str, ...] = ("dot", "radial")
 
 
 @dataclass
@@ -31,6 +32,7 @@ class ArchivePhylogenyConfig(PicbreederConfig):
     format: str = "pdf"
     mode: str = "annotated"
     scope: str = "archive"
+    layout: str = "dot"
     archive_limit: Optional[int] = None
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
@@ -97,13 +99,31 @@ def _validate_visualization_options(cfg: ArchivePhylogenyConfig) -> None:
         raise ValueError(f"mode must be one of {VALID_MODES}")
     if cfg.scope not in VALID_SCOPES:
         raise ValueError(f"scope must be one of {VALID_SCOPES}")
+    if cfg.layout not in VALID_LAYOUTS:
+        raise ValueError(f"layout must be one of {VALID_LAYOUTS}")
     if cfg.archive_limit is not None and cfg.archive_limit <= 0:
         raise ValueError("archive_limit must be a positive integer when provided")
 
 
-def _init_graph(output_format: str) -> Digraph:
-    graph = Digraph("archive_phylogeny", format=output_format)
-    graph.attr(rankdir="TB", bgcolor="white", nodesep="0.1", ranksep="1")
+SUPERROOT_ID = "__superroot__"
+
+
+def _init_graph(output_format: str, layout: str = "dot") -> Digraph:
+    if layout == "radial":
+        # twopi radiates levels outward in concentric rings from a single root.
+        # `ranksep` is the ring-to-ring radius; `overlap=false` lets Graphviz nudge
+        # nodes apart so labels/images don't collide on dense rings.
+        graph = Digraph("archive_phylogeny", format=output_format, engine="twopi")
+        # twopi already places each node on a depth ring and fans siblings out by
+        # angular wedge, so `overlap=true` (no post-pass) keeps the canvas
+        # proportional to tree depth. overlap=false (Prism) is O(minutes) on
+        # thousands of nodes; overlap=scale blows the canvas up until thumbnails
+        # vanish on rasterization. ranksep is the ring-to-ring radius.
+        graph.attr(bgcolor="white", overlap="true", splines="false",
+                   ranksep="2.4 equally", root=SUPERROOT_ID)
+    else:
+        graph = Digraph("archive_phylogeny", format=output_format)
+        graph.attr(rankdir="TB", bgcolor="white", nodesep="0.1", ranksep="1")
     graph.attr("node", fontname="Helvetica", fontsize="10", color="#333333")
     graph.attr("edge", color="#666666")
     return graph
@@ -288,9 +308,10 @@ def _build_archive_graph(
     output_format: str,
     mode: str,
     experiment_prefix: Optional[Path],
+    layout: str = "dot",
 ) -> Tuple[Digraph, Dict[str, List[str]], Dict[str, Any]]:
     entries = list(entries)
-    graph = _init_graph(output_format)
+    graph = _init_graph(output_format, layout)
     assigned_colors: Dict[str, str] = {}
     entries_by_id: Dict[str, Dict[str, Any]] = {}
     entry_order: Dict[str, int] = {}
@@ -387,6 +408,15 @@ def _build_archive_graph(
     for parent, child in sorted(edges):
         graph.edge(parent, child)
 
+    # twopi needs a single center; the archive is a forest of founders. Add an
+    # invisible super-root joined to every founder so they radiate from one hub
+    # (instead of twopi picking one founder and overlapping the rest).
+    if layout == "radial":
+        graph.node(SUPERROOT_ID, label="", shape="circle", width="0.01",
+                   style="invis")
+        for root in sorted(root_ids, key=lambda x: entry_order.get(x, 0)):
+            graph.edge(SUPERROOT_ID, root, style="invis")
+
     leaf_agent_lineages = _compute_leaf_agent_lineages(
         entries_by_id=entries_by_id,
         entry_order=entry_order,
@@ -427,6 +457,7 @@ def build_phylogeny_graph(
     mode: str,
     scope: str,
     experiment_prefix: Optional[Path],
+    layout: str = "dot",
 ) -> Tuple[Digraph, Dict[str, List[str]], Dict[str, Any]]:
     return _build_archive_graph(
         entries,
@@ -435,6 +466,7 @@ def build_phylogeny_graph(
         output_format=output_format,
         mode=mode,
         experiment_prefix=experiment_prefix,
+        layout=layout,
     )
 
 
@@ -474,6 +506,7 @@ def main(cfg: ArchivePhylogenyConfig) -> None:
         mode=validated_cfg.mode,
         scope=validated_cfg.scope,
         experiment_prefix=experiment_dir,
+        layout=validated_cfg.layout,
     )
 
     output_path = _resolve_output_path(validated_cfg, archive_dir, original_cwd)
