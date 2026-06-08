@@ -2,11 +2,11 @@
 #SBATCH --job-name=vllm_daemon_235b
 #SBATCH --account=torch_pr_84_tandon_advanced
 #SBATCH --partition=h200_tandon
-#SBATCH --qos=gpu168
+#SBATCH --qos=gpu48
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=480G
-#SBATCH --time=49:00:00
+#SBATCH --time=48:00:00
 #SBATCH --requeue
 #SBATCH --output=/scratch/se2161/picbreeder-vlm/daemon_logs/vllm_daemon_%j.out
 #SBATCH --error=/scratch/se2161/picbreeder-vlm/daemon_logs/vllm_daemon_%j.err
