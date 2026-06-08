@@ -910,6 +910,67 @@ class AgentRunner:
         finally:
             tmp_path.unlink(missing_ok=True)
 
+    def _save_population_genomes(
+        self,
+        generation: int,
+        genomes: List[Tuple[int, neat.DefaultGenome]],
+        selected_indices: Sequence[int],
+    ) -> None:
+        """Persist *every* candidate genome the VLM saw this generation (not just
+        the picks), so the exact grid is deterministically reconstructible for the
+        published dataset.
+
+        Genomes are tiny (~1 KB gzipped each) -- we store the genomes, never the
+        rendered images, which are regenerated on demand from genome + NEAT config.
+        Written as ``population_gen_NNN.pkl.gz`` alongside ``selected_gen_NNN``;
+        each cell carries its ``grid_index``, lineage, and a ``selected`` flag, plus
+        the mutation context needed to reproduce subsequent generations.
+        """
+        if not getattr(self.config, "save_full_populations", True):
+            return
+        if not genomes:
+            return
+
+        selected_set = {idx for idx in selected_indices if 0 <= idx < len(genomes)}
+        population_payload: List[Dict[str, Any]] = []
+        for idx, (genome_key, genome) in enumerate(genomes):
+            lineage_record = self._genome_lineage.get(genome_key, {})
+            population_payload.append(
+                {
+                    "grid_index": idx,
+                    "genome_key": genome_key,
+                    "genome": copy.deepcopy(genome),
+                    "selected": idx in selected_set,
+                    "parents": lineage_record.get("parents"),
+                    "source_entry_ids": lineage_record.get("source_entries"),
+                    "ancestor_genome_keys": lineage_record.get("ancestor_keys"),
+                }
+            )
+
+        snapshot = {
+            "generation": generation,
+            "selected_indices": list(selected_set),
+            "mutation_mode": self._mutation_mode,
+            "mutation_strength": getattr(self, "_mutation_strength", None),
+            "rows": self.rows,
+            "cols": self.cols,
+            "population": population_payload,
+        }
+        target_path = self.population_dir / f"population_gen_{generation:03d}.pkl.gz"
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=target_path.name,
+            suffix=".tmp",
+            dir=str(self.population_dir),
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        try:
+            with gzip.open(tmp_path, "wb", compresslevel=5) as handle:
+                pickle.dump(snapshot, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp_path.replace(target_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
     # ------------------------------------------------------------------
     # Population initialisation and branching
     # ------------------------------------------------------------------
@@ -2067,6 +2128,7 @@ class AgentRunner:
         self._generation_records[generation_i] = record
         self._log_generation_lineage(generation_i, genomes)
         self._save_selected_genomes(generation_i, genomes, selected_indices)
+        self._save_population_genomes(generation_i, genomes, selected_indices)
 
         publish_payload = None
         if self.selection_baseline == "none" and (not self.config.fixed_session_lengths or generation_i == self.generations - 1):

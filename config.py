@@ -41,6 +41,7 @@ class PicbreederConfig:
     thinking_budget: int = -1
     request_rationale: bool = True  # Request natural-language reasoning in agent selections
     keep_query_images: bool = False  # Preserve query images/logs for post-run inspection
+    save_full_populations: bool = True  # Persist every candidate genome per generation (not just picks) so the full grid the VLM saw is exactly reconstructible (deterministic re-render); genomes are tiny (~1 KB each) and images are regenerated on demand rather than stored
     compress_completed_agents: bool = True  # Zip completed agent dirs to reduce inode count
     scheme: str = "toggle"  # Rendering scheme: color, gray, or mono
     color_nudge: bool = False  # Append a Qwen-specific addendum nudging the model to use color (off by default)
