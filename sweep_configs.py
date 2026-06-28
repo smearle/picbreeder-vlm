@@ -291,7 +291,10 @@ class Qwen235BBf16Sweep(SweepConfig):
     mem_gb: int = 480
     max_concurrent: int = 1  # sequential -> fairshare-friendly + cross-eval natural
     log_dir: str = "sweep_logs_qwen_235b_bf16"
-    novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.6, 0.93])
+    # SigLIP2-B mean-pairwise-distance for normalized image embeddings sits at ~0.01-0.02
+    # for both Qwen and Gemini-2.5-pro archives (verified 2026-06-08 on 105 paper runs).
+    # The legacy [0.6, 0.93] range was a stale axis setting from a different metric.
+    novelty_ylim: Optional[List[float]] = field(default_factory=lambda: [0.0, 0.025])
     noun_ylim: Optional[List[float]] = field(default_factory=lambda: [0.04, 0.080])
 
 

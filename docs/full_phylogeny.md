@@ -15,8 +15,8 @@ The script automatically scans every pid folder under `--pb-dir`, reconstructs p
 
 ## Useful Flags
 
-- `--limit N` &mdash; restricts the number of pid folders that are inspected, which is handy for smoke tests.
-- `--min-edge-weight K` &mdash; hides edges that only appear in fewer than `K` distinct lineages so that heavily reused branches are easier to see.
-- `--rankdir {LR,TB}` &mdash; set to `TB` if you prefer the tree to grow top-to-bottom instead of left-to-right.
+- `--limit N`&mdash;restricts the number of pid folders that are inspected, which is handy for smoke tests.
+- `--min-edge-weight K`&mdash;hides edges that only appear in fewer than `K` distinct lineages so that heavily reused branches are easier to see.
+- `--rankdir {LR,TB}`&mdash;set to `TB` if you prefer the tree to grow top-to-bottom instead of left-to-right.
 
 Graphviz must be installed and discoverable in your `PATH` because the script calls `graphviz.Digraph.render(...)` under the hood. tqdm is used for progress reporting, and both dependencies are already listed in `requirements.txt`.
