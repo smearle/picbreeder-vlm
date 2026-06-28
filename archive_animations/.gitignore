@@ -1,0 +1,9 @@
+out/
+_work/
+# heavy generated asset / web-bundle dirs (deployed copies live in the blog repo)
+agent_life/
+system_overview/
+_rating_timelines/
+_lineage_genomes/
+_archive_mirror/site/
+_archive_mirror/site_grayscale_bak/
