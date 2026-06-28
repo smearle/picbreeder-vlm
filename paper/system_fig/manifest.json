@@ -1,0 +1,85 @@
+{
+  "run_dir": "/home/jupyter-smearle/picbreeder-vlm/sweep_logs/sweep/th2_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+  "ratings_run": "/home/jupyter-smearle/picbreeder-vlm/sweep_logs_bkp/th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s0",
+  "agent": "agent_781",
+  "publication_title": "Yellow Duck Portrait",
+  "parent_title": "Digital Canary",
+  "seed": 0,
+  "archive": {
+    "n_eligible": 773,
+    "n_placed": 100,
+    "cap": 100,
+    "grid_side": 10,
+    "cell_px": 80,
+    "parent_id": "img_000685",
+    "parent_included": true
+  },
+  "branching": {
+    "parent_snapshot_index": 20,
+    "parent_entry_id": "img_000685",
+    "parent_row": 1,
+    "parent_col": 4,
+    "samples_per_row": 5,
+    "n_rows": 5,
+    "fill": [
+      5,
+      5,
+      5,
+      5,
+      5
+    ],
+    "row_labels": [
+      "top-rated",
+      "best-new",
+      "most-\\\\branched",
+      "latest",
+      "random"
+    ]
+  },
+  "gen0": {
+    "gen": 19,
+    "selected_indices": [
+      13,
+      5,
+      10
+    ],
+    "n_branched_parents": 0,
+    "color_enabled": true
+  },
+  "rated_examples": {
+    "picked": [
+      {
+        "id": "img_000162",
+        "title": "Chrome Swan",
+        "rating": 5
+      },
+      {
+        "id": "img_000061",
+        "title": "Chrome Heron",
+        "rating": 4
+      },
+      {
+        "id": "img_000143",
+        "title": "Abstract Orca",
+        "rating": 4
+      },
+      {
+        "id": "img_000059",
+        "title": "Chromatic Seahorse",
+        "rating": 3
+      },
+      {
+        "id": "img_000003",
+        "title": "Minimalist Egg",
+        "rating": 2
+      },
+      {
+        "id": "img_000015",
+        "title": "Mechanical Eye",
+        "rating": 1
+      }
+    ],
+    "cutoff_added_at": "2026-01-06T18:41:04.215596",
+    "n_eligible": 168
+  }
+}

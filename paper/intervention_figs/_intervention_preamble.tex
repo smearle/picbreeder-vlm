@@ -1,0 +1,42 @@
+% Shared TikZ styling for the intervention-triptych figure, matching the look of
+% paper/system_fig/system_overview.tex and paper/metric_figs. \input after
+% \documentclass{standalone}.
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes.geometric,arrows.meta,calc,fit,backgrounds,fadings,decorations.pathreplacing}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage[T1]{fontenc}
+
+\tikzset{
+  >=Stealth,
+  box/.style       = {draw, rounded corners=2pt, align=center,
+                      inner sep=4pt, line width=0.6pt, fill=white},
+  vlmbox/.style    = {box, fill=blue!5,   draw=blue!55!black},
+  mutbox/.style    = {box, fill=green!6,  draw=green!55!black},
+  databox/.style   = {box, fill=black!3,  draw=black!45},
+  % persona pool/sample tinted orange to match the swept-knob badge (the number of
+  % personalities is the thing the Agents sweep varies), echoing Noise's orange gate
+  perscard/.style  = {box, fill=orange!12, draw=orange!75!black, align=left},
+  img/.style       = {draw=black!45, line width=0.4pt, inner sep=0, outer sep=0},
+  cell/.style      = {draw=black!45, line width=0.35pt, fill=black!8,
+                      minimum size=0.6cm, inner sep=0},
+  % the selected candidate is tinted to match the (blue) VLM-selection node
+  selcell/.style   = {cell, draw=blue!55!black, line width=1.1pt, fill=blue!12},
+  % faded grid + selection, used for the "past turns" stacked behind in Memory;
+  % faint orange tint ties the stacked turns (whose COUNT is the swept CL knob) to
+  % the orange sweep badge, matching Noise's orange gate
+  ghostcell/.style = {draw=orange!40, line width=0.3pt, fill=orange!6,
+                      minimum size=0.6cm, inner sep=0},
+  ghostsel/.style  = {ghostcell, draw=blue!35, line width=0.7pt, fill=blue!7},
+  pipe/.style      = {->, line width=0.7pt, draw=black!75},
+  loop/.style      = {->, line width=0.7pt, draw=blue!55!black, dashed},
+  feed/.style      = {->, line width=0.9pt, draw=orange!75!black},
+  memfeed/.style   = {->, line width=0.9pt, draw=violet!55!black},
+  frame/.style     = {draw=black!45, line width=0.5pt, rounded corners=4pt,
+                      inner sep=10pt},
+  colTitle/.style  = {font=\bfseries, anchor=south west},
+  subTitle/.style  = {font=\scriptsize\itshape, anchor=north west, text=black},
+  knob/.style      = {box, fill=orange!12, draw=orange!75!black, line width=0.8pt,
+                      font=\scriptsize, anchor=south},
+}

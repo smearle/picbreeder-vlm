@@ -1,0 +1,182 @@
+% Combined "stacked embedding spaces" figure: the same archive is embedded into
+% three metric spaces, drawn as a stack of identical isometric planes, each
+% measured by its own operation (covering radius / nearest-noun).
+% Designed so an animation can flip which plane is on top.
+% Assets (*_iso.png, cap_thumb_*.png, _recall_meta.tex, _semantic_meta.tex) built
+% by tools/build_metric_fig_assets.py --only iso recall.
+% Compile: pdflatex metric_spaces_stack.tex
+\documentclass[border=8pt, varwidth=false]{standalone}
+\input{_metric_preamble}
+
+\IfFileExists{_recall_meta.tex}{\input{_recall_meta.tex}}{%
+  \def\recallNumNouns{1{,}823}}
+\IfFileExists{_semantic_meta.tex}{\input{_semantic_meta.tex}}{%
+  \def\captionCells{0/{A black and white line drawing of the silhouette of a sports car.},
+    1/{A black and white drawing of a Stormtrooper helmet.},
+    2/{A minimalist black and white line drawing of a cat looking up.}}}
+
+% per-plane accent colours (match the baked PNG overlays)
+\definecolor{visAcc}{HTML}{C01515}
+\definecolor{semAcc}{HTML}{B8860B}
+\definecolor{recAcc}{HTML}{7A52C0}
+
+% throughline edge colours: one for the image domain (archive images and their
+% embeddings), one for the text domain (VLM captions, THINGS nouns and their
+% text embeddings).  The VLM captioner is the single crossover where the image
+% domain (blue) turns into the text domain (orange).
+\definecolor{imgEdge}{HTML}{1F6FB2}
+\definecolor{txtEdge}{HTML}{C8721A}
+
+\begin{document}
+\begin{tikzpicture}[font=\footnotesize, x=1cm, y=1cm,
+  plabel/.style={anchor=west, align=left, inner sep=2pt},
+  chip/.style={scorebox, anchor=north west, align=left, font=\scriptsize},
+  % orange feed line WITHOUT an arrowhead, for intermediate / merging segments
+  % (arrowheads live only on the final segment that lands on a node/plane)
+  feedline/.style={line width=0.9pt, draw=orange!75!black},
+  % modality-coloured edges: image domain (blue) vs text domain (orange).
+  % *feed = lands on a node/plane (arrowhead); *line = intermediate (no head).
+  imgfeed/.style={->, line width=0.9pt, draw=imgEdge},
+  imgline/.style={line width=0.9pt, draw=imgEdge},
+  txtfeed/.style={->, line width=0.9pt, draw=txtEdge},
+  txtline/.style={line width=0.9pt, draw=txtEdge}]
+
+% ---- geometry ----
+\def\PW{8.2cm}      % plane image width (all three PNGs are identical)
+\def\Cx{21}         % shared plane centre x
+% row order top->bottom: Image (visual), Image&Text (recall), Text (semantic).
+\def\Vy{0}          % image      plane north y  (top)
+\def\Ry{-3.4}       % image+text plane north y  (middle)  (even 3.4 spacing)
+\def\Sy{-6.8}       % text       plane north y  (bottom)
+\def\Lx{25.7}       % right-hand label column x
+% the planes are identical in height, so equal anchor spacing gives equal
+% vertical whitespace between them.  We no longer hardcode the plane mid-heights
+% (which drift whenever the *_iso.png aspect ratios change); instead the left-hand
+% feed sources and right-hand labels are anchored directly to each plane's .west
+% (see (vW)/(rW)/(sW) below), so every feed arrow is self-correctingly horizontal.
+
+% ===================== SOURCE: ARCHIVE =====================
+\node[frame, minimum width=4.2cm, minimum height=4.2cm, anchor=north west]
+  (arch) at (0,-2.4) {\includegraphics[width=3.6cm]{archive_grid.png}};
+\node[colTitle] at (arch.north west) {Archive};
+
+% branch point: the archive feeds all three throughlines.  Its y is tied to the
+% archive box's true .east (keeping x=5.0) so the feeder line is dead flat
+% regardless of the framed box's exact height.
+\coordinate (br) at (5.0,0 |- arch.east);
+% archive emits images (blue) into both the image-embedding branch and the
+% VLM captioner branch; the captioner is where it turns into text (orange).
+\draw[imgline] (arch.east) -- (br);
+
+% ===================== STACKED ISOMETRIC PLANES =====================
+\node[anchor=north] (rP) at (\Cx,\Ry) {\includegraphics[width=\PW]{recall_iso.png}};
+\node[anchor=north] (sP) at (\Cx,\Sy) {\includegraphics[width=\PW]{semantic_iso.png}};
+\node[anchor=north] (vP) at (\Cx,\Vy) {\includegraphics[width=\PW]{visual_iso.png}};
+
+% Self-correcting plane-centre coordinates: each plane's true .west anchor sits
+% at its rendered vertical midpoint REGARDLESS of the PNG's aspect ratio.  Every
+% left-hand feed source and right-hand label hangs off these, so all three feed
+% arrows are guaranteed horizontal and land at the plane's left-edge midpoint.
+\coordinate (vW) at (vP.west);   % top    (image / Visual)
+\coordinate (rW) at (rP.west);   % middle (image+text / Recall)
+\coordinate (sW) at (sP.west);   % bottom (text / Semantic)
+% the joint Image&Text plane receives two SEPARATE arrows -- the reused image
+% embedding (blue) lands on its upper-left, the noun text embedding (orange) on
+% its lower-left -- so the two modalities stay visually distinct on the plane.
+\coordinate (rjImg) at ([xshift=1.6cm, yshift=0.45cm]rP.west);
+% rjTxt is tied to the text-embedding box's height (set below) so its inbound
+% arrow is flat; defined as a coordinate later, once tnN exists.
+
+% title naming each embedding space (Archive-style label), above the slab
+\node[colTitle] at ([xshift=3.0cm, yshift=0.04cm]vP.north west) {Image Embeddings};
+\node[colTitle] at ([xshift=3.0cm, yshift=0.04cm]sP.north west) {Text Embeddings};
+\node[colTitle] at ([xshift=3.0cm, yshift=0.04cm]rP.north west) {Image \& Text Embeddings};
+
+% ---- per-throughline transforms (each line shows its real operations) ----
+% Shared image embedding: the archive is embedded once here and the SAME
+% embedding feeds BOTH the Visual plane and the Recall plane (no re-embedding).
+% imN's y is tied to vP's .west via |- (keeping its original x): node-centre y
+% == vP.west y, so imN.east y == plane-entry y and the feed is dead flat.
+\node[embbox, anchor=west, text width=2.1cm] (imN) at (6.6,0 |- vW)
+  {image\\ embedding};
+\draw[imgfeed] (br) |- (imN.west);
+% the image embedding is reused: one straight, perfectly horizontal landing on
+% the Visual plane (top), and one smooth curve down to the joint Recall plane
+% (middle) where it lands on its own (no merge with the noun text embedding).
+\draw[imgfeed] (imN.east) -- ([xshift=1.6cm]vP.west);
+% flipped-S: leaves the image-embedding box horizontally, swings down, and
+% arrives horizontally on the joint plane (both tangents flat -> S, not a swoop)
+\draw[imgfeed] (imN.east) .. controls +(3.2,0) and +(-3.2,0) .. (rjImg);
+
+% Semantic: image -> VLM caption -> caption examples -> text embedding.
+% The Captions panel is defined first so the flanking VLM-caption and text-embed
+% boxes can be centred on it -> the (capN->cap) and (cap->tEmb) arrows are flat.
+% Only the first two captions are shown, with a vertical ellipsis below to signal
+% "and more" -- keeps the panel short so its title doesn't crowd the nouns row.
+\node[frame, anchor=north west, minimum width=5.0cm, minimum height=3.6cm]
+  (cap) at (8.5,-6.14) {};
+\node[colTitle, align=left] at (cap.north west) {Captions};
+\coordinate (cgo) at ([xshift=0.85cm, yshift=-0.95cm]cap.north west);
+\foreach \ic/\cp in \captionCells {%
+  \ifnum\ic<2\relax
+  \node[img] (ct-\ic) at ([yshift={-\ic*1.35cm}]cgo)
+    {\includegraphics[width=0.85cm]{cap_thumb_\ic.png}};
+  \node[anchor=west, text width=3.0cm, font=\scriptsize, align=left, inner sep=2pt]
+    at ([xshift=0.5cm]ct-\ic.east) {``\cp''};
+  \fi
+}
+% vertical ellipsis under the thumbnail column -> "and more captions"
+\node[font=\large] at ([yshift=-0.75cm]ct-1) {$\vdots$};
+% VLM-caption and text-embed boxes vertically centred on the Captions panel, so
+% both arrows that touch the panel are perfectly horizontal.
+\node[vlmbox, anchor=west, text width=1.85cm] (capN) at (5.4,0 |- cap.west)
+  {VLM caption};
+\node[embbox, anchor=west, text width=1.7cm] (tEmb) at (15.6,0 |- cap.east)
+  {text embed};
+% archive image enters the captioner (still image domain -> blue); everything
+% downstream of the VLM caption is text (orange).
+\draw[imgfeed] (br) |- (capN.west);
+\draw[txtfeed] (capN.east) -- (cap.west);
+\draw[txtfeed] (cap.east) -- (tEmb.west);
+% flat landing on the Semantic plane, raised to the text-embed box's height
+\draw[txtfeed] (tEmb.east) -- ([xshift=1.6cm]sP.west |- tEmb);
+
+% Recall: the THINGS noun set embedded into the SAME SigLIP2 text-image space,
+% joined with the reused archive image embedding -> joint text-image plane.
+% tnN's y tied to the Recall plane's .west via |- (keeping its x) so the
+% (tnN.east) feed is level.
+\node[embbox, anchor=west, text width=1.9cm] (tnN) at (10.5,0 |- rW)
+  {text\\ embedding};
+% THINGS box sits to the left; its bottom is aligned with the text-embedding
+% box's bottom (anchor south west tied to tnN's .south y).
+\node[databox, anchor=south west, text width=3.3cm, align=center]
+  (nouns) at (5.8,0 |- tnN.south) {%
+  \textbf{Nouns}\\[2pt]
+  {\itshape\scriptsize duck, teapot, eye, car,\\ owl, dolphin, parrot, \dots}};
+% lower-left landing on the joint plane, level with the text-embedding box so the
+% arrow is flat; separate from the image embedding's blue arrow above.
+\coordinate (rjTxt) at ([xshift=1.6cm]rP.west |- tnN);
+% flat arrow into the text-embedding box: leave the THINGS box's right edge at
+% the text-embedding box's height (lower than the box's mid) so the line is level.
+\draw[txtfeed] (nouns.east |- tnN.west) -- (tnN.west);
+% flat landing on the joint Image&Text plane, raised to the text-embedding box's
+% height, separate from the image embedding's blue arrow above.
+\draw[txtfeed] (tnN.east) -- (rjTxt);
+
+% ===================== PER-PLANE: METRIC NAME + SPACE + QUANTITY =====================
+% (metric names live here on the right; no absolute numbers -- only meaningful
+%  comparatively across runs)
+\node[plabel] (vt) at (\Lx,0 |- vW)
+  {\textbf{\textcolor{visAcc}{Visual Coverage}}};
+\node[chip] at ([yshift=-0.15cm]vt.south west) {$k$-covering radius};
+
+\node[plabel] (st) at (\Lx,0 |- sW)
+  {\textbf{\textcolor{semAcc}{Semantic Coverage}}};
+\node[chip] at ([yshift=-0.15cm]st.south west) {$k$-covering radius};
+
+\node[plabel] (rt) at (\Lx,0 |- rW)
+  {\textbf{\textcolor{recAcc}{Semantic Recall}}};
+\node[chip] at ([yshift=-0.15cm]rt.south west) {mean distance of nearest\\ image over all nouns};
+
+\end{tikzpicture}
+\end{document}

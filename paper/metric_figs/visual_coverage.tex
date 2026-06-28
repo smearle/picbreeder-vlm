@@ -1,0 +1,53 @@
+% Pipeline figure for the Visual Coverage metric, in the style of
+% paper/system_fig/system_overview.tex.
+%   Archive images --> SigLIP2 image embedding --> greedy farthest-point
+%   sampling of k representatives --> grow equal spheres until all points are
+%   covered --> k-covering radius (Visual Coverage score).
+% Assets (visual_scatter.png, _semantic_meta.tex) built by
+% tools/build_metric_fig_assets.py.  Compile: pdflatex visual_novelty.tex
+\documentclass[border=8pt, varwidth=false]{standalone}
+\input{_metric_preamble}
+
+\IfFileExists{_semantic_meta.tex}{\input{_semantic_meta.tex}}{%
+  \def\visualScore{0.606}\def\semanticScore{0.686}}
+
+\begin{document}
+\begin{tikzpicture}[font=\footnotesize, x=1cm, y=1cm]
+
+% ===================== SOURCE: ARCHIVE =====================
+\node[frame, minimum width=4.6cm, minimum height=4.6cm, anchor=north west]
+  (arch) at (0,0) {\includegraphics[width=4.0cm]{archive_grid.png}};
+\node[colTitle] at (arch.north west) {Archive};
+
+% ===================== EMBED =====================
+\node[embbox, anchor=west, text width=2.3cm]
+  (emb) at (5.7,-2.3) {SigLIP2\\ image\\ embedding};
+\draw[feed] (arch.east) -- node[above, font=\scriptsize] {2{,}000 images}
+  (arch.east -| emb.west);
+
+% ===================== EMBEDDING-SPACE PANEL =====================
+\node[frame, anchor=north west, minimum width=6.0cm, minimum height=6.0cm]
+  (sp) at (9.3,0) {};
+\node[colTitle, align=left] at (sp.north west)
+  {Image-embedding space};
+\node[anchor=north] (scat) at ([yshift=-0.15cm]sp.north)
+  {\includegraphics[width=5.0cm]{visual_scatter.png}};
+
+% legend at the bottom of the panel
+\node[anchor=south west, font=\scriptsize, align=left]
+  at ([xshift=0.15cm, yshift=0.1cm]sp.south west)
+  {\tikz\fill[red!80!black] (0,0) circle (2.2pt); ~$k$ representatives (farthest-point sampling)\\
+   \tikz\draw[red!80!black, line width=0.7pt] (0,0) circle (3pt); ~equal spheres grown until all covered $\Rightarrow$ radius};
+
+\draw[feed] (emb.east) -- node[above, align=center, font=\scriptsize]
+  {farthest-point\\ sampling} (emb.east -| sp.west);
+
+% ===================== SCORE =====================
+\node[scorebox, anchor=north, align=center]
+  (score) at ([yshift=-0.75cm]sp.south)
+  {\textbf{Visual Coverage} $\;=\;$ $k$-covering radius $(k=100)$\\[1pt]
+   {\scriptsize larger radius $\Rightarrow$ more spread-out (visually diverse) archive}};
+\draw[pipe] (sp.south) -- (sp.south |- score.north);
+
+\end{tikzpicture}
+\end{document}

@@ -1,0 +1,24 @@
+% Shared TikZ styling for the eval-metric pipeline figures, matching the look of
+% paper/system_fig/system_overview.tex. \input after \documentclass{standalone}.
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes.geometric,arrows.meta,calc,fit,backgrounds,fadings}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage[T1]{fontenc}
+
+\tikzset{
+  >=Stealth,
+  box/.style       = {draw, rounded corners=2pt, align=center,
+                      inner sep=4pt, line width=0.6pt, fill=white},
+  vlmbox/.style    = {box, fill=blue!5,    draw=blue!55!black},
+  embbox/.style    = {box, fill=violet!7,  draw=violet!60!black},
+  databox/.style   = {box, fill=black!3,   draw=black!45},
+  scorebox/.style  = {box, fill=orange!12, draw=orange!75!black, line width=0.9pt},
+  img/.style       = {draw=black!45, line width=0.4pt, inner sep=0, outer sep=0},
+  pipe/.style      = {->, line width=0.7pt, draw=black!75},
+  feed/.style      = {->, line width=0.9pt, draw=orange!75!black},
+  frame/.style     = {draw=black!45, line width=0.5pt, rounded corners=4pt,
+                      inner sep=10pt},
+  colTitle/.style  = {font=\bfseries, anchor=south west},
+}
