@@ -1,7 +1,26 @@
 {
  "dataset": "picbreeder-vlm/picbreeder-vlm-archive",
- "n_runs": 15,
+ "n_runs": 158,
  "runs": [
+  {
+   "run": "ag20_tb-1_scheme-toggle_randp2_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "random",
+   "seed": 3,
+   "label": "random",
+   "n_images": 3592,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": null,
+    "noise_eps": 2.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
+  },
   {
    "run": "ag20_tb-1_scheme-toggle_randp2_rmode-all_nopersonalities_fixed-sesh_s4",
    "arc": "random",
@@ -10,7 +29,74 @@
    "n_images": 3568,
    "has": {
     "sprite": true
-   }
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": null,
+    "noise_eps": 2.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "ag20_tb-1_scheme-toggle_randp2_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "random",
+   "seed": 5,
+   "label": "random",
+   "n_images": 3571,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": null,
+    "noise_eps": 2.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "human",
+   "arc": "human",
+   "seed": null,
+   "label": "Human Picbreeder archive",
+   "n_images": 9375,
+   "has": {
+    "sprite": true,
+    "genome_json": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": null,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": null
+   },
+   "canonical": false
+  },
+  {
+   "run": "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_20",
+   "seed": 3,
+   "label": "mem_20",
+   "n_images": 2702,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
@@ -20,7 +106,168 @@
    "n_images": 3071,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_20",
+   "seed": 5,
+   "label": "mem_20",
+   "n_images": 3365,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s6",
+   "arc": "mem_20",
+   "seed": 6,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 6
+   },
+   "canonical": true,
+   "label": "mem_20",
+   "n_images": 2002,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s7",
+   "arc": "mem_20",
+   "seed": 7,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 7
+   },
+   "label": "mem_20",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s8",
+   "arc": "mem_20",
+   "seed": 8,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 8
+   },
+   "canonical": true,
+   "label": "mem_20",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th-1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_20",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "mem_20",
+   "n_images": 158,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th-1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_20",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "mem_20",
+   "n_images": 868,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th-1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_20",
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": -1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "mem_20",
+   "n_images": 152,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_0",
+   "seed": 3,
+   "label": "mem_0",
+   "n_images": 3270,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
@@ -30,7 +277,282 @@
    "n_images": 3427,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_0",
+   "seed": 5,
+   "label": "mem_0",
+   "n_images": 3225,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s6",
+   "arc": "mem_0",
+   "seed": 6,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 6
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s7",
+   "arc": "mem_0",
+   "seed": 7,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 7
+   },
+   "label": "mem_0",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s8",
+   "arc": "mem_0",
+   "seed": 8,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 8
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_0",
+   "seed": 3,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "label": "mem_0",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th0_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_0",
+   "seed": 4,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "label": "mem_0",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th0_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_0",
+   "seed": 5,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "label": "mem_0",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th0_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_0",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_0",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_0",
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_0",
+   "seed": 3,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 861,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_0",
+   "seed": 4,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 871,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th0_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_0",
+   "seed": 5,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 0,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "mem_0",
+   "n_images": 860,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_10",
+   "seed": 3,
+   "label": "mem_10",
+   "n_images": 3224,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
@@ -40,7 +562,358 @@
    "n_images": 3220,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_10",
+   "seed": 5,
+   "label": "mem_10",
+   "n_images": 3122,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s6",
+   "arc": "mem_10",
+   "seed": 6,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 6
+   },
+   "label": "mem_10",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s7",
+   "arc": "mem_10",
+   "seed": 7,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 7
+   },
+   "label": "mem_10",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th10_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_10",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "mem_10",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th10_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_10",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "mem_10",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th10_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_10",
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 10,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "mem_10",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-flash-lite_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-2.5-flash-lite",
+   "config": {
+    "model": "gemini-2.5-flash-lite",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1003,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-flash-lite_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-2.5-flash-lite",
+   "config": {
+    "model": "gemini-2.5-flash-lite",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1005,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-flash-lite_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-flash-lite",
+   "config": {
+    "model": "gemini-2.5-flash-lite",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "label": "default",
+   "n_images": 1009,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-flash_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-2.5-flash",
+   "config": {
+    "model": "gemini-2.5-flash",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1002,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-flash_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-2.5-flash",
+   "config": {
+    "model": "gemini-2.5-flash",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1003,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-flash_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-flash",
+   "config": {
+    "model": "gemini-2.5-flash",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1005,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_goal-none_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_goal-none_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_goal-none_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_include-branch-img_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 2574,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_include-branch-img_s8",
+   "arc": "default",
+   "seed": 8,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 8
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 2558,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "label": "default",
+   "n_images": 3297,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
@@ -50,7 +923,54 @@
    "n_images": 3206,
    "has": {
     "sprite": true
-   }
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "label": "default",
+   "n_images": 3251,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh_s3",
+   "arc": "agents_1000",
+   "seed": 3,
+   "label": "agents_1000",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 1000,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh_s4",
@@ -60,7 +980,111 @@
    "n_images": 2001,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 1000,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh_s5",
+   "arc": "agents_1000",
+   "seed": 5,
+   "label": "agents_1000",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 1000,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh_s6",
+   "arc": "agents_1000",
+   "seed": 6,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 1000,
+    "seed": 6
+   },
+   "canonical": true,
+   "label": "agents_1000",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh_s7",
+   "arc": "agents_1000",
+   "seed": 7,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 1000,
+    "seed": 7
+   },
+   "label": "agents_1000",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh_s8",
+   "arc": "agents_1000",
+   "seed": 8,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 1000,
+    "seed": 8
+   },
+   "canonical": true,
+   "label": "agents_1000",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh_s3",
+   "arc": "agents_100",
+   "seed": 3,
+   "label": "agents_100",
+   "n_images": 2001,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 100,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh_s4",
@@ -70,7 +1094,111 @@
    "n_images": 2000,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 100,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh_s5",
+   "arc": "agents_100",
+   "seed": 5,
+   "label": "agents_100",
+   "n_images": 2003,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 100,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh_s6",
+   "arc": "agents_100",
+   "seed": 6,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 100,
+    "seed": 6
+   },
+   "canonical": true,
+   "label": "agents_100",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh_s7",
+   "arc": "agents_100",
+   "seed": 7,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 100,
+    "seed": 7
+   },
+   "canonical": true,
+   "label": "agents_100",
+   "n_images": 2001,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh_s8",
+   "arc": "agents_100",
+   "seed": 8,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 100,
+    "seed": 8
+   },
+   "canonical": true,
+   "label": "agents_100",
+   "n_images": 2002,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh_s3",
+   "arc": "agents_10",
+   "seed": 3,
+   "label": "agents_10",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 10,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh_s4",
@@ -80,7 +1208,111 @@
    "n_images": 2000,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 10,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh_s5",
+   "arc": "agents_10",
+   "seed": 5,
+   "label": "agents_10",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 10,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh_s6",
+   "arc": "agents_10",
+   "seed": 6,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 10,
+    "seed": 6
+   },
+   "canonical": true,
+   "label": "agents_10",
+   "n_images": 2001,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh_s7",
+   "arc": "agents_10",
+   "seed": 7,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 10,
+    "seed": 7
+   },
+   "canonical": true,
+   "label": "agents_10",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh_s8",
+   "arc": "agents_10",
+   "seed": 8,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 10,
+    "seed": 8
+   },
+   "canonical": true,
+   "label": "agents_10",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.05",
+   "seed": 3,
+   "label": "noise_0.05",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.05,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh_s4",
@@ -90,7 +1322,111 @@
    "n_images": 2000,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.05,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.05",
+   "seed": 5,
+   "label": "noise_0.05",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.05,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.25",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_0.25",
+   "n_images": 500,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.25",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_0.25",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.25",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "noise_0.25",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.25",
+   "seed": 3,
+   "label": "noise_0.25",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh_s4",
@@ -100,7 +1436,111 @@
    "n_images": 2000,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.25",
+   "seed": 5,
+   "label": "noise_0.25",
+   "n_images": 3001,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.5",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_0.5",
+   "n_images": 500,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.5",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_0.5",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.5",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "noise_0.5",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.5",
+   "seed": 3,
+   "label": "noise_0.5",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh_s4",
@@ -110,7 +1550,130 @@
    "n_images": 2000,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.5",
+   "seed": 5,
+   "label": "noise_0.5",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh_s7",
+   "arc": "noise_0.5",
+   "seed": 7,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 7
+   },
+   "label": "noise_0.5",
+   "n_images": 2001,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.75",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_0.75",
+   "n_images": 500,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.75",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_0.75",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.75",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "noise_0.75",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.75",
+   "seed": 3,
+   "label": "noise_0.75",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_rmode-all_nopersonalities_fixed-sesh_s4",
@@ -120,7 +1683,111 @@
    "n_images": 2000,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.75",
+   "seed": 5,
+   "label": "noise_0.75",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_1.0",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_1.0",
+   "n_images": 500,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_1.0",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_1.0",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_1.0",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "label": "noise_1.0",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   },
+   "canonical": false
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_1.0",
+   "seed": 3,
+   "label": "noise_1.0",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_rmode-all_nopersonalities_fixed-sesh_s4",
@@ -130,7 +1797,966 @@
    "n_images": 2000,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_1.0",
+   "seed": 5,
+   "label": "noise_1.0",
+   "n_images": 2000,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp-random_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
    }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp-random_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp-random_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp0_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp0_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp0_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp2_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 501,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp2_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_temp2_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "default",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.25_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.25",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_0.25",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.25_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.25",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_0.25",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.25_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.25",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "noise_0.25",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.5_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.5",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_0.5",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.5_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.5",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_0.5",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.5_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.5",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "noise_0.5",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.75_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.75",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_0.75",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.75_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.75",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_0.75",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp0.75_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.75",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 0.75,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "noise_0.75",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp1_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_1.0",
+   "seed": 3,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_1.0",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp1_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_1.0",
+   "seed": 4,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": "noise_1.0",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_ts224_randp1_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_1.0",
+   "seed": 5,
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 1,
+    "noise_eps": 1.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": "noise_1.0",
+   "n_images": 500,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1001,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1001,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-random_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "gemini-random",
+   "config": {
+    "model": "gemini-random",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1007,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-random_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "gemini-random",
+   "config": {
+    "model": "gemini-random",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1001,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-gemini-random_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "gemini-random",
+   "config": {
+    "model": "gemini-random",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.05_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.05",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.05,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": "noise_0.05",
+   "n_images": 1,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.05",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.05,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "noise_0.05",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.05",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.05,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "noise_0.05",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.05",
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.05,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "noise_0.05",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.1_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": null,
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.1,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": null,
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.1_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": null,
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.1,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": null,
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.1_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": null,
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.1,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": null,
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.25",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "noise_0.25",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.25",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "noise_0.25",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh_s5",
+   "arc": "noise_0.25",
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.25,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "noise_0.25",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh_s3",
+   "arc": "noise_0.5",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "noise_0.5",
+   "n_images": 881,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh_s4",
+   "arc": "noise_0.5",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 1,
+    "noise_eps": 0.5,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "noise_0.5",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "default",
+   "seed": 3,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 874,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "default",
+   "seed": 4,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 869,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th1_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "default",
+   "seed": 5,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 1,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "default",
+   "n_images": 866,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th2_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_2",
+   "seed": 3,
+   "label": "mem_2",
+   "n_images": 3193,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true
   },
   {
    "run": "th2_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
@@ -140,14 +2766,241 @@
    "n_images": 2691,
    "has": {
     "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true
+  },
+  {
+   "run": "th2_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_2",
+   "seed": 5,
+   "label": "mem_2",
+   "n_images": 2997,
+   "has": {
+    "sprite": true
+   },
+   "model": "gemini-2.5-pro",
+   "config": {
+    "model": "gemini-2.5-pro",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true
+  },
+  {
+   "run": "th2_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_2",
+   "seed": 4,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "label": "mem_2",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th2_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_2",
+   "seed": 5,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "label": "mem_2",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   },
+   "canonical": true
+  },
+  {
+   "run": "th2_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_2",
+   "seed": 3,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "mem_2",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
    }
   },
   {
-   "run": "human",
-   "arc": "human",
-   "seed": null,
-   "label": "Human Picbreeder archive",
-   "n_images": 9375,
+   "run": "th2_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_2",
+   "seed": 4,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "mem_2",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th2_ag20_model-qwen3-vl-30b-fp8_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_2",
+   "seed": 5,
+   "model": "qwen3-vl-30b-fp8",
+   "config": {
+    "model": "qwen3-vl-30b-fp8",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "mem_2",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th2_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_2",
+   "seed": 3,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "mem_2",
+   "n_images": 854,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th2_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": "mem_2",
+   "seed": 4,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": true,
+   "label": "mem_2",
+   "n_images": 863,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th2_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": "mem_2",
+   "seed": 5,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": true,
+   "label": "mem_2",
+   "n_images": 870,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th3_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": null,
+   "seed": 3,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 3,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": false,
+   "label": null,
+   "n_images": 853,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th3_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
+   "arc": null,
+   "seed": 4,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 3,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 4
+   },
+   "canonical": false,
+   "label": null,
+   "n_images": 860,
+   "has": {
+    "sprite": true
+   }
+  },
+  {
+   "run": "th3_ag20_model-qwen3-vl-8b_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5",
+   "arc": null,
+   "seed": 5,
+   "model": "qwen3-vl-8b",
+   "config": {
+    "model": "qwen3-vl-8b",
+    "memory_cl": 3,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 5
+   },
+   "canonical": false,
+   "label": null,
+   "n_images": 856,
    "has": {
     "sprite": true
    }
