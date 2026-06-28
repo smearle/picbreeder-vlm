@@ -54,6 +54,10 @@ CANON = "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed
 N_FEATURED = 12
 HF_REPO = "picbreeder-vlm/picbreeder-vlm-archive"
 
+# Human Picbreeder archive: its genomes/metadata aren't on HF as a sweep run;
+# build_human_genomes.py writes them here in the same archive_metadata format.
+HUMAN_META = REPO / "archive_animations/out/human_genomes/results/human/archive_metadata.json"
+
 
 def mean_rating(entry):
     rs = [r for r in (entry.get("vlm_ratings") or []) if isinstance(r, (int, float))]
@@ -134,6 +138,16 @@ def build_run(run: str, cfg: dict) -> dict | None:
         print(f"  [skip] no local metadata: {run}")
         return None
     entries = json.load(open(mp)).get("entries", [])
+    if not entries:
+        return None
+    usernames = trait_usernames_for(run) if cfg.get("personalities") else {}
+    return _assemble(run, cfg.get("model") or "gemini-2.5-pro",
+                     int(cfg.get("personalities") or 0), entries,
+                     genome_ids_for(run), usernames)
+
+
+def _assemble(run: str, model: str, traits: int, entries: list,
+              gids: set[str], usernames: dict, human: bool = False) -> dict | None:
     by_id = {e["id"]: e for e in entries}
     all_ids = set(by_id)
     if not all_ids:
@@ -148,7 +162,6 @@ def build_run(run: str, cfg: dict) -> dict | None:
     # Keep only nodes with a genome; re-link each survivor to its nearest
     # genome-having ancestor (contract edges through dropped nodes) so every
     # tile in the tree renders. Canon keeps all genomes → no change.
-    gids = genome_ids_for(run)
     ids = {i for i in all_ids if i in gids}
     if not ids:
         print(f"  [skip] no genomes for {run}")
@@ -169,8 +182,6 @@ def build_run(run: str, cfg: dict) -> dict | None:
     for pid in children:
         children[pid].sort(key=lambda c: (-len(children.get(c, [])), c))
 
-    usernames = trait_usernames_for(run) if cfg.get("personalities") else {}
-
     nodes = {}
     for e in entries:
         cid = e["id"]
@@ -179,7 +190,8 @@ def build_run(run: str, cfg: dict) -> dict | None:
         r, nr = mean_rating(e)
         nd = {
             "t": e.get("title") or "Untitled",
-            "a": agent_num(e.get("agent_id", "")),
+            # human archive has no per-agent attribution (agent_id == "human")
+            "a": "" if human else agent_num(e.get("agent_id", "")),
             "g": e.get("generation"),
             "r": r,
             "n": nr,
@@ -220,8 +232,8 @@ def build_run(run: str, cfg: dict) -> dict | None:
 
     return {
         "run": run,
-        "model": cfg.get("model") or "gemini-2.5-pro",
-        "traits": int(cfg.get("personalities") or 0),
+        "model": model,
+        "traits": traits,
         "n": len(nodes),
         "depth": max(depth.values()) if depth else 0,
         "roots": roots,
@@ -229,6 +241,22 @@ def build_run(run: str, cfg: dict) -> dict | None:
         "default": default,
         "nodes": nodes,
     }
+
+
+def build_human() -> dict | None:
+    """Lineage sidecar for the human Picbreeder archive (run id ``human``).
+
+    Unlike the VLM runs this isn't on HF as a sweep; its entries come from
+    build_human_genomes.py, which already records each image's in-archive
+    picbreeder parent in ``source_entry_ids`` and converts a genome for every
+    kept entry — so all entries have a renderable genome (gids = every id)."""
+    if not HUMAN_META.exists():
+        print(f"  [skip] no human metadata at {HUMAN_META} "
+              "(run tools/build_human_genomes.py first)")
+        return None
+    entries = json.load(open(HUMAN_META)).get("entries", [])
+    gids = {e["id"] for e in entries}
+    return _assemble("human", "Picbreeder (human)", 0, entries, gids, {}, human=True)
 
 
 def main():
@@ -255,6 +283,20 @@ def main():
         if run == CANON:
             canon_data = data
         print(f"  {data['n']:>5} imgs  depth {data['depth']:>2}  {run}")
+
+    # human Picbreeder archive — add its manifest entry so the detail-page lineage
+    # panel and the Family Tree (run=human) resolve. Its shard is NOT bundled in
+    # the blog like the VLM runs; it lives on HF next to the human genomes
+    # (results/human/tree.json.gz) and is uploaded by tools/push_human_genomes.py.
+    human_data = build_human()
+    if human_data is not None:
+        manifest_runs.append({
+            "run": "human", "label": "Human Picbreeder archive",
+            "group": "Picbreeder (human)", "model": human_data["model"],
+            "seed": None, "traits": 0,
+            "n": human_data["n"], "depth": human_data["depth"],
+        })
+        print(f"  {human_data['n']:>5} imgs  depth {human_data['depth']:>2}  human (shard -> HF)")
 
     # sort: canon-model first, then by model, then deepest/biggest trees first
     manifest_runs.sort(key=lambda m: (m["group"] != "gemini-2.5-pro", m["group"], -m["n"]))

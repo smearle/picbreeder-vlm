@@ -9,7 +9,7 @@ Then writes runs/index.json over all sprite runs present in the mirror.
 
 Idempotent: skips an arc whose sprite/layout.json already exists.
 """
-import json, shutil, subprocess, sys
+import json, os, shutil, subprocess, sys
 from pathlib import Path
 
 REPO = Path("/home/jupyter-smearle/picbreeder-vlm")
@@ -35,7 +35,10 @@ ARC_TO_RUN = {
     "agents_1000": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh",
     "random":      "ag20_tb-1_scheme-toggle_randp2_rmode-all_nopersonalities_fixed-sesh",
 }
-SEED = 4
+# Seeds to build a sprite set for, per arc. The metrics table averages over the
+# replicate seeds s3/s4/s5; the gallery now exposes all three via a seed sub-toggle.
+# Override with e.g. SEEDS=4 (env) to rebuild a single seed.
+SEEDS = [int(s) for s in os.environ.get("SEEDS", "3,4,5").split(",") if s.strip()]
 
 
 def run(cmd):
@@ -43,15 +46,15 @@ def run(cmd):
     subprocess.run([str(c) for c in cmd], check=True)
 
 
-def build_arc(arc):
-    full_run = f"{ARC_TO_RUN[arc]}_s{SEED}"
+def build_arc(arc, seed):
+    full_run = f"{ARC_TO_RUN[arc]}_s{seed}"
     sprite_dir = SITE / full_run / "sprite"
     if (sprite_dir / "layout.json").is_file():
-        print(f"[skip] {arc} ({full_run}) — sprite already built", flush=True)
+        print(f"[skip] {arc} s{seed} ({full_run}) — sprite already built", flush=True)
         return full_run
-    print(f"[build] {arc} -> {full_run}", flush=True)
-    lib = ASSETS / f"{arc}_s{SEED}_lib"
-    run([PY, REPO / "tools" / "build_archive_image_lib.py", f"{arc}_s{SEED}"])
+    print(f"[build] {arc} s{seed} -> {full_run}", flush=True)
+    lib = ASSETS / f"{arc}_s{seed}_lib"
+    run([PY, REPO / "tools" / "build_archive_image_lib.py", f"{arc}_s{seed}"])
     run([PY, REPO / "archive_animations" / "make_sprite_sheets.py",
          "--thumbs", lib / "thumbs", "--layout", lib / "layout.json",
          "--out", sprite_dir, "--ext", "webp"])
@@ -59,28 +62,43 @@ def build_arc(arc):
     return full_run
 
 
-def write_index(runs_by_arc):
+def write_index():
+    """Scan every sprite dir in the mirror and emit one index entry per (arc, seed).
+
+    Existing per-run fields (e.g. the human row's `base` pointing at gh-pages, and
+    its seed=None) are preserved by merging over the prior index.json.
+    """
+    idx_path = MIRROR_ROOT / "index.json"
+    prior = {}
+    if idx_path.is_file():
+        try:
+            prior = {e["run"]: e for e in json.load(open(idx_path)).get("runs", [])}
+        except Exception:
+            prior = {}
     entries = []
-    for arc, full_run in runs_by_arc.items():
-        lay = json.load(open(SITE / full_run / "sprite" / "layout.json"))
-        entries.append({"run": full_run, "arc": arc, "seed": SEED,
-                        "label": arc, "n_images": lay.get("n"),
-                        "has": {"sprite": True}})
+    for lay_path in sorted(SITE.glob("*/sprite/layout.json")):
+        full_run = lay_path.parent.parent.name
+        lay = json.load(open(lay_path))
+        e = dict(prior.get(full_run, {}))      # carry over base / extra fields
+        e.update({"run": full_run, "arc": lay.get("arc"), "seed": lay.get("seed"),
+                  "label": e.get("label", lay.get("arc")), "n_images": lay.get("n")})
+        has = dict(e.get("has", {})); has["sprite"] = True; e["has"] = has
+        entries.append(e)
     idx = {"dataset": "picbreeder-vlm/picbreeder-vlm-archive", "n_runs": len(entries),
            "runs": sorted(entries, key=lambda e: e["run"])}
-    (MIRROR_ROOT / "index.json").write_text(json.dumps(idx, indent=1))
-    print(f"[index] wrote {len(entries)} sprite runs -> {MIRROR_ROOT/'index.json'}", flush=True)
+    idx_path.write_text(json.dumps(idx, indent=1))
+    print(f"[index] wrote {len(entries)} sprite runs -> {idx_path}", flush=True)
 
 
 def main():
     only = sys.argv[1:] or list(ARC_TO_RUN)
-    built = {}
     for arc in only:
-        try:
-            built[arc] = build_arc(arc)
-        except Exception as e:
-            print(f"[ERROR] {arc}: {e}", flush=True)
-    write_index(built)
+        for seed in SEEDS:
+            try:
+                build_arc(arc, seed)
+            except Exception as e:
+                print(f"[ERROR] {arc} s{seed}: {e}", flush=True)
+    write_index()
     print("DONE", flush=True)
 
 

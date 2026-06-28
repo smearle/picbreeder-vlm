@@ -190,27 +190,33 @@ def _ensure_rasterfairy_ready():
     _RASTERFAIRY_READY = True
 
 
-def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path):
-    """Render a strictly rectangular grid using rasterfairy."""
+def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path, return_positions: bool = False):
+    """Render a strictly rectangular grid using rasterfairy.
+
+    When ``return_positions`` is True, also return ``(grid_positions, (cols, rows))``
+    where ``grid_positions[idx] == (col, row)`` is the cell each input image landed
+    in — letting callers record a cell -> image map for the rendered grid. Returns
+    ``None`` (or ``(None, None)`` in that mode) when the grid can't be built.
+    """
     coords = np.asarray(coords, dtype=float)
     if coords.size == 0:
-        return
+        return (None, None) if return_positions else None
 
     try:
         _ensure_rasterfairy_ready()
     except RuntimeError as exc:
         print(f"Skipping rectangular grid visualization: {exc}")
-        return
+        return (None, None) if return_positions else None
 
     grid_points, dims = rasterfairy.transformPointCloud2D(coords)
     if not isinstance(dims, (tuple, list)) or len(dims) != 2:
         print("Skipping rectangular grid visualization: rasterfairy returned invalid dimensions")
-        return
+        return (None, None) if return_positions else None
 
     cols, rows = (int(dims[0]), int(dims[1]))
     if cols <= 0 or rows <= 0:
         print("Skipping rectangular grid visualization: rasterfairy produced non-positive grid size")
-        return
+        return (None, None) if return_positions else None
 
     grid_positions = np.rint(np.asarray(grid_points, dtype=float)).astype(int)
 
@@ -252,6 +258,10 @@ def render_rectangular_grid(coords: np.ndarray, image_paths, outpath: Path):
 
     fig.savefig(outpath, dpi=150)
     plt.close(fig)
+
+    if return_positions:
+        return grid_positions, (cols, rows)
+    return None
 
 
 def render_simple_grid(image_paths, outpath: Path):

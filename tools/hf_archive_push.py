@@ -71,6 +71,60 @@ def parse_arc(run, cfg):
     return {0: "mem_0", 2: "mem_2", 10: "mem_10", 20: "mem_20"}.get(cl)
 
 
+def canonical_arc(run, cfg=None):
+    """Results-table arc key for a run, treating MODEL as an orthogonal axis (so a
+    gemini-3 run at th0 is still the 'mem_0' cell). Unlike parse_arc this has no
+    gemini-2.5-pro gate and resolves mem_20 (th-1) / random (randp2) correctly."""
+    cfg = cfg or parse_config(run)
+    if cfg.get("personalities"):
+        return f"agents_{cfg['personalities']}" if cfg["personalities"] in (10, 100, 1000) else None
+    eps = cfg.get("noise_eps") or 0.0
+    if eps == 2.0:
+        return "random"
+    if eps > 0:
+        return {0.05: "noise_0.05", 0.25: "noise_0.25", 0.5: "noise_0.5",
+                0.75: "noise_0.75", 1.0: "noise_1.0"}.get(eps)
+    cl = cfg.get("memory_cl")
+    if cl == 1:
+        return "default"
+    return {0: "mem_0", 2: "mem_2", 10: "mem_10", -1: "mem_20"}.get(cl)
+
+
+# Canonical sweep-run base per results-table arc (seed appended; model substituted
+# for the off-table gemini-3 / flash-lite replicas). Mirrors build_table_sprites.ARC_TO_RUN.
+ARC_BASE = {
+    "default":     "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh",
+    "noise_0.05":  "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.05_rmode-all_nopersonalities_fixed-sesh",
+    "noise_0.25":  "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.25_rmode-all_nopersonalities_fixed-sesh",
+    "noise_0.5":   "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.5_rmode-all_nopersonalities_fixed-sesh",
+    "noise_0.75":  "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp0.75_rmode-all_nopersonalities_fixed-sesh",
+    "noise_1.0":   "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_randp1_rmode-all_nopersonalities_fixed-sesh",
+    "mem_0":       "th0_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh",
+    "mem_2":       "th2_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh",
+    "mem_10":      "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh",
+    "mem_20":      "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh",
+    "agents_10":   "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits10_fixed-sesh",
+    "agents_100":  "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits100_fixed-sesh",
+    "agents_1000": "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_traits1000_fixed-sesh",
+    "random":      "ag20_tb-1_scheme-toggle_randp2_rmode-all_nopersonalities_fixed-sesh",
+}
+
+
+def is_canonical_run(run, cfg=None):
+    """True if `run` is the standard config for its arc (model/seed aside) — i.e. a
+    run the viewer should offer as a selectable arc+model+seed. Ablation variants that
+    happen to share an arc key (e.g. randp1 WITHOUT rmode-all -> noise_1.0) return False,
+    so they don't shadow the real run in the seed toggle (the hero still reaches them by
+    exact run name)."""
+    cfg = cfg or parse_config(run)
+    arc = canonical_arc(run, cfg)
+    base = ARC_BASE.get(arc)
+    if not base:
+        return False
+    expected = base.replace("model-gemini-2.5-pro", "model-" + (cfg.get("model") or "gemini-2.5-pro"))
+    return run == f"{expected}_s{cfg.get('seed')}"
+
+
 def pick_results(archive_dir):
     import fnmatch
     picked = []

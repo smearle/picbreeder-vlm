@@ -11,7 +11,7 @@ from pathlib import Path
 from huggingface_hub import HfApi
 
 sys.path.insert(0, str(Path(__file__).parent))
-from hf_archive_push import parse_config, parse_arc   # noqa: E402
+from hf_archive_push import parse_config, parse_arc, canonical_arc, is_canonical_run   # noqa: E402
 
 REPO = "picbreeder-vlm/picbreeder-vlm-archive"
 MIRROR_INDEX = Path("/home/jupyter-smearle/picbreeder-vlm/archive_animations/_archive_mirror/index.json")
@@ -46,8 +46,14 @@ def main():
             "embeddings": any(p.startswith(f"results/{run}/embeddings_") and p.endswith(".npz") for p in files),
             "results": any(p.startswith(f"results/{run}/") and p.endswith(".json") for p in files),
         }
-        out.append({"run": run, "arc": m.get("arc") or parse_arc(run, cfg),
+        # arc/model/canonical drive the viewer's arc+model+seed resolution and the
+        # seed/model sub-toggles. Trust the mirror's arc (canonical map) when present,
+        # else derive a model-independent arc; canonical filters out ablation variants.
+        arc = m.get("arc") or canonical_arc(run, cfg)
+        out.append({"run": run, "arc": arc,
                     "seed": m.get("seed", cfg.get("seed")),
+                    "model": m.get("model", cfg.get("model")),
+                    "canonical": m.get("canonical", is_canonical_run(run, cfg)),
                     "config": cfg, "n_images": m.get("n_images"), "has": has})
 
     idx = {"dataset": REPO, "n_runs": len(out),
