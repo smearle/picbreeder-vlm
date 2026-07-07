@@ -105,7 +105,7 @@ def main():
                          "(at one playback FPS) the same smoothness -- busier lineages just get more frames / run longer.")
     ap.add_argument("--n-min", type=int, default=72, help="floor on frames (caps shortest morph)")
     ap.add_argument("--n-max", type=int, default=720, help="ceiling on frames (caps sheet size / longest morph)")
-    ap.add_argument("--fw", type=int, default=88)
+    ap.add_argument("--fw", type=int, default=128)
     ap.add_argument("--hold-end", type=int, default=40)
     ap.add_argument("--quality", type=int, default=80)
     ap.add_argument("--pace", choices=["distance", "time"], default="distance",

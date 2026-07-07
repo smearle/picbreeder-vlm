@@ -25,7 +25,7 @@ from pathlib import Path
 from PIL import Image
 
 ATLAS_COLS = 8
-ATLAS_CELL = 88
+ATLAS_CELL = 128
 
 
 def find_root() -> Path:
