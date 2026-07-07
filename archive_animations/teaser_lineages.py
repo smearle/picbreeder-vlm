@@ -77,8 +77,9 @@ def build_full_lineage(run_dir: Path, teaser_id: str, workdir: Path):
     meta = json.loads((run_dir / "archive" / "archive_metadata.json").read_text())["entries"]
     agent = {e["id"]: e.get("agent_id") for e in meta}
     color_of = {e["id"]: bool(e.get("color_enabled", False)) for e in meta}
+    title_of = {e["id"]: _title(e) for e in meta}
     branch, _ = archive_branch(meta, teaser_id)
-    full, missing, pub_full_pos = [], [], []
+    full, missing, pub_full_pos, pub_ids = [], [], [], []
     for iid in branch:
         aid = agent.get(iid)
         z = run_dir / "agents" / f"{aid}.zip"
@@ -92,6 +93,7 @@ def build_full_lineage(run_dir: Path, teaser_id: str, workdir: Path):
             continue
         full += seg
         pub_full_pos.append(len(full) - 1)        # this session's published genome = its last
+        pub_ids.append(iid)                        # ...and which archive image it published
     # Dedupe consecutive identical genomes, tracking full->canon index so we can flag
     # which canon keyframes are publications (needed for per-publication frame budgets).
     canon, full2canon, last_sig = [], [], None
@@ -102,9 +104,15 @@ def build_full_lineage(run_dir: Path, teaser_id: str, workdir: Path):
         full2canon.append(len(canon) - 1)
     pub_canon_ordered = [full2canon[p] for p in pub_full_pos]   # one per branch member, in order
     pub_canon_idx = sorted(set(pub_canon_ordered)) if full else []
+    # Title for each unique publication canon index (first archive image landing there).
+    canon_to_id = {}
+    for ci_idx, iid in zip(pub_canon_ordered, pub_ids):
+        canon_to_id.setdefault(ci_idx, iid)
+    pub_titles = [title_of.get(canon_to_id.get(ci_idx), "") for ci_idx in pub_canon_idx]
     info = dict(branch=branch, depth=len(branch), missing=missing,
                 color_enabled=color_of.get(teaser_id, False),
-                pub_canon_idx=pub_canon_idx, pub_canon_ordered=pub_canon_ordered)
+                pub_canon_idx=pub_canon_idx, pub_canon_ordered=pub_canon_ordered,
+                pub_titles=pub_titles)
     return canon, info
 
 
