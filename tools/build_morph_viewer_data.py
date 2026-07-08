@@ -27,7 +27,7 @@ import gzip, json, os, pickle, re, subprocess, zipfile, sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-from genome_json import genome_to_json
+from picbreeder_vlm.core.genome_json import genome_to_json
 
 BLOG = os.path.expanduser("~/smearle.github.io/picbreeder-vlm-06b0d76d/breed")
 SITE = os.path.dirname(BLOG)                       # …/picbreeder-vlm-06b0d76d

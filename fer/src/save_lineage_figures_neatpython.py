@@ -26,7 +26,7 @@ from tqdm.auto import tqdm  # noqa: E402
 
 from fer.src.lineage_utils import get_lineage_genomes  # noqa: E402
 from fer.src.save_lineage_figures import load_pbcppn  # noqa: E402
-from rendering import render_genome_image  # noqa: E402
+from picbreeder_vlm.core.rendering import render_genome_image  # noqa: E402
 from tools.render_legacy_genome import (  # noqa: E402
     LegacyGenome,
     LegacyLink,

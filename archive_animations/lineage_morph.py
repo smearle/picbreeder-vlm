@@ -41,7 +41,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "archive_animations"))
 
 import cppn_interp as ci  # noqa: E402
-from render_lineage_animation import build_superset, render_frames  # noqa: E402
+from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_frames  # noqa: E402
 
 # ---- the two lineages (identical provenance to extract_lineage_assets.py) ----
 VLM_GENOME_DIR = REPO / "archive_animations/_lineage_genomes/vlm"

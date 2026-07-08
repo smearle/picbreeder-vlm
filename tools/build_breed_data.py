@@ -37,14 +37,14 @@ import numpy as np
 from PIL import Image
 
 import neat
-from neat_components import (
+from picbreeder_vlm.core.neat_components import (
     InteractiveStagnation,
     PicbreederGenome,
     apply_picbreeder_config_defaults,
 )
-from picbreeder_reproduction import PicbreederReproduction
+from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
 from picture2d.common import eval_genome_as_grayscale_and_color
-from genome_json import genome_to_json as _genome_to_json
+from picbreeder_vlm.core.genome_json import genome_to_json as _genome_to_json
 
 REPO = Path(__file__).resolve().parent.parent
 BLOG = Path.home() / "smearle.github.io" / "picbreeder-vlm-06b0d76d"

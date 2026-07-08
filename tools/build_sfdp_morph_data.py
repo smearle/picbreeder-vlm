@@ -18,7 +18,7 @@ import gzip, json, os, pickle, subprocess, zipfile, math, statistics, sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-from genome_json import genome_to_json
+from picbreeder_vlm.core.genome_json import genome_to_json
 BLOG_DATA = os.path.expanduser(
     "~/smearle.github.io/picbreeder-vlm-06b0d76d/breed/data")
 RUN = "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3"

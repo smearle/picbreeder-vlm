@@ -29,8 +29,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "archive_animations"))
 
-import neat_components  # noqa: F401  (registers genome classes for unpickling)
-from genome_json import genome_to_json  # noqa: E402
+from picbreeder_vlm.core import neat_components  # noqa: F401  (registers genome classes for unpickling)
+from picbreeder_vlm.core.genome_json import genome_to_json  # noqa: E402
 from teaser_lineages import build_full_lineage, run_of, id_of  # noqa: E402
 
 DEPLOY = Path("/home/jupyter-smearle/smearle.github.io/picbreeder-vlm-06b0d76d")

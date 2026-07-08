@@ -36,7 +36,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 import cppn_interp as ci
-from render_lineage_animation import build_superset, render_frames
+from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_frames
 
 POS = np.array([214, 69, 38], float)    # positive weight -> red
 NEG = np.array([38, 107, 214], float)   # negative weight -> blue

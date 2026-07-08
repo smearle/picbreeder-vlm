@@ -35,7 +35,7 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from embed_and_visualize import (  # noqa: E402
+from picbreeder_vlm.analysis.embed_and_visualize import (  # noqa: E402
     _greedy_k_center,
     reduce_embeddings,
     render_rectangular_grid,

@@ -35,10 +35,10 @@ import neat
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # repo root
 
-from neat_components import (
+from picbreeder_vlm.core.neat_components import (
     PicbreederGenome, apply_picbreeder_config_defaults, InteractiveStagnation,
 )
-from picbreeder_reproduction import PicbreederReproduction
+from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
 
 from walker_partition import (
     best_first_walks, NEUTRAL_ROOT_ID, edge_coverage,
@@ -191,8 +191,8 @@ def siglip_slot_order(
     import rasterfairy
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from model_loader import load_model_by_name, embed_images
-    from embed_and_visualize import reduce_embeddings, _ensure_rasterfairy_ready
+    from picbreeder_vlm.vlm.model_loader import load_model_by_name, embed_images
+    from picbreeder_vlm.analysis.embed_and_visualize import reduce_embeddings, _ensure_rasterfairy_ready
 
     # node sequence each walker traverses (start node + every edge target)
     node_seqs: List[List[str]] = []

@@ -61,7 +61,7 @@ def extract_vlm():
 
 
 def extract_human():
-    import visualize_human_ancestry as vha
+    from picbreeder_vlm.viz import visualize_human_ancestry as vha
     nodes = vha.trace_ancestry(HUMAN_TARGET, HUMAN_ROOT)
     chain, cur = [], HUMAN_TARGET
     while cur and cur in nodes:

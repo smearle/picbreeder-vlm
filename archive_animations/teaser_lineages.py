@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import cppn_interp as ci
-from render_lineage_animation import build_superset, render_frames
+from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_frames
 
 
 def run_of(path: str) -> str:

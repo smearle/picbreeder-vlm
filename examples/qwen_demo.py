@@ -11,7 +11,7 @@ from io import BytesIO
 import PIL.Image
 import numpy as np
 
-from vlm_backends import create_vlm_backend, list_available_models, is_local_model
+from picbreeder_vlm.vlm.vlm_backends import create_vlm_backend, list_available_models, is_local_model
 
 
 def demo_single_image():

@@ -44,7 +44,7 @@ import neat
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # repo root
 
-from neat_components import PicbreederGenome
+from picbreeder_vlm.core.neat_components import PicbreederGenome
 
 
 # bias on the brightness output that puts sigmoid_unit(bias) = 0.5
@@ -121,7 +121,7 @@ def build_superset_with_biases(parent, child):
     where ``bias_pairs[node_key] = (start_bias, end_bias)``. If the parent
     lacks a node, ``start_bias`` falls back to the child's bias (no jump).
     """
-    from render_lineage_animation import build_superset
+    from picbreeder_vlm.viz.render_lineage_animation import build_superset
     superset, node_pairs, conn_pairs, output_stats = build_superset(parent, child)
     bias_pairs: Dict[int, Tuple[float, float]] = {}
     for node_key, child_node in child.nodes.items():
@@ -139,7 +139,7 @@ def patched_assign_interpolated_values(
     """Like ``render_lineage_animation.assign_interpolated_values`` but also
     lerps node biases when ``bias_pairs`` is provided. Pure superset: with
     ``bias_pairs=None`` it is identical to the original."""
-    from render_lineage_animation import assign_interpolated_values
+    from picbreeder_vlm.viz.render_lineage_animation import assign_interpolated_values
     assign_interpolated_values(
         genome, node_pairs, conn_pairs, config, step_index, total_steps,
         step_fraction, activation_cache, output_activation_stats,
@@ -158,8 +158,8 @@ def render_neutral_to_child_frames(
     """End-to-end: build superset from ``parent`` -> ``child`` (with bias
     interpolation), render ``steps`` frames. Returns list of PIL images.
     """
-    from rendering import render_genome_image
-    from render_lineage_animation import pick_variant
+    from picbreeder_vlm.core.rendering import render_genome_image
+    from picbreeder_vlm.viz.render_lineage_animation import pick_variant
     superset, node_pairs, conn_pairs, output_stats, bias_pairs = \
         build_superset_with_biases(parent, child)
     activation_cache: Dict[Tuple[str, str, int], str] = {}
@@ -179,8 +179,8 @@ def render_neutral_to_child_frames(
 if __name__ == "__main__":
     import argparse
     import gzip, pickle, zipfile
-    from neat_components import apply_picbreeder_config_defaults, InteractiveStagnation
-    from picbreeder_reproduction import PicbreederReproduction
+    from picbreeder_vlm.core.neat_components import apply_picbreeder_config_defaults, InteractiveStagnation
+    from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
     from PIL import Image
 
     ap = argparse.ArgumentParser()

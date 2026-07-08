@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import cppn_interp as ci
 import teaser_lineages as tl
-from render_lineage_animation import build_superset, render_frames
+from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_frames
 
 DEFAULT_SAMPLE = ["img_000093.png", "img_000063.png", "img_000043.png",
                   "img_000125.png", "img_000234.png"]

@@ -38,8 +38,8 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from render_lineage_animation import build_superset, render_frames, pick_variant  # noqa: E402
-from rendering import render_genome_image  # noqa: E402
+from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_frames, pick_variant  # noqa: E402
+from picbreeder_vlm.core.rendering import render_genome_image  # noqa: E402
 
 ORANGE = (255, 108, 0)
 

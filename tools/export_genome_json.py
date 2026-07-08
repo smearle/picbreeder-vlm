@@ -28,8 +28,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 SWEEP = REPO / "sweep_logs" / "sweep"
 
-import neat_components  # noqa: F401  (registers genome classes for unpickling)
-from genome_json import genome_to_json
+from picbreeder_vlm.core import neat_components  # noqa: F401  (registers genome classes for unpickling)
+from picbreeder_vlm.core.genome_json import genome_to_json
 
 
 def export_run(run_dir: Path, force: bool = False) -> dict | None:

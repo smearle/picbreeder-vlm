@@ -24,7 +24,7 @@ from tqdm.auto import tqdm
 # Add root to path to allow importing tree_metrics
 import sys
 sys.path.append(str(Path(__file__).resolve().parents[2]))
-from tree_metrics import compute_tree_metrics
+from picbreeder_vlm.analysis.tree_metrics import compute_tree_metrics
 
 from fer.src.save_lineage_figures import do_forward_pass, load_pbcppn
 from fer.src.picbreeder_util import load_zip_xml_as_dict

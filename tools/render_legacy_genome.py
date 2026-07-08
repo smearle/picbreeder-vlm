@@ -42,13 +42,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from neat.stagnation import DefaultStagnation
 
-from neat_components import (
+from picbreeder_vlm.core.neat_components import (
     InteractiveStagnation,
     PicbreederGenome,
     apply_picbreeder_config_defaults,
 )
-from picbreeder_reproduction import PicbreederReproduction
-from rendering import render_genome_image
+from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
+from picbreeder_vlm.core.rendering import render_genome_image
 
 
 @dataclass(frozen=True)

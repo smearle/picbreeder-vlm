@@ -46,7 +46,7 @@ sys.path.insert(0, str(REPO / "archive_animations" / "agent_life"))
 # Pillow's default cap (~89 Mpx) is below some run grids; bump it.
 Image.MAX_IMAGE_PIXELS = 400_000_000
 
-from rendering import create_numbered_grid  # noqa: E402
+from picbreeder_vlm.core.rendering import create_numbered_grid  # noqa: E402
 import archive_animations.agent_life.common as C  # noqa: E402
 from archive_animations.agent_life.build_assets import build_grid  # noqa: E402
 
