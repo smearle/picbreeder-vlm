@@ -8,7 +8,7 @@ from picbreeder_vlm.vlm.im_query import DEFAULT_MODEL, get_genai_client, types, 
 from picbreeder_vlm.vlm.prompts import DEFAULT_SYSTEM_INSTRUCTION
 
 MODEL_NAME = "gemini-3-pro-preview"
-TRAITS_FILE = "personality_traits.json"
+TRAITS_FILE = "data/personality_traits.json"
 SEED = 42
 
 def send_text_prompt(

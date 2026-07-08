@@ -164,9 +164,9 @@ def main():
         print(f"  Safe limit: {safe_limit}")
 
     # Write to JSON
-    with open("max_model_len_map.json", "w") as f:
+    with open("data/max_model_len_map.json", "w") as f:
         json.dump(results, f, indent=2)
-    print("Saved map to max_model_len_map.json")
+    print("Saved map to data/max_model_len_map.json")
 
 if __name__ == "__main__":
     main()

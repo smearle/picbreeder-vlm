@@ -50,6 +50,10 @@ _siglip_*.txt
 /radial_*
 /teaser_*
 /weight_modulation_grid*
+# regenerable generator outputs (dropped from the repo)
+/personality_table.tex
+/final_scores_table.tex
+/mutation_similarities.json
 # large generated artifact / data dirs (regenerable, kept out of git)
 eval_models/
 claude_picbreeder/

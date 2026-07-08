@@ -14,8 +14,8 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-TRAITS = REPO / "personality_traits.json"
-OUT = REPO / "traits_usernames.json"
+TRAITS = REPO / "data" / "personality_traits.json"
+OUT = REPO / "data" / "traits_usernames.json"
 
 # Lead-ins stripped from the front (longest first so prefixes match greedily).
 LEADINS = [

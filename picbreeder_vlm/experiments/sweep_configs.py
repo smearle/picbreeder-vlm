@@ -300,7 +300,7 @@ class Qwen235BBf16Sweep(SweepConfig):
 
 @dataclass
 class Qwen235BBf16DaemonSweep(SweepConfig):
-    """CPU-only agent jobs that connect to a persistent vLLM daemon (daemon_vllm_235b.sbatch).
+    """CPU-only agent jobs that connect to a persistent vLLM daemon (scripts/daemon_vllm_235b.sbatch).
 
     Avoids both pitfalls of Qwen235BBf16Sweep on torch:
       - the 30-min vLLM cold-load each cycle (the daemon loads ONCE)
@@ -311,7 +311,7 @@ class Qwen235BBf16DaemonSweep(SweepConfig):
     the "remote:" prefix and resolves the alias so dir names match.
 
     Launch order:
-      1. sbatch daemon_vllm_235b.sbatch ; wait for vllm_daemon.endpoint to exist
+      1. sbatch scripts/daemon_vllm_235b.sbatch ; wait for vllm_daemon.endpoint to exist
          AND for the URL inside it to respond on /v1/models.
       2. export VLLM_BASE_URL=$(cat vllm_daemon.endpoint) ; .venv/bin/python sweep.py
          sweep_name=qwen_235b_bf16_daemon slurm=true partition=cpu_short

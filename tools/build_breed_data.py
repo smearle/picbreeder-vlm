@@ -321,7 +321,7 @@ for hid, m, run in sorted(match_report, key=lambda x: (x[1] if isinstance(x[1], 
 SWEEP_DIR = REPO / "sweep_logs" / "sweep"
 TRAITS_META = REPO / "traits_meta_cluster"   # compact {agent_id: trait} maps per run
 TRAITS_GENOMES = REPO / "traits_genomes_cluster"  # genomes pulled for user-publication pages
-USERNAMES = json.load(open(REPO / "traits_usernames.json"))
+USERNAMES = json.load(open(REPO / "data" / "traits_usernames.json"))
 ARTIST_MIN_IMGS = 50    # images attributed to a trait before it can rank
 N_ARTISTS = 8           # artists shown in the homepage sidebar leaderboard
 

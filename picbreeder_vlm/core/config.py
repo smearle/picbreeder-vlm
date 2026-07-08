@@ -36,7 +36,7 @@ class PicbreederConfig:
     always_include_branched_image: bool = False  # Keep selected branch image as reference once branch sample falls out of chat history
     always_include_archive_sample: bool = False  # Keep the branching archive-sample step in context once it falls out of chat history
     allow_restart_from_publications: bool = True  # Allow restart branching from this agent's own prior publications
-    model: str = "remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"  # local vLLM server (serve_local_vlm.sh); was "gemini-2.5-pro"
+    model: str = "remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"  # local vLLM server (scripts/serve_local_vlm.sh); was "gemini-2.5-pro"
     temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
     thinking_budget: int = -1
     request_rationale: bool = True  # Request natural-language reasoning in agent selections

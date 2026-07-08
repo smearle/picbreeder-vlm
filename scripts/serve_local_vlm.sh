@@ -7,9 +7,9 @@
 # "remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8", VLLM_BASE_URL=http://localhost:8000/v1).
 #
 # Usage:
-#   ./serve_local_vlm.sh                 # start the 30B MoE (default)
-#   MODEL=Qwen/Qwen3-VL-8B-Instruct ./serve_local_vlm.sh   # lighter fallback
-#   ./serve_local_vlm.sh stop            # stop the running server
+#   ./scripts/serve_local_vlm.sh                 # start the 30B MoE (default)
+#   MODEL=Qwen/Qwen3-VL-8B-Instruct ./scripts/serve_local_vlm.sh   # lighter fallback
+#   ./scripts/serve_local_vlm.sh stop            # stop the running server
 set -euo pipefail
 cd "$(dirname "$0")"
 

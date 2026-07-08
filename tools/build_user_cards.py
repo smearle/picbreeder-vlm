@@ -30,7 +30,7 @@ BLOG = Path.home() / "smearle.github.io" / "picbreeder-vlm-06b0d76d"
 OUT = BLOG / "breed" / "data"
 SWEEP_DIR = REPO / "sweep_logs" / "sweep"
 TRAITS_META = REPO / "traits_meta_cluster"
-USERNAMES = json.load(open(REPO / "traits_usernames.json"))
+USERNAMES = json.load(open(REPO / "data" / "traits_usernames.json"))
 ARTIST_MIN_IMGS = 50    # keep in sync with build_breed_data.py
 
 

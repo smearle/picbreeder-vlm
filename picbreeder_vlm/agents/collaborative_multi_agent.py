@@ -83,7 +83,7 @@ from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
 from picbreeder_vlm.vlm.prompts import GOAL_PROMPTS
 from picbreeder_vlm.core.utils import relative_suffix_after_dir, apply_random_seed
 
-TRAITS_FILE = "personality_traits.json"
+TRAITS_FILE = "data/personality_traits.json"
 
 from picbreeder_vlm.analysis.rate_archive_with_vlm import (
     ArchiveEntry as RatingArchiveEntry,

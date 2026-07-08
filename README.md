@@ -60,7 +60,7 @@ can drive it **two ways**—a hosted API or a fully local model:
   ```bash
   # in-process weights (simplest): model=qwen3-vl-8b   (also 2b / 4b / 32b)
   # or start a shared local vLLM server and point runs at it:
-  ./serve_local_vlm.sh             # serves an OpenAI-compatible endpoint
+  ./scripts/serve_local_vlm.sh     # serves an OpenAI-compatible endpoint
   # then pass model=remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
   ```
 

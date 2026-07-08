@@ -5,7 +5,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="Generate a LaTeX table of random personality traits.")
-    parser.add_argument("--input", default="personality_traits.json", help="Input JSON file")
+    parser.add_argument("--input", default="data/personality_traits.json", help="Input JSON file")
     parser.add_argument("--output", default="personality_table.tex", help="Output TeX file")
     parser.add_argument("--n", type=int, default=40, help="Number of traits to sample (default: 40, approx. 1 page)")
     args = parser.parse_args()

@@ -48,7 +48,7 @@ TREE_OUT = OUT / "tree"
 SWEEP = REPO / "sweep_logs" / "sweep"
 SWEEP_ALT = REPO / "sweep_logs"
 TRAITS_META = REPO / "traits_meta_cluster"   # <run>/agent_traits.json  (agent_id -> trait)
-USERNAMES = json.load(open(REPO / "traits_usernames.json"))  # trait -> username
+USERNAMES = json.load(open(REPO / "data" / "traits_usernames.json"))  # trait -> username
 
 CANON = "th-1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3"
 N_FEATURED = 12

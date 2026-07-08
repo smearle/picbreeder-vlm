@@ -1693,7 +1693,7 @@ def is_local_model(model: str) -> bool:
     already-running external endpoint).
 
     A ``remote:`` model points at an existing OpenAI-compatible server (e.g. one
-    started via serve_local_vlm.sh), so the orchestrator must NOT auto-start its
+    started via scripts/serve_local_vlm.sh), so the orchestrator must NOT auto-start its
     own competing server for it — return False so all workers just hit the shared
     endpoint at VLLM_BASE_URL.
     """
