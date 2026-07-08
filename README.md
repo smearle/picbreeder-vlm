@@ -148,12 +148,6 @@ sources), **`community/`** (the Hugging Face Space that backs the breed demo),
 **`webneat/`** (the original Java WebNEAT client, kept for reference / legacy genome
 parsing), **`picture2d/`** (legacy Picbreeder NEAT config & rendering).
 
-> **Note—pickle‑compat shims.** The thin modules `neat_components.py`,
-> `config.py`, `picbreeder_reproduction.py`, `archive_manager.py` and
-> `rendering.py` at the repo root simply re‑export from `picbreeder_vlm/`. They
-> exist so that genome `.pkl` files in the archive dataset (which store their
-> original module paths) still load. New code should import from the package.
-
 ## 🧬 The Picbreeder homage—breed your own
 
 Alongside the VLM experiments we host a small, faithful browser reimplementation
