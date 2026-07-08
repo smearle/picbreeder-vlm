@@ -90,7 +90,7 @@ Outputs land in `logs_collaborative/<experiment>/` (evolved images, genome
 | `model=` | VLM to use: `gemini-2.5-pro` (API) · `qwen3-vl-8b` (local) · `remote:Qwen/…` (local server) |
 | `num_agents=` · `agent_generations=` | how many agents run, and generations per agent |
 | `seed=` | RNG seed for a reproducible run |
-| `goal=` | breeding objective prompt (`familiar_objects`, `objective_free`, …) |
+| `goal=` | breeding objective prompt — one of the keys in [`GOAL_PROMPTS`](picbreeder_vlm/vlm/prompts.py) (`familiar_objects`, `objective_free`, …) |
 | `rows=` `cols=` `select_k=` | CPPN grid size shown to the VLM, and max parents picked per step |
 | `chat_history_turns=` | prior turns each agent sees (`-1` = keep all) |
 | `enable_crossover=` `rand_select_prob=` | Picbreeder‑style crossover; prob. of a random (non‑VLM) pick |
