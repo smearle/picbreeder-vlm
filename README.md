@@ -33,7 +33,6 @@ pipeline behind the paper and blog, and the tooling for the interactive
 | 📄 **Paper (arXiv)** | <https://arxiv.org/abs/2605.23908> |
 | 🤗 **Archive dataset** (evolved genomes, images, lineages, VLM captions) | <https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive> |
 | 🧬 **Breed‑your‑own demo** (CPPN homage in the browser) | <https://pub.sakana.ai/picbreeder-vlm/breed/> |
-| 🛰️ **Community API** (Space backing the demo) | <https://huggingface.co/spaces/picbreeder-vlm/picbreeder-community-api> |
 | 🤗 **Community dataset** (user‑bred genomes) | <https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-community> |
 
 ## Install
