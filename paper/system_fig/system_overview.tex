@@ -21,6 +21,11 @@
 % Star ratings (used in Evaluation panel)
 \definecolor{ratingGold}{HTML}{DAA520}
 \definecolor{ratingGray}{gray}{0.78}
+% Mutation box + rating edge: recolored off green (violet / teal) so they don't
+% clash with the green "active node" highlight used in the animated web version.
+\definecolor{mutFill}{HTML}{F6F0FB}
+\definecolor{mutDraw}{HTML}{7A2A90}
+\definecolor{rateEdge}{HTML}{0F8A8A}
 \def\starOn{\textcolor{ratingGold}{$\bigstar$}}
 \def\starOff{\textcolor{ratingGray}{$\bigstar$}}
 \newcommand{\stars}[1]{\ifcase#1\relax
@@ -63,12 +68,12 @@
   box/.style       = {draw, rounded corners=2pt, align=center,
                       inner sep=4pt, line width=0.6pt, fill=white},
   vlmbox/.style    = {box, fill=blue!5,   draw=blue!55!black},
-  mutbox/.style    = {box, fill=green!6,  draw=green!55!black},
+  mutbox/.style    = {box, fill=mutFill,  draw=mutDraw},
   img/.style       = {draw=black!45, line width=0.4pt, inner sep=0, outer sep=0},
   pipe/.style      = {->, line width=0.7pt, draw=black!75},
   loop/.style      = {->, line width=0.7pt, draw=blue!55!black, dashed},
   feed/.style      = {->, line width=0.9pt, draw=orange!75!black},
-  rate/.style      = {->, line width=0.9pt, draw=green!50!black},
+  rate/.style      = {->, line width=0.9pt, draw=rateEdge},
   frame/.style     = {draw=black!45, line width=0.5pt, rounded corners=4pt,
                       inner sep=10pt},
   colTitle/.style  = {font=\bfseries, anchor=south west},
