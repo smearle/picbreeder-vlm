@@ -5,10 +5,11 @@
 % vividly yellow "Yellow Duck Portrait" (img_000783) -- the session where the
 % yellow first emerges, so the branched parent looks distinct from the result.
 %
-% Layout: a true 2x2 grid of equal-sized framed panels (7.7 x 7.7 cm each),
-% gap = 2.3 cm horizontally and 0.8 cm vertically. Bitmaps inside the top
-% panels are centered (Sampling has some intentional vertical whitespace
-% because its native aspect is wider than square).
+% Layout: a 2x2 grid of framed panels, all 7.7 cm wide. The top row
+% (Archive/Sampling) is short (4.25 cm) and content-hugging -- each holds a
+% 5-row grid of 0.7 cm thumbnails that fits snugly. The bottom row
+% (Evolution/Evaluation) is taller (7.3 cm). Horizontal gap = 2.3 cm,
+% vertical gap = 0.8 cm.
 \documentclass[border=8pt, varwidth=false]{standalone}
 \usepackage{tikz}
 \usetikzlibrary{positioning,shapes.geometric,arrows.meta,calc,fit,backgrounds,fadings}
@@ -44,10 +45,15 @@
 % Equal panel dimensions for all four quadrants
 \def\panelW{7.7cm}
 \def\panelH{7.7cm}
-% Bottom row (Evolution/Evaluation): a touch taller than content-hugging so the
-% Evolution frame fits the published-image thumbnail under the VLM publication
-% node, without leaving much dead space in Evaluation.
-\def\panelHb{7.3cm}
+% Top row (Archive/Sampling): short, content-hugging. Both hold a 5-row grid of
+% 0.7cm thumbnails (=3.5cm tall) so the rows fit snugly with only the frame's
+% inner padding to spare.
+\def\panelHt{4.25cm}
+% Bottom row (Evolution/Evaluation): sized so the Evolution stack (VLM selection
+% / mutation / candidate grid / publication) sits cozily with only ~0.35cm of
+% padding above and below. The Evaluation grid is scaled down to share this
+% height (see \rThumb/\rRowGap/\rTitleH below).
+\def\panelHb{6.15cm}
 
 \begin{document}
 \begin{tikzpicture}[
@@ -69,17 +75,22 @@
 ]
 
 % ===================== TOP-LEFT: ARCHIVE =====================
-\node[frame, minimum width=\panelW, minimum height=\panelH, anchor=north west]
-  (arch) at (0,0) {\includegraphics[width=7cm]{archive_grid_small.png}};
+% archive_grid_small.png is a full 10x10 mosaic (800x800 px). Show only the top
+% 5 rows (crop the bottom 400 px) so the panel stays short and its 0.7cm
+% thumbnails match the Sampling strip. Cropping in TeX keeps the tool's PNG
+% output intact across rebuilds.
+\node[frame, minimum width=\panelW, minimum height=\panelHt, anchor=north west]
+  (arch) at (0,0)
+  {\includegraphics[width=7cm, trim=0 400bp 0 0, clip]{archive_grid_small.png}};
 \node[colTitle] at (arch.north west) {Archive};
 
 % ===================== TOP-RIGHT: SAMPLING =====================
 % Stacked outline behind+left to indicate two independent draws
 % (one consumed by the evolver, one by the rater).
-\node[frame, minimum width=\panelW, minimum height=\panelH, anchor=north east,
+\node[frame, minimum width=\panelW, minimum height=\panelHt, anchor=north east,
       fill=white]
   (strip-bg) at (17.35,0.35) {};
-\node[frame, minimum width=\panelW, minimum height=\panelH, anchor=north east,
+\node[frame, minimum width=\panelW, minimum height=\panelHt, anchor=north east,
       fill=white]
   (strip) at (17.7,0) {};
 % Title placed first only to anchor the clear/fade below; redrawn on top after.
@@ -97,10 +108,13 @@
 \node[colTitle] at (strip.north west) {Sampling};
 
 % Pure 5x5 thumbnail strip; row labels overlaid in LaTeX font below.
-\def\stripImgW{5.5cm}      % each cell = 5.5/5 = 1.1cm tall+wide
-\def\stripCell{1.1cm}
+% Cells sized to match the Archive mosaic's 0.7cm thumbnails.
+\def\stripImgW{3.5cm}      % each cell = 3.5/5 = 0.7cm tall+wide
+\def\stripCell{0.7cm}
+% Shifted left of the frame's right edge so the strip + its row labels sit
+% roughly centred in the panel (the strip is now only 3.5cm wide).
 \node[inner sep=0pt, anchor=east] (strip-img)
-  at ([xshift=-0.15cm]strip.east)
+  at ([xshift=-1.3cm]strip.east)
   {\includegraphics[width=\stripImgW]{branching_subsample.png}};
 \foreach \ri/\lbl in \branchingRowLabels {%
   \node[anchor=east, align=right, font=\footnotesize] at
@@ -113,12 +127,12 @@
 % ===================== BOTTOM-LEFT: EVOLUTION =====================
 % Fixed-position frame; content placed at known coords inside.
 \node[frame, minimum width=\panelW, minimum height=\panelHb, anchor=north west]
-  (evo) at (0,-8.5) {};
+  (evo) at (0,-5.05) {};
 \node[colTitle] at (evo.north west) {Evolution};
 
 % Three nodes (VLM selection / Mutation-crossover / generation grid), vertically
 % centred within the frame: column centre at mut-(2.7225-h_box)/2 = frame centre.
-\node[mutbox] (mut) at (3.5,-10.0) {Mutation/crossover};
+\node[mutbox] (mut) at (3.5,-6.55) {Mutation/crossover};
 \node[vlmbox, above=0.4cm of mut] (sel) {VLM selection};
 \draw[pipe] (sel) -- (mut);
 
@@ -136,44 +150,42 @@
   -- (sel.east);
 
 % After the x20 inner loop converges, the agent publishes its favourite back to
-% the archive. The publication node sits below the candidate grid, and the actual
-% published image is shown beneath it -- that image is what travels to the archive
-% (the selection node only feeds the inner loop).
+% the archive. The publication node sits below the candidate grid; the published
+% image itself travels to the archive (the selection node only feeds the inner
+% loop).
 \node[vlmbox, below=0.3cm of pop0] (pub) {VLM publication};
 \draw[pipe] (pop0) -- (pub);
-\node[img, below=0.24cm of pub] (pubimg)
-  {\includegraphics[width=1.08cm]{publication.png}};
-\draw[pipe] (pub) -- (pubimg);
 
 % ===================== BOTTOM-RIGHT: EVALUATION =====================
 \node[frame, minimum width=\panelW, minimum height=\panelHb, anchor=north east]
-  (eval) at (17.7,-8.5) {};
+  (eval) at (17.7,-5.05) {};
 \node[colTitle] at (eval.north west) {Evaluation};
 
 % Column content: rat-title + 6 rated thumbnails in a 3x2 grid; titles
 % and stars are rendered as LaTeX text (not baked into the PNGs).
-\node[vlmbox, anchor=north] (rat-title) at (13.85,-8.88) {VLM rating};
+\node[vlmbox, anchor=north] (rat-title) at (13.85,-5.43) {VLM rating};
 
-\def\rThumb{1.45cm}
+\def\rThumb{1.24cm}     % scaled down from 1.45cm so the 2-row grid fits the
+                        % shorter \panelHb alongside a cozy Evolution column
 \def\rCellW{2.28cm}     % horizontal cell pitch (max that fits in 7cm interior)
-\def\rRowGap{1.25cm}    % vertical gap between rows -- clears 2-line title + stars + vspace
+\def\rRowGap{1.05cm}    % vertical gap between rows -- clears 2-line title + stars + vspace
 \def\rTitleH{0.6cm}     % space reserved below each image for the (up to 2-line) title,
-                        % so the stars sit on a fixed baseline and align across a row
+                        % so the stars clear a 2-line caption and align across a row
 \foreach \ic/\ti/\ra in \ratedCells {%
   \pgfmathtruncatemacro{\rr}{\ic / 3}%
   \pgfmathtruncatemacro{\cc}{\ic - 3*\rr}%
   \node[inner sep=0pt, anchor=north] (rt-\ic) at
     ([xshift={(\cc-1)*\rCellW},
-      yshift={-0.55cm - \rr*(\rThumb+\rRowGap)}]rat-title.south)
+      yshift={-0.48cm - \rr*(\rThumb+\rRowGap)}]rat-title.south)
     {\includegraphics[width=\rThumb]{rated_thumb_\ic.png}};
   % Title hangs directly under the image and may wrap to two lines (grows down).
-  \node[anchor=north, align=center, inner sep=1pt, text width=\rCellW]
+  \node[anchor=north, align=center, inner sep=1pt, text width=\rCellW] (rtit-\ic)
     at ([yshift=-1pt]rt-\ic.south)
     {\hyphenpenalty=10000\exhyphenpenalty=10000\relax
      {\itshape\fontsize{6pt}{7pt}\selectfont\ti}};
   % Stars sit at a fixed drop below the image south -- independent of title length --
   % so every row of stars is vertically aligned.
-  \node[anchor=north, inner sep=0pt]
+  \node[anchor=north, inner sep=0pt] (rstar-\ic)
     at ([yshift=-\rTitleH]rt-\ic.south)
     {\scriptsize\stars{\ra}};
 }
@@ -181,26 +193,28 @@
 \draw[pipe] (rat-title) -- (rt-1.north);
 
 % ===================== CROSS-ARROWS =====================
-% Sampling -> VLM selection: leave from the SHADOW frame's west edge, partway down
-% (between the incoming sample arrow at the mid-line and the bottom) -- this is the
-% evolver's draw, a *different* sample than the one the rater sees. Step LEFT into
-% the inter-column whitespace (gap midline = 8.85; strip-bg.west is at x=9.65, so
-% step -0.8), drop into the Archive/Evolution gap (mid -8.1), then -| into the top
-% of the VLM selection node (clear of the x20 loop). Columns: left=[0,7.7], right=[10,17.7].
+% Sampling -> Evolution: leave from the FRONT frame's west edge, partway down --
+% this is the evolver's draw, a *different* sample than the one the rater (back
+% frame) sees. Step LEFT into the inter-column whitespace (gap midline = 8.85;
+% strip.west is at x=10.0, so step -1.15), then run straight DOWN through the middle
+% and turn IN from the right, entering the Evolution frame just above its bottom-right corner.
 \draw[feed]
-  ($(strip-bg.west)!0.58!(strip-bg.south west)$)
-    -- ++(-0.8,0) -- (8.85,-8.1) -| (sel.north);
+  ($(strip.west)!0.58!(strip.south west)$)
+    -- ++(-1.15,0) |- ([yshift=0.5cm]evo.south east);
 
-% Publish -> archive: the published image leaves its thumbnail on the left,
-% routes up *outside* the Evolution frame (clear of its title), and enters
-% Archive west BELOW the ratings arrow so the two segments don't cross.
+% Publish -> archive: the published image travels back to the archive. Leave the
+% publication node on its LEFT, route up *outside* the Evolution frame (clear of
+% its title), and enter Archive west BELOW the ratings arrow so the two segments
+% don't cross.
 \draw[feed]
-  (pubimg.west) -- ([xshift=-0.6cm]evo.west |- pubimg.west)
+  (pub.west) -- ([xshift=-0.6cm]evo.west |- pub.west)
               |- ([yshift=-0.18cm]arch.west);
 
-% Sampling -> VLM rating: straight vertical, horizontally centered on rater
+% Sampling -> VLM rating: straight vertical, horizontally centered on rater. Leaves
+% the BACK frame's south edge (the rater's draw, a *different* sample than the
+% evolver's front-frame draw).
 \draw[feed]
-  (strip.south -| rat-title.north) -- (rat-title.north);
+  (strip-bg.south -| rat-title.north) -- (rat-title.north);
 
 % Rater -> archive: leave Evaluation from its bottom center, route under both
 % bottom frames and up outside the Evolution frame (further left than the

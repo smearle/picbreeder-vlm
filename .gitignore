@@ -36,6 +36,9 @@ figures/*
 human_baseline/*
 noun_lists/embeddings/*
 _transcripts_stage/
+# transcript / siglip staging scratch (large, regenerable)
+_tx_stage_*/
+_siglip_*.txt
 
 # run / server logs (root-level)
 /*.log

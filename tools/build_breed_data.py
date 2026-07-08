@@ -23,6 +23,7 @@ genome JSON — no PNG thumbnails — keeping the payload small.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import os
@@ -130,11 +131,12 @@ decorative abstractly cartoon cartoonish comic finish winged dark light bright p
 dull colorful multicolored monochrome grayscale greyscale neon black white gray grey red blue green
 yellow purple orange pink brown gold golden silver pastel teal cyan magenta violet beige tan turquoise
 lavender crimson maroon navy olive indigo shade tone hue colored coloured colour colours color colors
-warm cool earthy vertical horizontal diagonal central centered centred round rounded circular oval
+warm cool earthy vertical horizontal diagonal central center centered centred round rounded circular oval
 elliptical spherical small large big tiny huge wide narrow tall short thin thick long flat single
 multiple various different main outer inner top bottom middle edge close closeup pop warped twisted
 melted floating hovering layered nested overlapping repeating tiled mirrored highlight highlighted
-shaped""".split())
+shaped one two three four accent generated created featuring depicting depiction depicted showing shown
+surrounded chaotic futuristic robotic texture dotted pelvic open smiling""".split())
 
 
 def _singular(w: str) -> str:
@@ -482,21 +484,93 @@ json.dump({"runs": _run_table, "users": user_cards},
 print(f"[artists] {sum(len(v) for v in user_cards.values())} publication cards "
       f"across {len(user_cards)} users -> user_cards.json (sprite thumbs, lazy genomes)")
 
-# Caption-derived categories over the bundled canonical items. tag_index maps
-# each object tag -> the item keys carrying it (browse.html?tag=); top_tags is
-# the homepage cloud (tags on >=2 images, frequency-ranked, capped). Singletons
-# stay searchable via tag_index but are kept out of the cloud to avoid noise.
+# Caption-derived categories, mined from the VLM captions as a cumulative
+# bag-of-words over the WHOLE browseable archive — every canonical run that has a
+# published sprite sheet AND local gemini captions, not just CANON. (A tag like
+# "can" appears in only ~8 of CANON's 2k images but hundreds across the ~117k-image
+# multi-run archive.) caption_tags() strips function words + style/colour
+# descriptors, so each count is a plain document-frequency of the object nouns.
+#   * top_tags       — the homepage "Top Categories" cloud: [tag, true count], top 40.
+#   * tag_index_full — the browse index (its own gzip). Multi-run, so ids are keyed
+#     by run: {runs:[name...], counts:{tag:N}, tags:{tag:[[runIdx, idNum, title,
+#     rating*100 (or -1), nrat], ...]}}, best-rated first, capped per tag. browse.html
+#     ?tag= lazy-loads it and renders each match from that run's HF sprite sheet
+#     (no genome/metadata fetch — spriteCell needs only the small sprite manifest).
+#   * tag_index      — bundled shipped-item keys, kept in archive.json as an
+#     offline / no-HF fallback for the `?archiveBase=.` local mirror.
 from collections import Counter as _Counter  # noqa: E402  (local, near use)
 
-tag_index: dict[str, list] = {}
+TAG_CLOUD_MIN = 3      # a category needs >= this many images to enter the cloud
+TAG_CLOUD_MAX = 40
+TAG_LIST_CAP = 400     # max images listed per tag in the browse index (best-rated)
+
+# Enumerate browseable canonical runs (published sprite) with local gemini captions.
+_mirror_path = REPO / "archive_animations" / "_archive_mirror" / "index.json"
+_by_run = {r["run"]: r for r in json.load(open(_mirror_path)).get("runs", [])} if _mirror_path.is_file() else {}
+_sweep = REPO / "sweep_logs" / "sweep"
+_tag_runs: list[str] = []
+if _sweep.is_dir():
+    for _d in sorted(_sweep.iterdir()):
+        _mi = _by_run.get(_d.name)
+        if ((_d / "archive" / "captions_gemini-2.5-pro.json").is_file()
+                and _mi and _mi.get("canonical") and (_mi.get("has") or {}).get("sprite")):
+            _tag_runs.append(_d.name)
+# CANON first so its images head rating ties; fall back to CANON alone if the
+# mirror/sweep layout isn't present (e.g. a minimal checkout).
+_tag_runs = [CANON.name] + [r for r in _tag_runs if r != CANON.name]
+if not (_sweep / _tag_runs[0]).is_dir():
+    _tag_runs = [CANON.name]
+
+
+def _entry_rating(e: dict):
+    _rs = [r for r in (e.get("vlm_ratings") or []) if isinstance(r, (int, float))]
+    return (sum(_rs) / len(_rs)) if _rs else None
+
+
+corpus_freq: _Counter = _Counter()     # object tag -> # images (any run) mentioning it
+_tag_pairs: dict[str, list] = {}       # object tag -> [(rating_sort, record), ...]
+for _ri, _run in enumerate(_tag_runs):
+    _rd = _sweep / _run / "archive"
+    _caps = json.load(open(_rd / "captions_gemini-2.5-pro.json"))
+    _meta = json.load(open(_rd / "archive_metadata.json"))
+    _info = {e["id"]: (e.get("title") or "Untitled", _entry_rating(e),
+                       len(e.get("vlm_ratings") or [])) for e in _meta.get("entries", [])}
+    for _fn, _cap in _caps.items():
+        _id = _fn[:-4] if _fn.endswith(".png") else _fn
+        _idnum = int(re.sub(r"\D", "", _id) or 0)
+        _title, _rating, _nrat = _info.get(_id, ("Untitled", None, 0))
+        _rec = [_ri, _idnum, _title, (int(round(_rating * 100)) if _rating is not None else -1), _nrat]
+        _srt = _rating if _rating is not None else -1.0
+        for _t in set(caption_tags(_cap)):
+            corpus_freq[_t] += 1
+            _tag_pairs.setdefault(_t, []).append((_srt, _rec))
+
+tag_ids: dict[str, list] = {}          # tag -> [record, ...] best-rated first, capped
+for _t, _lst in _tag_pairs.items():
+    _lst.sort(key=lambda p: -p[0])
+    tag_ids[_t] = [rec for _s, rec in _lst[:TAG_LIST_CAP]]
+
+top_tags = [[t, c] for t, c in corpus_freq.most_common() if c >= TAG_CLOUD_MIN][:TAG_CLOUD_MAX]
+
+full_path = OUT / "tag_index_full.json.gz"
+OUT.mkdir(parents=True, exist_ok=True)
+with gzip.open(full_path, "wt", encoding="utf-8") as _f:
+    json.dump({"runs": _tag_runs, "counts": dict(corpus_freq), "tags": tag_ids},
+              _f, separators=(",", ":"))
+
+tag_index: dict[str, list] = {}        # bundled fallback: tag -> shipped item keys
 for _k, _it in items.items():
     for _t in _it.get("tags", []):
         tag_index.setdefault(_t, []).append(_k)
-_tag_freq = _Counter({t: len(ks) for t, ks in tag_index.items()})
-top_tags = [[t, c] for t, c in _tag_freq.most_common() if c >= 2][:30]
-print(f"[tags] {len(tag_index)} distinct tags over bundled items; "
-      f"{len(top_tags)} in cloud (>=2 imgs). top: "
+
+_n_caps = sum(corpus_freq.values())
+print(f"[tags] cloud: {len(top_tags)} categories over {len(_tag_runs)} browseable runs "
+      f"(>= {TAG_CLOUD_MIN} imgs). top: "
       + ", ".join(f"{t}({c})" for t, c in top_tags[:12]))
+print(f"[tags] full index: {len(tag_ids)} tags, "
+      f"{sum(len(v) for v in tag_ids.values())} listed pairs (cap {TAG_LIST_CAP}/tag) -> "
+      f"{full_path.name} ({full_path.stat().st_size / 1024:.1f}KB gz); "
+      f"bundled fallback: {len(tag_index)} tags")
 
 teasers = {
     "branch": editors_matched[:2] if len(editors_matched) >= 2 else lists["highest_rated"][:2],

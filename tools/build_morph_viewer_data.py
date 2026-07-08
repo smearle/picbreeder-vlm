@@ -8,12 +8,15 @@ breed/data/morph/<run>/:
                      gen-0 ancestors + a neutral grey "init" super-root joined to
                      every ancestor (laid out WITH the graph so it sits centrally).
   - anc.json.gz      {anc_id: cppn.js-JSON}  ONLY the gen-0 ancestor genomes (tiny).
-  - genomes.json.gz  {id: cppn.js-JSON}  published + ancestor genomes — written ONLY
-                     for CURATED runs, so the bundled blog figure works offline.
+  - genomes.json.gz  {id: cppn.js-JSON}  published + ancestor genomes — written for
+                     CURATED runs and the human archive, so the bundled blog figure
+                     works offline (no HF/proxy).
 
 The heavy published genomes for every OTHER run are fetched on demand by the viewer
 from HF (/site/<run>/genomes.json.gz, with the ?archiveBase= proxy fallback) — the
-genome keys are the tree node ids (img_NNNNNN), so they key-match the layout.
+genome keys are the tree node ids (img_NNNNNN), so they key-match the layout. The
+human genomes are bundled from the published export (tools/push_human_genomes.py)
+rather than the sweep archive, since the human archive lives outside sweep_logs.
 
 Plus breed/data/morph/manifest.json: {default, runs:[{run,label,group,n,n_anc,bundled}]}.
 See [[scrubbable-morph-viewer]]. Gen-0 extraction unpickles genomes that import
@@ -165,7 +168,7 @@ def human_tree():
     return {"nodes": nodes}
 
 
-def build_run(entry, tree=None):
+def build_run(entry, tree=None, genomes_src=None):
     run, label, group = entry["run"], label_of(entry), group_of(entry)
     if tree is None:
         tree_path = os.path.join(TREE_DIR, run + ".json.gz")
@@ -231,10 +234,13 @@ def build_run(entry, tree=None):
     # tiny ancestor-genome sidecar (every run) — published genomes come from HF
     with gzip.open(os.path.join(run_dir, "anc.json.gz"), "wt") as f:
         json.dump(anc_gen, f)
-    # bundle full genomes (pub + anc) only for curated runs → offline blog figure
+    # bundle full genomes (pub + anc) for curated runs (and any run given an explicit
+    # genomes_src, e.g. the human archive) → the embedded blog figure renders morphs
+    # offline, no HF/proxy needed. gen_path is the sweep archive for AI runs; genomes_src
+    # overrides it (the human genomes live outside sweep_logs).
     bundled = False
-    gen_path = os.path.join(SWEEP, run, "archive", "genomes.json.gz")
-    if run in CURATED and os.path.exists(gen_path):
+    gen_path = genomes_src or os.path.join(SWEEP, run, "archive", "genomes.json.gz")
+    if (genomes_src or run in CURATED) and os.path.exists(gen_path):
         merged = dict(load_gz(gen_path)); merged.update(anc_gen)
         with gzip.open(os.path.join(run_dir, "genomes.json.gz"), "wt") as f:
             json.dump(merged, f)
@@ -252,10 +258,20 @@ GROUP_ORDER = ["Baseline", "Memory length", "Selection noise", "Personalities",
                "Random selection", "Selector model", "Human", "Other"]
 
 
+HUMAN_GENOMES = os.path.join(
+    REPO, "archive_animations", "out", "human_genomes", "site", "human", "genomes.json.gz")
+
+
 def build_human():
-    """The human Picbreeder archive: tree from its branchFrom lineage, genomes from HF."""
+    """The human Picbreeder archive: tree from its branchFrom lineage; genomes bundled
+    from the published set (tools/push_human_genomes.py output) so the morph viewer
+    renders them on the public blog without the private HF dataset. Falls back to an
+    HF fetch (unbundled) if that local export isn't present."""
+    src = HUMAN_GENOMES if os.path.exists(HUMAN_GENOMES) else None
+    if src is None:
+        print(f"  WARN human: {HUMAN_GENOMES} missing → morph left unbundled (HF fetch)")
     try:
-        return build_run({"run": "human", "arc": "human"}, tree=human_tree())
+        return build_run({"run": "human", "arc": "human"}, tree=human_tree(), genomes_src=src)
     except Exception as ex:
         print(f"  ERR human: {ex}"); return None
 

@@ -1,6 +1,6 @@
 {
  "dataset": "picbreeder-vlm/picbreeder-vlm-archive",
- "n_runs": 158,
+ "n_runs": 159,
  "runs": [
   {
    "run": "ag20_tb-1_scheme-toggle_randp2_rmode-all_nopersonalities_fixed-sesh_s3",
@@ -2795,6 +2795,25 @@
     "seed": 5
    },
    "canonical": true
+  },
+  {
+   "run": "th2_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s3",
+   "arc": "mem_2",
+   "seed": 3,
+   "model": "gemini-3-pro-preview",
+   "config": {
+    "model": "gemini-3-pro-preview",
+    "memory_cl": 2,
+    "noise_eps": 0.0,
+    "personalities": 0,
+    "seed": 3
+   },
+   "canonical": true,
+   "label": "mem_2",
+   "n_images": 1000,
+   "has": {
+    "sprite": true
+   }
   },
   {
    "run": "th2_ag20_model-gemini-3-pro-preview_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s4",
