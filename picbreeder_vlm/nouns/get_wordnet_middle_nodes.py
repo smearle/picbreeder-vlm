@@ -123,14 +123,14 @@ all_words_str = "\n".join([", ".join(words) for words in all_words])
 print(f"{len(wnids)} total wnids in imagenet21k ({len(all_words)} unique words)")
 
 # all_words_flat = [item for sublist in all_words for item in sublist]
-with open("imagenet21k_all_words.txt", "w") as f:
+with open("noun_lists/imagenet21k_all_words.txt", "w") as f:
     f.write(all_words_str + "\n")
 
 middle_wnids, middle_words = induced_middle_nodes(wnids)
 print(f"{len(middle_wnids)} middle wnids (within induced 21k hierarchy)")
 
-with open("imagenet21k_middle_wnids.txt", "w") as f:
+with open("noun_lists/imagenet21k_middle_wnids.txt", "w") as f:
     f.write("\n".join(middle_wnids) + "\n")
 
-with open("imagenet21k_middle_words.txt", "w") as f:
+with open("noun_lists/imagenet21k_middle_words.txt", "w") as f:
     f.write("\n".join(middle_words) + "\n")

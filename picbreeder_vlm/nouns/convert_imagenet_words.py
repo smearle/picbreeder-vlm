@@ -1,8 +1,8 @@
 import os
 
 def main():
-    input_file = 'imagenet21k_all_words.txt'
     output_dir = 'noun_lists'
+    input_file = os.path.join(output_dir, 'imagenet21k_all_words.txt')
     output_file = os.path.join(output_dir, 'imagenet21k_all_first_words.txt')
 
     if not os.path.exists(output_dir):
