@@ -4,10 +4,10 @@
 
 Sam Earle, Kai Arulkumaran, Andrew Dai, Akarsh Kumar, Julian Togelius, Sebastian Risi — **GECCO 2026** (Best Paper nominee)
 
-[**📝 Blog / interactive report**](https://smearle.github.io/picbreeder-vlm-06b0d76d/) ·
+[**📝 Blog / interactive report**](https://pub.sakana.ai/picbreeder-vlm) ·
 [**📄 Paper (arXiv)**](https://arxiv.org/abs/2605.23908) ·
 [**🤗 Archive dataset**](https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive) ·
-[**🧬 Breed your own (demo)**](https://smearle.github.io/picbreeder-vlm-06b0d76d/breed/)
+[**🧬 Breed your own (demo)**](https://pub.sakana.ai/picbreeder-vlm/breed/)
 
 ---
 
@@ -29,55 +29,104 @@ pipeline behind the paper and blog, and the tooling for the interactive
 
 | | |
 | --- | --- |
-| 📝 **Blog / interactive report** | <https://smearle.github.io/picbreeder-vlm-06b0d76d/> |
+| 📝 **Blog / interactive report** | <https://pub.sakana.ai/picbreeder-vlm> |
 | 📄 **Paper (arXiv)** | <https://arxiv.org/abs/2605.23908> |
 | 🤗 **Archive dataset** (evolved genomes, images, lineages, VLM captions) | <https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive> |
-| 🧬 **Breed‑your‑own demo** (CPPN homage in the browser) | <https://smearle.github.io/picbreeder-vlm-06b0d76d/breed/> |
+| 🧬 **Breed‑your‑own demo** (CPPN homage in the browser) | <https://pub.sakana.ai/picbreeder-vlm/breed/> |
 | 🛰️ **Community API** (Space backing the demo) | <https://huggingface.co/spaces/picbreeder-vlm/picbreeder-community-api> |
 | 🤗 **Community dataset** (user‑bred genomes) | <https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-community> |
 
 ## Install
 
+We use [**uv**](https://docs.astral.sh/uv/):
+
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .            # exposes the `picbreeder_vlm` package + pickle-compat shims
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
+uv pip install -e .          # exposes the `picbreeder_vlm` package + pickle-compat shims
 ```
 
 ## Quickstart
 
-No cloud API key needed — the pipeline can run against a **local Qwen VLM**. This
-snippet renders a CPPN genome and asks a local `Qwen3-VL-8B` to describe it,
-exercising the render + VLM path in a few lines:
+The collaborative loop needs a vision‑language model to act as the "breeder." You
+can drive it **two ways** — a hosted API or a fully local model:
 
-```python
-import io, pickle, neat
-from picbreeder_vlm._paths import REPO_ROOT
-from picbreeder_vlm.viz.render_archive import load_config
-from picbreeder_vlm.core.rendering import render_genome_image
-from picbreeder_vlm.vlm.vlm_backends import create_vlm_backend
+- **Hosted API (Gemini).** Set your key and pick a Gemini model:
+  ```bash
+  export GEMINI_API_KEY=...        # get one from Google AI Studio
+  # then pass e.g. model=gemini-2.5-pro (also: gemini-2.5-flash, gemini-3-pro-preview)
+  ```
+- **Local model (Qwen, no API key).** Pass a local Qwen model — weights run on your
+  own GPU, either in‑process (HuggingFace/vLLM) or against a local server:
+  ```bash
+  # in-process weights (simplest): model=qwen3-vl-8b   (also 2b / 4b / 32b)
+  # or start a shared local vLLM server and point runs at it:
+  ./serve_local_vlm.sh             # serves an OpenAI-compatible endpoint
+  # then pass model=remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+  ```
 
-config = load_config(REPO_ROOT / "picture2d" / "interactive_config_color")
-genome = pickle.load(open("path/to/a/genome.pkl", "rb"))       # e.g. from the archive dataset
-_, color = render_genome_image(genome, config, 224, 224)
-png = io.BytesIO(); color.save(png, format="PNG")
+### Run one collaborative session — `train_collaborative.py`
 
-vlm = create_vlm_backend("qwen3-vl-8b", backend="hf")           # local HF weights; "vllm" also supported
-print(vlm.query(png.getvalue(), "What does this image resemble?").text)
-```
-
-To run the full collaborative multi-agent evolution locally (no Slurm), pick a
-Qwen sweep — outputs land in `logs_collaborative/sweep/<sweep_name>/<run>/`
-(evolved images, genome `.pkl`s, JSON archive snapshots):
+`train_collaborative.py` is the **main entry point** for a single run: a session of
+agents that join a shared archive, evolve CPPN images with the VLM in the loop, and
+publish their discoveries. Override any config field Hydra‑style (`key=value`):
 
 ```bash
-.venv/bin/python -m picbreeder_vlm.experiments.sweep \
-    sweep_name=chat_history_turns_qwen slurm=false
+# with a hosted API model
+GEMINI_API_KEY=... python train_collaborative.py \
+    model=gemini-2.5-pro num_agents=5 agent_generations=20 seed=0
+
+# with a local model (no key)
+python train_collaborative.py \
+    model=qwen3-vl-8b num_agents=5 agent_generations=20 seed=0
 ```
 
+Outputs land in `logs_collaborative/<experiment>/` (evolved images, genome
+`.pkl`s, and JSON archive snapshots). Useful CLI args (full list & defaults in
+[`picbreeder_vlm/core/config.py`](picbreeder_vlm/core/config.py)):
+
+| arg | what it does |
+| --- | --- |
+| `model=` | VLM to use: `gemini-2.5-pro` (API) · `qwen3-vl-8b` (local) · `remote:Qwen/…` (local server) |
+| `num_agents=` · `agent_generations=` | how many agents run, and generations per agent |
+| `seed=` | RNG seed for a reproducible run |
+| `goal=` | breeding objective prompt (`familiar_objects`, `objective_free`, …) |
+| `rows=` `cols=` `select_k=` | CPPN grid size shown to the VLM, and max parents picked per step |
+| `chat_history_turns=` | prior turns each agent sees (`-1` = keep all) |
+| `enable_crossover=` `rand_select_prob=` | Picbreeder‑style crossover; prob. of a random (non‑VLM) pick |
+| `scheme=` | render scheme: `color` / `gray` / `toggle` |
+| `n_personality_traits=` `generate_personalities=` | give agents random personas |
+| `test_mode=true` | quick validation run (caps to 2 agents × 3 generations) |
+| `resume=true` | resume an interrupted run in the same `experiment_dir` |
+
+### Sweep hyperparameters — locally or on SLURM
+
+Named sweeps live in
+[`picbreeder_vlm/experiments/sweep_configs.py`](picbreeder_vlm/experiments/sweep_configs.py)
+(registered in `_NAMED_SWEEPS`); each expands its list‑valued fields into a
+Cartesian product of runs. Launch them with the sweep entry point:
+
+```bash
+# run every combination locally, one after another
+python -m picbreeder_vlm.experiments.sweep sweep_name=chat_history_turns_qwen slurm=false
+
+# or fan the same sweep out as a SLURM array job (via Submitit)
+python -m picbreeder_vlm.experiments.sweep sweep_name=chat_history_turns_qwen slurm=true
+```
+
+Useful sweep args:
+
+| arg | what it does |
+| --- | --- |
+| `sweep_name=` | which named sweep to run (see `_NAMED_SWEEPS`) |
+| `slurm=false\|true` | run locally in sequence, or submit a SLURM array via Submitit |
+| `model=[a,b]` `seed=[1,2,3]` `chat_history_turns=[0,1]` | **list** overrides — swept as a product (note the brackets) |
+| `num_agents=` | scalar overrides apply to every run in the sweep |
+| `eval_visual_coverage=true` `eval_noun_coverage=true` `eval_tree=true` | run the novelty / alignment / phylogeny evaluations over completed runs |
+| `cross_eval=true` | aggregate all seeds into summary plots & tables under `cross_eval/<sweep_name>/` |
+
 See **[AGENTS.md](AGENTS.md)** for the full sweep / evaluation / cross‑eval
-workflow, run-length and agent-count settings, and the local vLLM server setup
-(`serve_local_vlm.sh`).
+workflow and the local vLLM server setup.
 
 ## Repository map
 
@@ -112,7 +161,7 @@ Alongside the VLM experiments we host a small, faithful browser reimplementation
 of Picbreeder where **you** can pick and mutate CPPN images, publish your
 discoveries, and branch off other people's:
 
-- **Try it:** <https://smearle.github.io/picbreeder-vlm-06b0d76d/breed/>
+- **Try it:** <https://pub.sakana.ai/picbreeder-vlm/breed/>
 - Published genomes are stored in the **community dataset**
   (`picbreeder-vlm/picbreeder-vlm-community`) via a small FastAPI gateway that
   runs as a **Hugging Face Space** — its source is in [`community/`](community/).
