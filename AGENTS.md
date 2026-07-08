@@ -158,9 +158,9 @@ class MyNewSweep(SweepConfig):
 
 The interactive blog/report lives in the **`smearle.github.io`** repo (the
 hand-edited HTML at `picbreeder-vlm-06b0d76d/index.html`; public home
-<https://pub.sakana.ai/picbreeder-vlm>). The deploy workflow — where the
+<https://pub.sakana.ai/picbreeder-vlm>). The deploy workflow—where the
 canonical files live, how the gallery data/sprites are staged and pushed to HF,
-and how the `tools/build_*.py` asset builders feed it — is documented in that
+and how the `tools/build_*.py` asset builders feed it—is documented in that
 repo's `AGENTS.md`. The asset-build tooling itself (`tools/build_*.py`,
 `tools/add_lineage_layouts.py`, `tools/push_sprites.py`) lives in this repo.
 
