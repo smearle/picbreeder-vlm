@@ -4,7 +4,7 @@ The venv you need is here: `.venv/bin/python`
 
 This document serves as a guide for agents and developers working on the Picbreeder-VLM project. It outlines the project architecture, key files, and operational workflows.
 
-## 📦 Package layout (2026 restructure)
+## 📦 Package layout
 
 The Python source lives in the **`picbreeder_vlm/`** package (install once with
 `pip install -e .`). Modules are grouped into subpackages:
@@ -151,74 +151,16 @@ class MyNewSweep(SweepConfig):
 *   `initial_populations/`: Seed populations for runs.
 *   `picture2d/`: Legacy Picbreeder rendering and NEAT configuration files.
 
+
 ---
 
-# Blog Post & Deploy Workflow (READ BEFORE EDITING THE BLOG)
+# Blog post & deploy
 
-The interactive blog/report ("The AI Picbreeder Experiment") is a **single,
-hand-edited, git-tracked HTML file** — there is **NO generator and NO build step
-for the HTML**. Past confusion came from edits landing in the wrong copy; this
-section is the single source of truth.
+The interactive blog/report lives in the **`smearle.github.io`** repo (the
+hand-edited HTML at `picbreeder-vlm-06b0d76d/index.html`; public home
+<https://pub.sakana.ai/picbreeder-vlm>). The deploy workflow — where the
+canonical files live, how the gallery data/sprites are staged and pushed to HF,
+and how the `tools/build_*.py` asset builders feed it — is documented in that
+repo's `AGENTS.md`. The asset-build tooling itself (`tools/build_*.py`,
+`tools/add_lineage_layouts.py`, `tools/push_sprites.py`) lives in this repo.
 
-## Where things live
-
-*   **Canonical blog HTML (EDIT THIS):**
-    `~/smearle.github.io/picbreeder-vlm-06b0d76d/index.html`
-    Git-tracked in the **`smearle.github.io`** repo (NOT this repo). The hashed
-    path is an "unguessable" soft-private stash until launch. Nothing regenerates
-    it — edit it directly, then `git -C ~/smearle.github.io commit`.
-    *   ⚠️ There is no `picbreeder-vlm/blog/` dir and no `index.html` template in
-        this repo. If you "rebuild" the blog from some other file, you will lose
-        work. Don't. The HTML *is* the source.
-    *   The old orphan `~/smearle.github.io/picbreeder-vlm/` (assets-only, no
-        index.html) is dead — ignore it.
-
-*   **Interactive archive gallery component (single canonical file, EDIT THIS):**
-    `~/smearle.github.io/picbreeder-vlm-06b0d76d/archive-gallery-sprite.html`
-    Git-tracked, and `index.html` embeds it by **relative path**
-    (`archive-gallery-sprite.html?embed=1&...`) so it must physically sit beside
-    index.html in the deploy dir — edit it directly, just like index.html. The
-    blog `<iframe>`s it; it talks to the host via `postMessage`
-    (`pbvlmReady`/`pbvlmOrder`/`pbvlmHeight`).
-    *   ⚠️ Do NOT recreate a second copy in this repo (a `_archive_mirror/…`
-        scratch duplicate used to exist; it was untracked and only caused drift —
-        deleted 2026-05-30). One file, in github.io. A symlink won't work either:
-        GitHub Pages doesn't follow the cross-repo symlinks (`site`, `index.json`
-        in `-06b0d76d/` are local-`http.server`-preview only; live data is on HF).
-
-*   **Gallery DATA (sprite sheets + `layout.json` orderings):**
-    Staged in `archive_animations/_archive_mirror/site/<run>/sprite/`.
-    The live blog fetches these from the **private** HF dataset
-    `picbreeder-vlm/picbreeder-vlm-archive` (`?archiveBase=` points at HF in prod). A
-    headless/anon browser gets 401 from HF — to test locally, serve the live dir
-    and pass `?archiveBase=.` (the dir symlinks `site/` → this repo's mirror).
-
-*   **Static blog assets (table thumbnails, tree PNGs, hero sprites, etc.):**
-    Build tools in `tools/build_*.py` write directly into
-    `~/smearle.github.io/picbreeder-vlm-06b0d76d/assets/...` (their `ASSETS_DIR`
-    already points there). Run with `.venv/bin/python` (system python has a
-    numpy/scipy clash that breaks `import umap`).
-
-## To change a gallery ordering (e.g. "Most Branched") and deploy it
-
-```bash
-# 1. edit the generator (tools/build_archive_image_lib.py: *_layout fns)
-# 2. regenerate layout.json for all runs (reads each run's archive_metadata.json):
-.venv/bin/python tools/add_lineage_layouts.py --with-phylogeny
-# 3. push the updated sprite sets (incl. layout.json) to HF:
-.venv/bin/python tools/push_sprites.py
-```
-
-Orderings live in `layout.json.layouts`: `chronological`, `siglip`, `branched`
-("Most Branched", ranked by `n_published_children`), `ratings` ("Top Rated", mean
-`vlm_ratings`), `phylogeny` (`kind:"scatter"` radial tree-of-life morph). Labels
-are in the gallery HTML's `ORDER_LABELS`.
-
-## Rule of thumb to avoid clobbering others' work
-
-Edit **data/asset sources in this repo** (`tools/*.py`, `visualize_*.py`, the
-staged data under `_archive_mirror/site/`) and the **presentation HTML directly in
-the github.io repo** (`index.html`, `archive-gallery-sprite.html`). Deploy data/
-assets by running the build tools + `push_sprites.py`; the HTML needs no build step.
-Commit in **both** repos. Never hand-edit generated assets under `…/assets/` — they
-get overwritten on the next build.
