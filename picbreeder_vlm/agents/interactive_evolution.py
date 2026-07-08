@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 import pygame
 
-from picbreeder_vlm.core.artifacts import render_genome_images, save_neat_genome_diagrams, save_neat_population
+from picbreeder_vlm.core.artifacts import render_genome_images, save_neat_genome_diagrams
 from picbreeder_vlm.core.neat_components import (
     InteractiveStagnation,
     PicbreederGenome,
@@ -153,7 +153,7 @@ class PygameGridUI:
 
     def select_parents(
         self,
-        state: Dict[str, object],
+        population_images: List[Image.Image],
         generation: int,
         on_high_res: Callable[[int], Optional[Path]],
         select_limit: Optional[int],
@@ -218,7 +218,7 @@ class PygameGridUI:
                             if path is not None:
                                 self.set_status(f"Saved render to {path.name}")
 
-                self._render(state, generation, selected, select_limit)
+                self._render(population_images, generation, selected, select_limit)
                 self.clock.tick(self.fps)
 
             return sorted(selected)
@@ -227,12 +227,12 @@ class PygameGridUI:
 
     def _render(
         self,
-        state: Dict[str, object],
+        population_images: List[Image.Image],
         generation: int,
         selected: Set[int],
         select_limit: Optional[int],
     ) -> None:
-        surface = self._grid_surface_for(state, selected)
+        surface = self._grid_surface_for(population_images, selected)
         draw_surface = surface
         if self._grid_draw_size != surface.get_size():
             draw_surface = pygame.transform.smoothscale(surface, self._grid_draw_size)
@@ -267,17 +267,19 @@ class PygameGridUI:
             self.screen.blit(text_surface, (12, y))
             y += text_surface.get_height() + 4
 
-    def _grid_surface_for(self, state: Dict[str, object], selected: Iterable[int]) -> pygame.Surface:
+    def _grid_surface_for(self, population_images: List[Image.Image], selected: Iterable[int]) -> pygame.Surface:
         selected_tuple = tuple(sorted(int(idx) for idx in selected))
-        if self._grid_state is state and self._last_selected == selected_tuple and self._grid_surface is not None:
+        if self._grid_state is population_images and self._last_selected == selected_tuple and self._grid_surface is not None:
             return self._grid_surface
 
-        image = create_numbered_grid(state, selected=selected_tuple)
+        image = create_numbered_grid(
+            population_images, self.rows, self.cols, self.thumb, selected=selected_tuple
+        )
         data = image.tobytes()
         surface = pygame.image.frombuffer(data, image.size, image.mode).convert()
         self._grid_surface = surface
         self._last_selected = selected_tuple
-        self._grid_state = state
+        self._grid_state = population_images
         return surface
 
     def _index_for_position(self, position: Tuple[int, int]) -> Optional[int]:
@@ -457,12 +459,11 @@ class HumanDrivenEvolver:
             return []
         artifacts: List[Path] = []
         for index, (genome_id, genome) in enumerate(genomes):
-            image = render_genome_image(
+            _, image = render_genome_image(
                 genome,
                 config,
                 self.render_size,
                 self.render_size,
-                self.scheme,
             )
             gray_image_data, color_image_data = eval_genome_as_grayscale_and_color(genome, config, self.render_size, self.render_size)
             gray_image = Image.new(mode="L", size=(self.render_size, self.render_size))
@@ -499,29 +500,17 @@ class HumanDrivenEvolver:
                 print(f"Grayscale renders saved to {self.gray_render_dir}")
                 self._gray_notice_emitted = True
 
-        states, caches = render_genome_images(
-            genomes,
-            config,
-            generation,
-            self.rows,
-            self.cols,
-            self.thumb_size,
-            variant="both"
-        )
-        state = states['color']
-        cache = caches['color']
-        save_neat_population(state, self.snapshot_dir, generation, cache)
+        _, population_images = render_genome_images(genomes, config, self.thumb_size)
 
         def render_high_res(index: int) -> Optional[Path]:
             if index < 0 or index >= len(genomes):
                 return None
             genome_id, genome = genomes[index]
-            image = render_genome_image(
+            _, image = render_genome_image(
                 genome,
                 config,
                 self.render_size,
                 self.render_size,
-                self.scheme,
             )
             filename = f"gen_{generation:03d}_idx_{index:02d}_id_{genome_id}.png"
             path = self.render_dir / filename
@@ -529,7 +518,7 @@ class HumanDrivenEvolver:
             return path
 
         selected = self.ui.select_parents(
-            state,
+            population_images,
             generation,
             render_high_res,
             self.select_limit,
