@@ -46,22 +46,38 @@ pip install -e .            # exposes the `picbreeder_vlm` package + pickle-comp
 
 ## Quickstart
 
-Run a small collaborative sweep locally (no Slurm). With no cloud API key you can
-drive the pipeline entirely from a **local Qwen VLM** backend:
+No cloud API key needed — the pipeline can run against a **local Qwen VLM**. This
+snippet renders a CPPN genome and asks a local `Qwen3-VL-8B` to describe it,
+exercising the render + VLM path in a few lines:
 
-```bash
-# start a local Qwen vLLM server (see the script for model/GPU options)
-./serve_local_vlm.sh
+```python
+import io, pickle, neat
+from picbreeder_vlm._paths import REPO_ROOT
+from picbreeder_vlm.viz.render_archive import load_config
+from picbreeder_vlm.core.rendering import render_genome_image
+from picbreeder_vlm.vlm.vlm_backends import create_vlm_backend
 
-# a short local run against it (test_mode caps to 2 agents × 3 generations)
-.venv/bin/python -m picbreeder_vlm.experiments.sweep \
-    sweep_name=chat_history_turns slurm=false \
-    model=qwen3-vl-8b test_mode=true
+config = load_config(REPO_ROOT / "picture2d" / "interactive_config_color")
+genome = pickle.load(open("path/to/a/genome.pkl", "rb"))       # e.g. from the archive dataset
+_, color = render_genome_image(genome, config, 224, 224)
+png = io.BytesIO(); color.save(png, format="PNG")
+
+vlm = create_vlm_backend("qwen3-vl-8b", backend="hf")           # local HF weights; "vllm" also supported
+print(vlm.query(png.getvalue(), "What does this image resemble?").text)
 ```
 
-Outputs land in `logs_collaborative/sweep/<sweep_name>/<run>/` (evolved images,
-genome `.pkl`s, and JSON archive snapshots). See **[AGENTS.md](AGENTS.md)** for the
-full sweep / evaluation / cross‑eval workflow and the local‑VLM server setup.
+To run the full collaborative multi-agent evolution locally (no Slurm), pick a
+Qwen sweep — outputs land in `logs_collaborative/sweep/<sweep_name>/<run>/`
+(evolved images, genome `.pkl`s, JSON archive snapshots):
+
+```bash
+.venv/bin/python -m picbreeder_vlm.experiments.sweep \
+    sweep_name=chat_history_turns_qwen slurm=false
+```
+
+See **[AGENTS.md](AGENTS.md)** for the full sweep / evaluation / cross‑eval
+workflow, run-length and agent-count settings, and the local vLLM server setup
+(`serve_local_vlm.sh`).
 
 ## Repository map
 
