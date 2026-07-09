@@ -3,6 +3,10 @@ __pycache__/
 .pycache
 multirun
 
+# secrets (community/.gitignore used to cover this; keep it covered after removal)
+**/ADMIN_KEY.local.txt
+.env
+
 initial_populations/*
 interactive_runs/*
 logs_collaborative*

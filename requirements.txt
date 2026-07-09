@@ -7,7 +7,6 @@ pandas
 pathlib
 Pillow
 portkey-ai
-pygame
 python-dotenv
 submitit
 
