@@ -184,7 +184,7 @@ if __name__ == "__main__":
     from PIL import Image
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="picture2d/interactive_config_color")
+    ap.add_argument("--config", default="data/neat/interactive_config_color")
     ap.add_argument("--out-dir", type=Path, default=Path("archive_animations/out"))
     ap.add_argument("--size", type=int, default=128)
     ap.add_argument("--steps", type=int, default=9, help="frames in test strip")

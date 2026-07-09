@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import numpy as np
 from pyparsing import Iterable
 
-from picture2d.common import (
+from picbreeder_vlm.core.picture2d import (
     _canvas_coords,
     eval_genome_as_grayscale_and_color,
 )

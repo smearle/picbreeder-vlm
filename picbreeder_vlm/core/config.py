@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, Union
 from hydra.conf import HelpConf, HydraConf
 from hydra.core.config_store import ConfigStore
 
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 from picbreeder_vlm.core.constants import REPO_ROOT, SELECTION_BASELINES
 from picbreeder_vlm.core.utils import _ensure_absolute
 
@@ -96,10 +97,13 @@ class PicbreederConfig:
 
 def resolve_neat_config_path(cfg: PicbreederConfig) -> Path:
     if cfg.neat_config_path is not None:
-        return Path(cfg.neat_config_path)
-    base = REPO_ROOT / "picture2d"
-    config_name = "interactive_config_color"
-    return base / config_name
+        path = Path(cfg.neat_config_path)
+        if not path.exists() and path.name == NEAT_CONFIG_PATH.name:
+            # Runs recorded before the 2026 restructure pin picture2d/; the preset
+            # moved to data/neat/ but is otherwise unchanged, so resume still works.
+            return NEAT_CONFIG_PATH
+        return path
+    return NEAT_CONFIG_PATH
 
 
 def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> PicbreederConfig:

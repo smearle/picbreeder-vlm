@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "picture2d" / "interactive_config_color"
+DEFAULT_CONFIG_PATH = NEAT_CONFIG_PATH
 
 
 @dataclass

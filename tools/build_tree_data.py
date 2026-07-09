@@ -69,6 +69,11 @@ def agent_num(agent_id: str) -> str:
     return str(int(m.group(1))) if m else (agent_id or "?")
 
 
+def img_index(img_id: str) -> int:
+    """`img_000042` -> 42 (the published, 1-based image index)."""
+    return int(img_id.split("_")[1])
+
+
 def meta_path_for(run: str) -> Path | None:
     for base in (SWEEP, SWEEP_ALT):
         p = base / run / "archive" / "archive_metadata.json"
@@ -230,6 +235,18 @@ def _assemble(run: str, model: str, traits: int, entries: list,
     leaves = [c for c in ids if nodes[c]["c"] == 0]
     default = max(leaves or list(ids), key=lambda x: (depth[x], nodes[x]["r"] or 0))
 
+    # Captions (title + mean rating) for *every* published image, dense on the
+    # image index (slot i == img_{i+1:06d}), not just the genome-having nodes
+    # above. The gallery captions images it can't breed from, so gating these on
+    # a genome silently blanked the titles of runs whose genome dump is partial.
+    n_img = max(img_index(i) for i in all_ids)
+    titles: list = [None] * n_img
+    ratings: list = [None] * n_img
+    for e in entries:
+        k = img_index(e["id"]) - 1
+        titles[k] = e.get("title") or None
+        ratings[k] = mean_rating(e)[0]
+
     return {
         "run": run,
         "model": model,
@@ -240,6 +257,8 @@ def _assemble(run: str, model: str, traits: int, entries: list,
         "featured": featured,
         "default": default,
         "nodes": nodes,
+        "ti": titles,
+        "ra": ratings,
     }
 
 
@@ -313,8 +332,10 @@ def main():
     shutil.copyfile(src_gz, OUT / "tree_genomes.json.gz")
     print(f"[tree] bundled canon sidecar + genomes ({(OUT/'tree_genomes.json.gz').stat().st_size/1e6:.1f} MB)")
 
-    total = sum((TREE_OUT / f"{m['run']}.json.gz").stat().st_size for m in manifest_runs)
-    print(f"[tree] {len(manifest_runs)} sidecars, {total/1e6:.1f} MB total gz")
+    # `human` is in the manifest but its shard ships on HF, not here — skip absentees.
+    shards = [p for p in ((TREE_OUT / f"{m['run']}.json.gz") for m in manifest_runs) if p.exists()]
+    total = sum(p.stat().st_size for p in shards)
+    print(f"[tree] {len(shards)} sidecars, {total/1e6:.1f} MB total gz")
 
 
 if __name__ == "__main__":

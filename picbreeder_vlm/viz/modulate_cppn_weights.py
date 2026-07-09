@@ -129,7 +129,7 @@ def save_modulation_grid(
 
 def main():
     genome_path = Path("sweep_logs/sweep/th1_ag20_model-gemini-2.5-flash-lite_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5/archive/genomes/img_000447.pkl")
-    config_path = Path("picture2d/interactive_config_color")
+    config_path = Path("data/neat/interactive_config_color")
     output_path = Path("weight_modulation_grid.png")
     
     if not genome_path.exists():

@@ -46,7 +46,7 @@ from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_f
 from picbreeder_vlm.core.rendering import render_genome_image
 
 
-def build_config(config_path: str = "picture2d/interactive_config_color") -> neat.Config:
+def build_config(config_path: str = "data/neat/interactive_config_color") -> neat.Config:
     config = neat.Config(
         PicbreederGenome, PicbreederReproduction, neat.DefaultSpeciesSet,
         InteractiveStagnation, config_path,

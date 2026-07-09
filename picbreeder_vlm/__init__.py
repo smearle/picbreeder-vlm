@@ -4,7 +4,7 @@ Reimplementing Picbreeder with Large Vision-Language Models.
 See README.md for an overview and the subpackage docstrings for a map.
 """
 # Keep the repository root importable so the auxiliary top-level packages that
-# live beside this one -- picture2d/, tools/, archive_animations/, fer/ and the
+# live beside this one -- tools/, archive_animations/, fer/ and the
 # pickle-compat shims (neat_components.py, config.py, ...) -- resolve whenever
 # picbreeder_vlm is imported, regardless of the current working directory.
 import sys as _sys

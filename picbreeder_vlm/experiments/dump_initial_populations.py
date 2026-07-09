@@ -81,7 +81,7 @@ def main(cfg: config.PicbreederConfig):
     dump_initial_populations(
         count=10,
         output_dir=Path(os.path.join("initial_populations", timestamp)),
-        config_path=Path("picture2d/interactive_config_color"),
+        config_path=Path("data/neat/interactive_config_color"),
         rows=3,
         cols=5,
         thumb_size=200,

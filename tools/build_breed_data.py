@@ -43,7 +43,8 @@ from picbreeder_vlm.core.neat_components import (
     apply_picbreeder_config_defaults,
 )
 from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
-from picture2d.common import eval_genome_as_grayscale_and_color
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
+from picbreeder_vlm.core.picture2d import eval_genome_as_grayscale_and_color
 from picbreeder_vlm.core.genome_json import genome_to_json as _genome_to_json
 
 REPO = Path(__file__).resolve().parent.parent
@@ -66,7 +67,7 @@ _config = neat.Config(
     PicbreederReproduction,
     neat.DefaultSpeciesSet,
     InteractiveStagnation,
-    str(REPO / "picture2d" / "interactive_config_color"),
+    str(NEAT_CONFIG_PATH),
 )
 apply_picbreeder_config_defaults(_config, enable_output_activations=True)
 

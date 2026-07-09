@@ -39,7 +39,7 @@ from tools.render_legacy_genome import (  # noqa: E402
 import neat  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from picture2d.common import (  # noqa: E402
+from picbreeder_vlm.core.picture2d import (  # noqa: E402
     _canvas_coords,
     hsb_to_rgb,
 )

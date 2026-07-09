@@ -21,9 +21,11 @@ from picbreeder_vlm.core.neat_components import (
     sync_population_output_activations,
 )
 from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
-from picture2d.common import eval_genome_as_grayscale_and_color
+from picbreeder_vlm.core.picture2d import eval_genome_as_grayscale_and_color
 from picbreeder_vlm.core.rendering import create_numbered_grid, render_genome_image
 
+
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MARGIN = 12
@@ -54,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         "--config-path",
         type=Path,
         default=None,
-        help="Path to the NEAT configuration file. Defaults to the picture2d presets.",
+        help="Path to the NEAT configuration file. Defaults to the bundled preset.",
     )
     parser.add_argument(
         "--output-activations",
@@ -107,9 +109,7 @@ def parse_args() -> argparse.Namespace:
 def resolve_config_path(config_path: Optional[Path], scheme: str) -> Path:
     if config_path is not None:
         return config_path.resolve()
-    base = REPO_ROOT / "picture2d"
-    fallback = "interactive_config_color"
-    return (base / fallback).resolve()
+    return NEAT_CONFIG_PATH.resolve()
 
 
 class PygameGridUI:

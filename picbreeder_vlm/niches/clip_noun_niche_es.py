@@ -42,7 +42,7 @@ from picbreeder_vlm.core.neat_components import (
     _seed_picbreeder_genome,
 )
 from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
-from picture2d.common import eval_genome_as_grayscale_and_color
+from picbreeder_vlm.core.picture2d import eval_genome_as_grayscale_and_color
 from picbreeder_vlm.core.rendering import create_numbered_grid
 
 from picbreeder_vlm.niches.clip_noun_niche_config import ClipNounNicheConfig

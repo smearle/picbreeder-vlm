@@ -304,12 +304,11 @@ def _infer_scheme(legacy: LegacyGenome) -> str:
 
 
 def _resolve_neat_config_path() -> Path:
-    root = Path(__file__).resolve().parents[1]
-    filename = "interactive_config_color"
-    config_path = root / "picture2d" / filename
-    if not config_path.exists():
-        raise FileNotFoundError(f"NEAT config not found at {config_path}")
-    return config_path
+    from picbreeder_vlm._paths import NEAT_CONFIG_PATH
+
+    if not NEAT_CONFIG_PATH.exists():
+        raise FileNotFoundError(f"NEAT config not found at {NEAT_CONFIG_PATH}")
+    return NEAT_CONFIG_PATH
 
 
 def _build_neat_config() -> neat.Config:

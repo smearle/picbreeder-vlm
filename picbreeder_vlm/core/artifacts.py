@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import PIL
 import neat
 
-from picture2d.common import eval_genome_as_grayscale_and_color
+from picbreeder_vlm.core.picture2d import eval_genome_as_grayscale_and_color
 from picbreeder_vlm.core.rendering import decode_image, render_genome_diagram, render_genome_image
 
 
