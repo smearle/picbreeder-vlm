@@ -48,7 +48,7 @@ uv pip install -e .          # exposes the `picbreeder_vlm` package + pickle-com
 ## Quickstart
 
 The collaborative loop needs a vision‑language model to act as the "breeder." You
-can drive it **two ways**—a hosted API or a fully local model:
+can drive it **two ways**: a hosted API or a local model:
 
 - **Hosted API (Gemini).** Set your key and pick a Gemini model:
   ```bash
@@ -64,9 +64,9 @@ can drive it **two ways**—a hosted API or a fully local model:
   # then pass model=remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
   ```
 
-### Run one collaborative session—`train_collaborative.py`
+### Run one collaborative session with `train_collaborative.py`
 
-`train_collaborative.py` is the **main entry point** for a single run: a session of
+`train_collaborative.py` is the main entry point for a single run: a session of
 agents that join a shared archive, evolve CPPN images with the VLM in the loop, and
 publish their discoveries. Override any config field Hydra‑style (`key=value`):
 
@@ -135,29 +135,40 @@ Source lives in the **`picbreeder_vlm/`** package:
 | --- | --- |
 | `picbreeder_vlm.core` | config, CPPN/NEAT genome (`neat_components`), reproduction, rendering, archive management |
 | `picbreeder_vlm.vlm` | VLM backends (Gemini / Qwen / …), prompts, chat/conversation history |
-| `picbreeder_vlm.agents` | the collaborative multi‑agent loop, single‑agent runner, human interactive mode |
+| `picbreeder_vlm.agents` | the collaborative multi‑agent loop, single‑agent runner |
 | `picbreeder_vlm.experiments` | sweep orchestration (Hydra + Submitit), run configs, experiment CLIs |
 | `picbreeder_vlm.analysis` | coverage / embedding / captioning / phylogeny / rating metrics |
 | `picbreeder_vlm.viz` | figure and lineage/archive visualization |
 | `picbreeder_vlm.niches` | CLIP noun‑niche evolution‑strategy experiments |
 | `picbreeder_vlm.nouns` · `picbreeder_vlm.bench` | vocabulary wrangling · VLM benchmarking/probing |
 
-Other top‑level directories: **`tools/`** (blog & paper asset builders),
-**`archive_animations/`** (lineage/teaser animations), **`paper/`** (LaTeX + figure
-sources), **`community/`** (the Hugging Face Space that backs the breed demo),
-**`webneat/`** (the original Java WebNEAT client, kept for reference / legacy genome
-parsing), **`picture2d/`** (legacy Picbreeder NEAT config & rendering).
+Other top‑level directories: **`tools/`** (blog & figure asset builders),
+**`archive_animations/`** (lineage/teaser animations), **`figures/`** (TikZ sources for
+the blog figures; the paper itself lives in Overleaf), **`data/`** (committed data,
+including the NEAT preset at `data/neat/interactive_config_color`),
+**`reference/`** (third‑party material, nothing imported by the experiments).
 
-## 🧬 The Picbreeder homage—breed your own
+Two pieces of that lineage are worth naming. Our CPPN rasterizer and NEAT preset
+(`picbreeder_vlm/core/picture2d.py`, `data/neat/interactive_config_color`) began as
+a fork of the `examples/picture2d` demo in
+[neat‑python](https://github.com/CodeReclaimers/neat-python) (BSD‑3‑Clause) and have
+since diverged substantially — four CPPN inputs, a fully connected initial topology,
+and the `PicbreederGenome` / `PicbreederReproduction` operators. Those operators were
+in turn calibrated against **`reference/webneat/`**, Nick Beato's original Picbreeder
+Java client (obtained via Sebastian Risi), which is the authority for how the 2008
+system actually behaved; the mutation weight range and mutation‑strength floor in
+`core/neat_components.py` were matched to it directly.
 
-Alongside the VLM experiments we host a small, faithful browser reimplementation
-of Picbreeder where **you** can pick and mutate CPPN images, publish your
-discoveries, and branch off other people's:
+## 🧬 Breed your own pics
 
-- **Try it:** <https://pub.sakana.ai/picbreeder-vlm/breed/>
-- Published genomes are stored in the **community dataset**
+Alongside the VLM experiments we host a partial reimplementation
+of Picbreeder where humans can branch, mutate, rate and publish CPPN images:
+
+- Try it here: <https://pub.sakana.ai/picbreeder-vlm/breed/>
+- Published genomes are stored in a community dataset
   (`picbreeder-vlm/picbreeder-vlm-community`) via a small FastAPI gateway that
-  runs as a **Hugging Face Space**—its source is in [`community/`](community/).
+  runs as a **Hugging Face Space**, whose source lives in its own repo:
+  <https://huggingface.co/spaces/picbreeder-vlm/picbreeder-community-api>.
 
 ## Data
 
@@ -181,4 +192,9 @@ power the interactive gallery in the blog.
 
 Builds on the original **Picbreeder** (Secretan, Beato, D'Ambrosio, Rodriguez,
 Campbell & Stanley, 2008) and the NEAT/CPPN lineage of work by Kenneth O. Stanley
-and collaborators. The `webneat/` client is the original WebNEAT code by Nick Beato.
+and collaborators. `reference/webneat/` is the original WebNEAT code by Nick Beato.
+`fer/` is vendored from [akarshkumar0101/fer](https://github.com/akarshkumar0101/fer)
+(Apache‑2.0), the code for *The Fractured Entangled Representation Hypothesis*; we use
+its Picbreeder genome parsing and have added our own lineage/phylogeny scripts alongside
+it. Our CPPN rendering derives from
+[neat‑python](https://github.com/CodeReclaimers/neat-python) (BSD‑3‑Clause).
