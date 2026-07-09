@@ -244,7 +244,9 @@ def _assemble(run: str, model: str, traits: int, entries: list,
     ratings: list = [None] * n_img
     for e in entries:
         k = img_index(e["id"]) - 1
-        titles[k] = e.get("title") or None
+        # force-published entries carry title "" (the VLM never named them) — label them
+        # "Untitled", matching the `nodes` convention, so the caption never renders blank.
+        titles[k] = e.get("title") or "Untitled"
         ratings[k] = mean_rating(e)[0]
 
     return {
