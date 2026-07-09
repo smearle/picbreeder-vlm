@@ -169,7 +169,7 @@ def _save_and_map(fig, ax, xy, out_png):
 
 def build(space, out_root, sample, cell, quality, refresh_blog=True):
     cfg = SPACE_CFG[space]
-    npz = np.load(B.REPO / "paper/metric_figs" / cfg["npz"], allow_pickle=True)
+    npz = np.load(B.REPO / "figures/metric_figs" / cfg["npz"], allow_pickle=True)
     out = out_root / space
     out.mkdir(parents=True, exist_ok=True)
 

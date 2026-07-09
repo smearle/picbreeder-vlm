@@ -211,8 +211,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("figures/lineages/full_phylogeny"),
-        help="Output path without suffix (default: figures/lineages/full_phylogeny).",
+        default=Path("human_lineages/lineages/full_phylogeny"),
+        help="Output path without suffix (default: human_lineages/lineages/full_phylogeny).",
     )
     parser.add_argument(
         "--format",

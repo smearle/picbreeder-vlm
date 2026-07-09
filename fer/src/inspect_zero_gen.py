@@ -79,7 +79,7 @@ def main() -> None:
     if not image_dir.exists():
         image_dir = Path("fer/src/archive_res-128").expanduser().resolve()
         
-    output_dir = Path("figures/zero_gen_examples").expanduser().resolve()
+    output_dir = Path("human_lineages/zero_gen_examples").expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     
     if not pb_dir.is_dir():

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_metric_fig_assets as B
 
 run = B.DEFAULT_RUN.resolve()
-out = (B.REPO / "paper/metric_figs").resolve()
+out = (B.REPO / "figures/metric_figs").resolve()
 
 fnames, img_emb, noun_emb, n_nouns, chosen = B._recall_chosen(run)
 img_emb = img_emb / (np.linalg.norm(img_emb, axis=1, keepdims=True) + 1e-9)

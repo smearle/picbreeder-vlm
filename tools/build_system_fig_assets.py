@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the four panel assets for paper/system_fig/system_overview.tex from an
+"""Build the four panel assets for figures/system_fig/system_overview.tex from an
 arbitrary run + featured agent.
 
 Outputs (into ``--out-dir``):
@@ -17,7 +17,7 @@ Example:
         --run-dir sweep_logs/sweep/th2_ag20_model-gemini-3-pro-preview_..._s4 \\
         --agent agent_909 \\
         --ratings-run sweep_logs_bkp/th1_ag20_model-gemini-2.5-pro_..._s0 \\
-        --out-dir paper/system_fig
+        --out-dir figures/system_fig
 
 If ``--agent random`` is passed, picks one (deterministic w/ --seed) from the
 run's agents/ dir. If ``--ratings-run`` is omitted, falls back to the main run;
@@ -390,7 +390,7 @@ def main() -> int:
     ap.add_argument("--ratings-run", type=Path, default=None,
                     help="separate run providing vlm_ratings (default: --run-dir)")
     ap.add_argument("--out-dir", type=Path,
-                    default=REPO / "paper" / "system_fig")
+                    default=REPO / "figures" / "system_fig")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--gen", type=int, default=10,
                     help="generation to show in the candidate grid (default 10; "
@@ -479,7 +479,7 @@ def main() -> int:
                 parent_title = e.get("title")
                 break
 
-    # Macros consumed by paper/system_fig/system_overview.tex
+    # Macros consumed by figures/system_fig/system_overview.tex
     def _esc(s: str) -> str:
         if s is None:
             return ""

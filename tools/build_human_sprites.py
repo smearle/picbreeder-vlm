@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path("/home/jupyter-smearle/picbreeder-vlm")
-THUMBS = REPO / "figures/lineages/lineage_phylogeny_thumbs_128"   # 128px to match the VLM runs
+THUMBS = REPO / "human_lineages/lineages/lineage_phylogeny_thumbs_128"   # 128px to match the VLM runs
 EMB = REPO / "human_baseline/res-128/embeddings_openclip_SigLIP2-B-alignet.npz"
 SITE = REPO / "archive_animations/_archive_mirror/site"
 PB = REPO / "fer/spaghetti/pbRender/genomeAll"                    # per-pid main.zip (carries branchFrom)

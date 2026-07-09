@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("figures/human_generations_hist.png"),
+        default=Path("human_lineages/human_generations_hist.png"),
         help="Output path for the plot.",
     )
     parser.add_argument(

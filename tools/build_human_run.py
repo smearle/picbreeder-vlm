@@ -18,7 +18,7 @@ This script synthesizes that from the human gallery:
   - generation  = lineage depth (root = 0)
   - title       = the VLM caption for that image, if available (leaderboard label)
   - color_enabled = True (human CPPNs are colour; only matters for morph mode)
-  - images/<id>.png = symlink to figures/lineages/lineage_phylogeny_thumbs_128/<pid>_final.png
+  - images/<id>.png = symlink to human_lineages/lineages/lineage_phylogeny_thumbs_128/<pid>_final.png
 
 No genomes are emitted (human CPPNs aren't pickled), so the scroll panel must run
 --reveal pop and the leaderboard --board branched (no VLM ratings exist).
@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 REPO = Path("/home/jupyter-smearle/picbreeder-vlm")
-THUMBS = REPO / "figures/lineages/lineage_phylogeny_thumbs_128"
+THUMBS = REPO / "human_lineages/lineages/lineage_phylogeny_thumbs_128"
 CAPTIONS = REPO / "human_baseline/res-128/captions_human.json"
 
 

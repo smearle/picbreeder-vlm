@@ -359,7 +359,7 @@ def main():
     # Human baseline num_agents is conceptually 2000 (since we clipped it there)
     hb_row["num_agents_mean"] = 2000
 
-    human_metrics_path = Path("figures/lineages/lineage_phylogeny_metrics.json")
+    human_metrics_path = Path("human_lineages/lineages/lineage_phylogeny_metrics.json")
     if human_metrics_path.exists():
         try:
             hm = json.loads(human_metrics_path.read_text(encoding="utf-8"))

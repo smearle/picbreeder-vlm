@@ -54,7 +54,7 @@
 % 0.7cm thumbnails (=3.5cm tall) so the rows fit snugly with only the frame's
 % inner padding to spare.
 \def\panelHt{4.25cm}
-% Bottom row (Evolution/Evaluation): sized so the Evolution stack (VLM selection
+% Bottom row (Evolution/Evaluation): sized so the Evolution stack (VLM breeder
 % / mutation / candidate grid / publication) sits cozily with only ~0.35cm of
 % padding above and below. The Evaluation grid is scaled down to share this
 % height (see \rThumb/\rRowGap/\rTitleH below).
@@ -135,10 +135,10 @@
   (evo) at (0,-5.05) {};
 \node[colTitle] at (evo.north west) {Evolution};
 
-% Three nodes (VLM selection / Mutation-crossover / generation grid), vertically
+% Three nodes (VLM breeder / Mutation-crossover / generation grid), vertically
 % centred within the frame: column centre at mut-(2.7225-h_box)/2 = frame centre.
 \node[mutbox] (mut) at (3.5,-6.55) {Mutation/crossover};
-\node[vlmbox, above=0.4cm of mut] (sel) {VLM selection};
+\node[vlmbox, above=0.4cm of mut] (sel) {VLM breeder};
 \draw[pipe] (sel) -- (mut);
 
 \node[img, below=0.4cm of mut] (pop0)
@@ -146,8 +146,8 @@
 \draw[pipe] (mut) -- (pop0);
 
 % x20 back-edge: leave the generation grid's right edge, sweep up in a symmetric
-% curve to the point directly above it (at VLM selection's height), then run as a
-% straight horizontal line left into the right side of VLM selection.
+% curve to the point directly above it (at VLM breeder's height), then run as a
+% straight horizontal line left into the right side of VLM breeder.
 \draw[loop]
   (pop0.east) .. controls +(1.4,0) and +(1.4,0) ..
     node[pos=0.5, right=1pt, font=\scriptsize\itshape] {$\times 20$}
@@ -168,7 +168,7 @@
 
 % Column content: rat-title + 6 rated thumbnails in a 3x2 grid; titles
 % and stars are rendered as LaTeX text (not baked into the PNGs).
-\node[vlmbox, anchor=north] (rat-title) at (13.85,-5.43) {VLM rating};
+\node[vlmbox, anchor=north] (rat-title) at (13.85,-5.43) {VLM critic};
 
 \def\rThumb{1.24cm}     % scaled down from 1.45cm so the 2-row grid fits the
                         % shorter \panelHb alongside a cozy Evolution column
@@ -215,7 +215,7 @@
   (pub.west) -- ([xshift=-0.6cm]evo.west |- pub.west)
               |- ([yshift=-0.18cm]arch.west);
 
-% Sampling -> VLM rating: straight vertical, horizontally centered on rater. Leaves
+% Sampling -> VLM critic: straight vertical, horizontally centered on rater. Leaves
 % the BACK frame's south edge (the rater's draw, a *different* sample than the
 % evolver's front-frame draw).
 \draw[feed]

@@ -3,7 +3,7 @@
 own pipeline: plot_lineage_phylogeny._load_lineage_info reads each genome's OG zips, and
 _render_thumbnail_array renders the final genome at the requested resolution.
 
-Output: figures/lineages/lineage_phylogeny_thumbs_128/<pid>_final.png  (same naming as the 64px set)
+Output: human_lineages/lineages/lineage_phylogeny_thumbs_128/<pid>_final.png  (same naming as the 64px set)
 Idempotent: skips a pid whose 128px thumb already exists. Pass --limit N to test on a few.
 """
 import sys
@@ -16,8 +16,8 @@ from fer.src.plot_lineage_phylogeny import _load_lineage_info, _render_thumbnail
 
 ROOT = Path("/home/jupyter-smearle/picbreeder-vlm")
 PB = ROOT / "fer/spaghetti/pbRender/genomeAll"
-SRC64 = ROOT / "figures/lineages/lineage_phylogeny_thumbs"
-OUT = ROOT / "figures/lineages/lineage_phylogeny_thumbs_128"
+SRC64 = ROOT / "human_lineages/lineages/lineage_phylogeny_thumbs"
+OUT = ROOT / "human_lineages/lineages/lineage_phylogeny_thumbs_128"
 
 
 def main():

@@ -1562,7 +1562,7 @@ def _plot_tree_metrics_aggregates(
                 print(f"  Missing: {p}")
 
     # Load human baseline if available
-    human_metrics_path = Path("figures/lineages/lineage_phylogeny_metrics.json")
+    human_metrics_path = Path("human_lineages/lineages/lineage_phylogeny_metrics.json")
     human_baselines_sackin = []
     human_baselines_colless = []
     human_baselines_depth = []

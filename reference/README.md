@@ -23,3 +23,8 @@ The tree is preserved as received, including compiled `.class` files and the
 bundled jars. Note that `webneat/jar/LICENSE` is a **Sun Microsystems** license
 covering only the bundled toolbar icons (the `jlfgr` graphics set) — it is not a
 license for the WebNEAT source, which carries none.
+
+## `sakana_templates/`
+
+Saved Sakana AI blog pages, kept as a styling template for our own interactive
+report. Not used by any build step.

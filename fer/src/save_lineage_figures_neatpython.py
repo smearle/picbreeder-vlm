@@ -501,8 +501,8 @@ def parse_args(argv: Iterable[str] | None = None):
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("figures/lineages_neat"),
-        help="Directory to write generated lineage figures (default: figures/lineages_neat).",
+        default=Path("human_lineages/lineages_neat"),
+        help="Directory to write generated lineage figures (default: human_lineages/lineages_neat).",
     )
     parser.add_argument(
         "--max-genomes",

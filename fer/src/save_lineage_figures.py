@@ -268,7 +268,7 @@ def parse_args():
         "--output-dir",
         type=Path,
         default=Path("lineages"),
-        help="Where to write the generated figures (default: figures/lineages).",
+        help="Where to write the generated figures (default: human_lineages/lineages).",
     )
     parser.add_argument(
         "--max-genomes",

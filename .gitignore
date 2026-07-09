@@ -32,7 +32,8 @@ fer/src/lineages*
 fer/spaghetti/pbRender/thumbs_cache/
 cross_eval_clip_niches/*
 SigLIP2-B-alignet*
-figures/*
+# fer-derived renders of the human Picbreeder archive (regenerable, ~1GB)
+human_lineages/*
 human_baseline/*
 noun_lists/embeddings/*
 _transcripts_stage/
@@ -59,7 +60,7 @@ eval_models/
 claude_picbreeder/
 traits_meta_cluster/
 colormap_tests/
-# paper: keep .tex/figures, exclude regenerable caches and packaging artifacts
-paper/metric_figs/_agg_*.npz
-paper/Picbreeder_VLM.zip
-paper/extracted/
+# figures/: TikZ sources for the blog (+ slides/README); exclude regenerable caches
+figures/metric_figs/_agg_*.npz
+# the paper itself lives in Overleaf; this is its export, not a source of truth
+manuscript/

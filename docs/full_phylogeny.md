@@ -7,7 +7,7 @@
 ```bash
 /Users/samearle/picbreeder-vlm/.venv/bin/python fer/src/plot_full_phylogeny.py \
   --pb-dir fer/spaghetti/pbRender/genomeAll \
-  --output figures/lineages/full_phylogeny \
+  --output human_lineages/lineages/full_phylogeny \
   --format pdf
 ```
 

@@ -383,7 +383,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("figures/lineages/lineage_phylogeny"),
+        default=Path("human_lineages/lineages/lineage_phylogeny"),
         help="Output path without suffix.",
     )
     parser.add_argument(

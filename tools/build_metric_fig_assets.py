@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build the image/scatter/meta assets for the three eval-metric pipeline figures
-(paper/metric_figs/{semantic_recall,visual_novelty,semantic_novelty}.tex), in the
+(figures/metric_figs/{semantic_recall,visual_novelty,semantic_novelty}.tex), in the
 visual style of the system-overview figure.
 
 All assets are derived from ONE clean default run (gemini-2.5-pro, CL=1, no noise,
@@ -8,7 +8,7 @@ no personalities, 2000 published images) so that all three figures depict the sa
 archive. Everything is computed from precomputed caches already on disk -- no model
 is loaded here.
 
-Outputs (into --out-dir, default paper/metric_figs):
+Outputs (into --out-dir, default figures/metric_figs):
 
     archive_grid.png        white-padded mosaic of ~100 archive images (shared source)
 
@@ -1093,7 +1093,7 @@ def build_grids(run: Path, out: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", type=Path, default=DEFAULT_RUN)
-    ap.add_argument("--out-dir", type=Path, default=REPO / "paper/metric_figs")
+    ap.add_argument("--out-dir", type=Path, default=REPO / "figures/metric_figs")
     ap.add_argument("--only", nargs="*", default=None,
                     choices=["grid", "recall", "visual", "semantic", "iso", "grids",
                              "globalrecall", "atlas", "aggcache", "aggatlas"])

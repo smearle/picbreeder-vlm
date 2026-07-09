@@ -38,7 +38,7 @@
                 font=\fontsize{18}{21}\fontseries{b}\selectfont},
   % plain-language gloss under each header ("what does this metric ask?")
   subq/.style={anchor=north west, align=left, inner sep=2pt, text width=4.3cm,
-               text=black, font=\large\itshape},
+               text=black, font=\large},
   chip/.style={scorebox, anchor=north west, align=left, font=\scriptsize},
   % orange feed line WITHOUT an arrowhead, for intermediate / merging segments
   % (arrowheads live only on the final segment that lands on a node/plane)
@@ -185,15 +185,15 @@
 
 \node[mhead, text=visAcc, anchor=south west] (vt) at ([yshift=0.04cm]vLt) {Visual Coverage};
 \node[chip] (vc) at ([yshift=-0.13cm]vt.south west) {$k$-covering radius};
-\node[subq] at ([yshift=-0.11cm]vc.south west) {How different do these look?};
+\node[subq] at ([yshift=-0.11cm]vc.south west) {``How different do these images look?''};
 
 \node[mhead, text=recAcc, anchor=south west] (rt) at ([yshift=0.04cm]rLt) {Semantic Recall};
 \node[chip] (rc) at ([yshift=-0.13cm]rt.south west) {mean distance of nearest\\ image over all nouns};
-\node[subq] at ([yshift=-0.11cm]rc.south west) {How much do they look like things?};
+\node[subq] at ([yshift=-0.11cm]rc.south west) {``How much do they look like things?''};
 
 \node[mhead, text=semAcc, anchor=south west] (st) at ([yshift=0.04cm]sLt) {Semantic Coverage};
 \node[chip] (sc) at ([yshift=-0.13cm]st.south west) {$k$-covering radius};
-\node[subq] at ([yshift=-0.11cm]sc.south west) {How many things do they look like?};
+\node[subq] at ([yshift=-0.11cm]sc.south west) {``How many things do they look like?''};
 
 \end{tikzpicture}
 \end{document}
