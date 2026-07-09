@@ -49,6 +49,7 @@ _siglip_*.txt
 /*.log
 # latex build artifacts
 *.aux
+figures/**/*.log
 # ad-hoc generated figures dropped at the repo root
 /ancestry_img_*
 /human_ancestry_*
