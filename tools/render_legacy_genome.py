@@ -2,7 +2,7 @@
 """Render legacy Picbreeder (Java client) genomes as Graphviz diagrams or images.
 
 This helper understands the XML files produced by the original Picbreeder
-client (``client.jar`` inside ``webneat/``). It parses the node/link structure
+client (``client.jar`` inside ``reference/webneat/``). It parses the node/link structure
 stored in ``genome.xml`` (or zipped variants) and emits an SVG (or other
 Graphviz-supported format) that mirrors the topology annotations we generate
 for NEAT-Python runs. Optionally, it can convert the legacy genome into a
