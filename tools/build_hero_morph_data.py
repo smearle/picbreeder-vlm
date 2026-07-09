@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Export the hero banner's 43 lineage genome CHAINS as browser-renderable JSON, so
-the banner can morph CPPNs live on the GPU (cppn-gl / hero-morph.js) instead of
-streaming ~44 MB of pre-baked sprite sheets. Resolution-independent + tiny.
+the banner can morph CPPNs live on the GPU (cppn-gl / hero-morph.js). This is the
+banner's only render path -- it replaced ~44 MB of pre-baked sprite sheets, now
+retired. Resolution-independent + tiny.
 
 Per fig (root->published, deduped consecutive-identical genomes, the exact chain
 teaser_lineages.py bakes into each morph clip):

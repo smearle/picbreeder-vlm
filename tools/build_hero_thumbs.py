@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """
-Extract the final (published) frame from each hero-grid sprite sheet as a tiny
-per-lineage thumbnail, then pack all of them into ONE atlas image, so the banner
-paints from a single ~80 KB request while the full sprite sheets (used for the
-rewind morph) load in the background.
+Build the hero-banner thumbnails: one tiny per-lineage image plus a single atlas,
+so the banner paints from one ~150 KB request while the per-cell CPPN genomes
+(used for the live rewind morph) stream in behind it.
 
-Reads:  <deploy>/assets/hero_sprites/manifest.json  (+ the sprite sheets)
-Writes: <id>_thumb.jpg next to each sprite (per-cell fallback),
+Each thumbnail is a lineage's TIP -- the published archive image the cell rests on.
+We read those pixels straight from the original archive PNG, located via
+archive_animations/teaser_provenance.json (hero id -> sweep archive PNG).
+
+Reads:  <deploy>/assets/hero_sprites/manifest.json   (cell order + ids)
+        <repo>/archive_animations/teaser_provenance.json
+Writes: <id>_thumb.jpg per cell (fallback used when the atlas 404s),
         rewrites the manifest in place with a `thumb` field per entry,
-        thumbs_atlas.jpg  (all final frames in a grid, cell i = manifest index i),
+        thumbs_atlas.jpg  (all tips in a grid, cell i = manifest index i),
         thumbs_atlas.json (atlas metadata).
 
-ATLAS_COLS / ATLAS_CELL below MUST match the loader constants in index.html.
+ATLAS_COLS / ATLAS_CELL below MUST match the loader constants in assets/page/hero-grid.js.
 
-The deploy dir is hash-suffixed (e.g. picbreeder-vlm-06b0d76d), so we locate it
-rather than hard-coding it; pass an explicit path as argv[1] to override.
+Manifest ORDER is the source of truth for atlas slots and is a committed artifact.
+This script never reorders or adds entries; it only refreshes pixels and `thumb`.
+
+This replaces an earlier version that cropped the last frame out of each sprite
+sheet. The sheets were retired when the hero moved to live GPU morphs; the archive
+PNGs are the same images, without the extra JPEG generation.
 """
 from __future__ import annotations
 
@@ -26,6 +34,9 @@ from PIL import Image
 
 ATLAS_COLS = 8
 ATLAS_CELL = 128
+
+REPO = Path(__file__).resolve().parents[1]
+TEASER = REPO / "archive_animations" / "teaser_provenance.json"
 
 
 def find_root() -> Path:
@@ -40,39 +51,48 @@ def find_root() -> Path:
     raise SystemExit("no picbreeder-vlm deploy dir with hero_sprites/manifest.json found")
 
 
+def tip_image(teaser: dict, hero_id: str) -> Image.Image | None:
+    """A lineage's published tip, as a 128px RGB square."""
+    src = teaser.get(hero_id + ".png")
+    if not src:
+        return None
+    png = REPO / src
+    if not png.is_file():
+        return None
+    img = Image.open(png)
+    img.load()
+    if img.mode != "RGB":
+        img = img.convert("RGB")          # some lineages are greyscale ("L")
+    if img.size != (ATLAS_CELL, ATLAS_CELL):
+        img = img.resize((ATLAS_CELL, ATLAS_CELL), Image.LANCZOS)
+    return img
+
+
 def main() -> int:
     root = find_root()
     sprites = root / "assets" / "hero_sprites"
     manifest = sprites / "manifest.json"
     print(f"deploy: {root}")
 
+    teaser = json.loads(TEASER.read_text())
     entries = json.loads(manifest.read_text())
     thumbs: list[Image.Image] = []      # in manifest order, for the atlas
+    misses = 0
     for e in entries:
-        sprite = root / e["sprite"]
-        if not sprite.is_file():
-            print(f"  MISS {sprite}")
+        thumb = tip_image(teaser, e["id"])
+        if thumb is None:
+            print(f"  MISS tip PNG for {e['id']}")
+            misses += 1
             thumbs.append(Image.new("RGB", (ATLAS_CELL, ATLAS_CELL), (242, 242, 242)))
             continue
 
-        n, cols, fw = e["n"], e["cols"], e["fw"]
-        last = n - 1
-        c, r = last % cols, last // cols
-        box = (c * fw, r * fw, (c + 1) * fw, (r + 1) * fw)
-
-        img = Image.open(sprite); img.load()
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        thumb = img.crop(box)
-
         rel = f"assets/hero_sprites/{e['id']}_thumb.jpg"
-        out = root / rel
-        thumb.save(out, "JPEG", quality=88, optimize=True, progressive=True)
+        thumb.save(root / rel, "JPEG", quality=88, optimize=True, progressive=True)
         e["thumb"] = rel
-        thumbs.append(thumb.resize((ATLAS_CELL, ATLAS_CELL)))
+        thumbs.append(thumb)
 
-    manifest.write_text(json.dumps(entries, indent=2) + "\n")
-    print(f"Updated {manifest} with thumb fields for {len(entries)} entries.")
+    manifest.write_text(json.dumps(entries, indent=1) + "\n")
+    print(f"Updated {manifest} with thumb fields for {len(entries)} entries ({misses} misses).")
 
     # Pack the atlas (cell i = manifest index i; the loader relies on this order).
     rows = (len(thumbs) + ATLAS_COLS - 1) // ATLAS_COLS
@@ -88,7 +108,7 @@ def main() -> int:
     }) + "\n")
     print(f"Wrote {atlas_path.name} ({atlas_path.stat().st_size//1024} KB, "
           f"{ATLAS_COLS}x{rows}) for {len(thumbs)} thumbs.")
-    return 0
+    return 1 if misses else 0
 
 
 if __name__ == "__main__":
