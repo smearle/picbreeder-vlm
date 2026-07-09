@@ -6,6 +6,7 @@ One commit for all sprite dirs. The top-level runs index is built separately by
 tools/build_hf_index.py. Idempotent at the commit level (re-uploading identical files is a no-op).
 """
 import json
+import sys
 from pathlib import Path
 from huggingface_hub import HfApi
 
@@ -18,6 +19,10 @@ def main():
     runs = idx_local["runs"]
     api = HfApi()
     allow = [f"{r['run']}/sprite/**" for r in runs]
+    if "--dry-run" in sys.argv:
+        n = sum(1 for r in runs for _ in (SITE / r["run"] / "sprite").rglob("*") if _.is_file())
+        print(f"would upload {n} files across {len(runs)} sprite sets -> site/<run>/sprite/")
+        return
     api.upload_folder(repo_id=REPO, repo_type="dataset", folder_path=str(SITE),
                       path_in_repo="site", allow_patterns=allow,
                       commit_message=f"Add sprite sets for {len(runs)} table runs")
