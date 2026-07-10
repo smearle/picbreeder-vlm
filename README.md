@@ -1,38 +1,42 @@
-# Picbreeder‑VLM
+# AI Picbreeder
 
-### In Search of the Ingredients of Open‑Endedness: Replicating Picbreeder with Large Vision‑Language Models
+### Collaborative evolution of neural image archives by large vision language models
 
-Sam Earle, Kai Arulkumaran, Andrew Dai, Akarsh Kumar, Julian Togelius, Sebastian Risi—**GECCO 2026** (Best Paper nominee)
+<!-- ### In Search of the Ingredients of Open‑Endedness: Replicating Picbreeder with Large Vision‑Language Models -->
 
-[**📝 Blog / interactive report**](https://pub.sakana.ai/picbreeder-vlm) ·
-[**📄 Paper (arXiv)**](https://arxiv.org/abs/2605.23908) ·
-[**🤗 Archive dataset**](https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive) ·
-[**🧬 Breed your own (demo)**](https://pub.sakana.ai/picbreeder-vlm/breed/)
+<!-- Sam Earle, Kai Arulkumaran, Andrew Dai, Akarsh Kumar, Julian Togelius, Sebastian Risi—**GECCO 2026** (Best Paper nominee) -->
+
+[**📝 Blog**](https://pub.sakana.ai/picbreeder-vlm) ·
+[**🔍 Viewer**](https://pub.sakana.ai/picbreeder-vlm/archive.html) ·
+[**📄 Paper**](https://arxiv.org/abs/2605.23908) ·
+[**🤗 Dataset**](https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive)
+
+![One cycle of the PicbreederVLM loop: agents sample from the shared archive, a VLM breeder mutates its picks across generations of evolution, and a VLM critic rates the results back into the archive.](figures/system_fig/system_overview.gif)
 
 ---
 
-The original **Picbreeder** (Secretan et al., 2008) let *crowds of humans* evolve
-images collaboratively, discovering a famous open‑ended tree of recognizable
-pictures (the Skull, the Butterfly, the Car…) from simple
-[CPPN](https://en.wikipedia.org/wiki/Compositional_pattern-producing_network)
-genomes. This project asks whether a **swarm of Vision‑Language Models**, standing
-in for the human breeders, can reproduce that open‑ended dynamic—agents join a
-shared archive, look at candidate images, pick and mutate them toward whatever
-they "see," and publish their discoveries for others to branch from.
+**Picbreeder** (Secretan et al., 2008) was a casual online 2D art-making tool that had crowds of humans evolve
+images in concert. Over time the users grew an open‑ended tree of diverse and often recognizable artifacts (butterflies, skulls, automobiles), through indirect encodings of these images that cast them as evolvable
+[CPPNs](https://en.wikipedia.org/wiki/Compositional_pattern-producing_network).
+This project asks whether a swarm of Vision‑Language Models can replace the human breeders and convincingly reproduce this open-ended effect. 
+
+In this codebase, we have VLM agents contribute in parallel to an ever-growing archive of shared CPPN-images.
+In each breeding session, the VLM considers a sample of candidate images for branching, then interactively evolves the lineage of the chosen parent generation-by-generation, making selections and adjusting breeding reproduction hyperparameters along the way, and finally selecting an image for publication.
+Multiple such sessions occur in parallel, along with intermittent critic agent sessions, in which VLMs rate images in the archive.
+Candidate CPPNs from the archive are drawn at the beginning of these sessions according to metadata like mean ratings, recency, or number of children in the phylogeny of published images.
 
 This repo contains the full research codebase: the multi‑agent evolutionary
-simulation, the VLM backends, the NEAT/CPPN engine, the analysis & figure
-pipeline behind the paper and blog, and the tooling for the interactive
-[Picbreeder homage site](#-the-picbreeder-homage-breed-your-own).
+simulation, the VLM backends, the NEAT/CPPN engine, and the analysis & figure
+pipeline behind the paper and blog.
 
 ## Links
 
 | | |
 | --- | --- |
 | 📝 **Blog / interactive report** | <https://pub.sakana.ai/picbreeder-vlm> |
+| 🔍 **Archive viewer** (browse every published image, run by run) | <https://pub.sakana.ai/picbreeder-vlm/archive.html> |
 | 📄 **Paper (arXiv)** | <https://arxiv.org/abs/2605.23908> |
 | 🤗 **Archive dataset** (evolved genomes, images, lineages, VLM captions) | <https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive> |
-| 🧬 **Breed‑your‑own demo** (CPPN homage in the browser) | <https://pub.sakana.ai/picbreeder-vlm/breed/> |
 
 ## Install
 
@@ -63,19 +67,19 @@ can drive it **two ways**: a hosted API or a local model:
   # then pass model=remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
   ```
 
-### Run one collaborative session with `train_collaborative.py`
+### Run one collaborative session with `evolve_collaborative.py`
 
-`train_collaborative.py` is the main entry point for a single run: a session of
+`evolve_collaborative.py` is the main entry point for a single run: a session of
 agents that join a shared archive, evolve CPPN images with the VLM in the loop, and
 publish their discoveries. Override any config field Hydra‑style (`key=value`):
 
 ```bash
 # with a hosted API model
-GEMINI_API_KEY=... python train_collaborative.py \
+GEMINI_API_KEY=... python evolve_collaborative.py \
     model=gemini-2.5-pro num_agents=5 agent_generations=20 seed=0
 
 # with a local model (no key)
-python train_collaborative.py \
+python evolve_collaborative.py \
     model=qwen3-vl-8b num_agents=5 agent_generations=20 seed=0
 ```
 
@@ -120,7 +124,7 @@ Useful sweep args:
 | `slurm=false\|true` | run locally in sequence, or submit a SLURM array via Submitit |
 | `model=[a,b]` `seed=[1,2,3]` `chat_history_turns=[0,1]` | **list** overrides—swept as a product (note the brackets) |
 | `num_agents=` | scalar overrides apply to every run in the sweep |
-| `eval_visual_coverage=true` `eval_noun_coverage=true` `eval_tree=true` | run the novelty / alignment / phylogeny evaluations over completed runs |
+| `eval_visual_coverage=true` `eval_semantic_recall=true` `eval_tree=true` | run the novelty / alignment / phylogeny evaluations over completed runs |
 | `cross_eval=true` | aggregate all seeds into summary plots & tables under `cross_eval/<sweep_name>/` |
 
 See **[AGENTS.md](AGENTS.md)** for the full sweep / evaluation / cross‑eval
@@ -157,17 +161,6 @@ in turn calibrated against **`reference/webneat/`**, Nick Beato's original Picbr
 Java client (obtained via Sebastian Risi), which is the authority for how the 2008
 system actually behaved; the mutation weight range and mutation‑strength floor in
 `core/neat_components.py` were matched to it directly.
-
-## 🧬 Breed your own pics
-
-Alongside the VLM experiments we host a partial reimplementation
-of Picbreeder where humans can branch, mutate, rate and publish CPPN images:
-
-- Try it here: <https://pub.sakana.ai/picbreeder-vlm/breed/>
-- Published genomes are stored in a community dataset
-  (`picbreeder-vlm/picbreeder-vlm-community`) via a small FastAPI gateway that
-  runs as a **Hugging Face Space**, whose source lives in its own repo:
-  <https://huggingface.co/spaces/picbreeder-vlm/picbreeder-community-api>.
 
 ## Data
 

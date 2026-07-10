@@ -70,7 +70,6 @@ they "see," and publish their discoveries for others to branch from.
 
 - 📝 **Blog / interactive report:** <https://pub.sakana.ai/picbreeder-vlm>
 - 📄 **Paper (arXiv):** <https://arxiv.org/abs/2605.23908>
-- 🧬 **Breed your own:** <https://pub.sakana.ai/picbreeder-vlm/breed/>
 
 ## How the images were made
 
