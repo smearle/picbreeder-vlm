@@ -21,6 +21,7 @@ Usage:
 """
 
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -1489,12 +1490,16 @@ class VLLMClientChatSession(VLMChatSession):
 class VLLMClientBackend(VLMBackend):
     """Client for a remote vLLM server (OpenAI-compatible)."""
 
-    def __init__(self, model_name: str, base_url: str = "http://localhost:8000/v1"):
-        env_url = os.environ.get("VLLM_BASE_URL")
-        if env_url:
-            base_url = env_url
+    DEFAULT_BASE_URL = "http://localhost:8000/v1"
+
+    def __init__(self, model_name: str, base_url: Optional[str] = None):
+        # VLLM_BASE_URL is how the orchestrator hands workers the port it just bound
+        # (_continual_agent_worker) and how daemon followers track a restarted leader
+        # (_wait_for_remote_vllm_daemon), so it must beat the default -- but not an
+        # explicitly passed base_url.
+        resolved = base_url or os.environ.get("VLLM_BASE_URL") or self.DEFAULT_BASE_URL
         self._model_name = model_name
-        self._base_url = base_url.rstrip("/")
+        self._base_url = resolved.rstrip("/")
         self._api_key = "EMPTY"  # vLLM usually doesn't require a key by default
 
     @property
@@ -1627,6 +1632,30 @@ def _resolve_qwen_model_name(model: str) -> str:
     return model_map.get(model, model)
 
 
+def _accepted_kwargs(cls: Any, kwargs: dict) -> dict:
+    """Keep only the kwargs ``cls.__init__`` accepts, warning about the rest.
+
+    Backend constructors take disjoint tuning knobs (``max_model_len`` is vLLM-only,
+    ``use_flash_attention`` is HuggingFace-only), so a caller that passes one cannot
+    know which backend "auto" will land on.
+    """
+    accepted = set(inspect.signature(cls.__init__).parameters) - {"self"}
+    dropped = sorted(set(kwargs) - accepted)
+    if dropped:
+        print(f"Warning: {cls.__name__} does not accept {dropped}; ignoring.")
+    return {k: v for k, v in kwargs.items() if k in accepted}
+
+
+def _create_qwen_backend(resolved_model: str, backend_choice: str, **kwargs) -> VLMBackend:
+    if backend_choice == "remote":
+        cls = VLLMClientBackend
+    elif backend_choice == "vllm" or (backend_choice == "auto" and _vllm_available()):
+        cls = VLLMQwen3VLBackend
+    else:
+        cls = Qwen3VLBackend
+    return cls(resolved_model, **_accepted_kwargs(cls, kwargs))
+
+
 def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> VLMBackend:
     """
     Create a VLM backend by model name.
@@ -1648,39 +1677,19 @@ def create_vlm_backend(model: str, backend: Optional[str] = None, **kwargs) -> V
         raise ValueError("backend must be one of: auto, vllm, hf, remote")
 
     if model.startswith("remote:"):
-        actual_model = model[7:]
-        return VLLMClientBackend(actual_model, **kwargs)
+        actual_model = model[len("remote:"):]
+        return VLLMClientBackend(actual_model, **_accepted_kwargs(VLLMClientBackend, kwargs))
 
     if model.startswith("gemini"):
         return _create_gemini_backend(model, **kwargs)
 
-    # Check registry first
-    if model in _BACKEND_REGISTRY:
-        if model.startswith("qwen"):
-            resolved_model = _resolve_qwen_model_name(model)
-            if backend_choice == "remote":
-                return VLLMClientBackend(resolved_model, **kwargs)
-            if backend_choice == "vllm":
-                return VLLMQwen3VLBackend(resolved_model, **kwargs)
-            if backend_choice == "auto" and _vllm_available():
-                return VLLMQwen3VLBackend(resolved_model, **kwargs)
-            return Qwen3VLBackend(resolved_model, **kwargs)
+    if model in _BACKEND_REGISTRY and not model.startswith("qwen"):
         return _BACKEND_REGISTRY[model]()
-    
-    # Try to infer backend from model name
-    model_lower = model.lower()
-    if "qwen" in model_lower:
-        resolved_model = _resolve_qwen_model_name(model)
-        if backend_choice == "remote":
-            return VLLMClientBackend(resolved_model, **kwargs)
-        if backend_choice == "vllm":
-            return VLLMQwen3VLBackend(resolved_model, **kwargs)
-        if backend_choice == "auto" and not kwargs and _vllm_available():
-            return VLLMQwen3VLBackend(resolved_model)
-        return Qwen3VLBackend(resolved_model, **kwargs)
-    
-    else:
-        return _create_gemini_backend(model, **kwargs)
+
+    if model in _BACKEND_REGISTRY or "qwen" in model.lower():
+        return _create_qwen_backend(_resolve_qwen_model_name(model), backend_choice, **kwargs)
+
+    return _create_gemini_backend(model, **kwargs)
 
 
 def list_available_models() -> List[str]:

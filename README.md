@@ -73,16 +73,26 @@ can drive it **two ways**: a hosted API or a local model:
   export GEMINI_API_KEY=...        # get one from Google AI Studio
   # then pass e.g. model=gemini-2.5-pro (also: gemini-2.5-flash, gemini-3-pro-preview)
   ```
-- **Local model (Qwen, no API key).** Weights run on your own GPU via vLLM. Either
-  name a Qwen model and let the run serve it, or point the run at a server you
-  started yourself:
+- **Local model (Qwen, no API key).** Weights run on your own GPU via vLLM. Name a
+  Qwen model and the run manages the model for you:
   ```bash
-  # simplest: model=qwen3-vl-8b   (also 2b / 4b / 30b-fp8)
-  #   multi-agent runs start a vLLM server for the model and connect the workers to it
-  # or start a shared server once and point runs at it (best when reusing one server):
-  ./scripts/serve_local_vlm.sh     # serves an OpenAI-compatible endpoint
-  # then pass model=remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+  python evolve_collaborative.py model=qwen3-vl-8b   # also 2b / 4b / 30b-fp8
   ```
+  With several agent workers, the run starts one vLLM server and points all workers
+  at it, then shuts it down on exit. With a single worker it just loads the weights
+  in‑process.
+
+  For repeated runs against a big model, start the server **once** yourself and let
+  runs attach to it, so you pay the model load only once and the server outlives any
+  single run:
+  ```bash
+  ./scripts/serve_local_vlm.sh     # serves an OpenAI-compatible endpoint
+  python evolve_collaborative.py model=remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+  ```
+  A `remote:` model never starts a server—it connects to one already listening at
+  `VLLM_BASE_URL` (default `http://localhost:8000/v1`), waiting for it to come up.
+  This approach allows us to efficiently run parallelized multi-experiment sweeps on a SLURM cluster, with a large local model served on a multi-GPU node, with various CPU-only nodes running the experiments.
+
   On a machine without vLLM installed, single-worker runs fall back to loading the
   weights in-process through HuggingFace `transformers`.
 
