@@ -235,6 +235,8 @@ def main() -> None:
                     help="output dir (default: <blog>/assets/transcripts/<run-key>)")
     ap.add_argument("--skip-existing", action="store_true",
                     help="skip agents whose transcript.json already exists")
+    ap.add_argument("--total-agents", type=int, default=0,
+                    help="the run's true agent count (else agents/.total_agents, else local zips)")
     args = ap.parse_args()
 
     run = args.run
@@ -281,7 +283,15 @@ def main() -> None:
             handle(status, entry, Path(t[0]).stem)
 
     built.sort(key=lambda e: e["id"])  # as_completed is unordered; keep chronological
-    total_agents = len(list(agents_dir.glob("agent_*.zip")))
+    # When only the first few zips were fetched (tools/fetch_agent_zips.py), the
+    # local count understates the run; .total_agents carries the real one.
+    total_file = agents_dir / ".total_agents"
+    if args.total_agents:
+        total_agents = args.total_agents
+    elif total_file.exists():
+        total_agents = int(total_file.read_text().strip())
+    else:
+        total_agents = len(list(agents_dir.glob("agent_*.zip")))
     index = {
         "run": run_key, "arc": arc, "seed": cfg.get("seed"), "model": cfg.get("model"),
         "grid_rows": C.GRID_ROWS, "grid_cols": C.GRID_COLS,
