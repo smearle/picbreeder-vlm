@@ -30,6 +30,33 @@ module; e.g. **`sweep.py`** ⇒ `picbreeder_vlm.experiments.sweep`.
 > re-export from the package so existing archive/HF genome `.pkl` files (which
 > store the original module paths) still `pickle.load`. Don't delete them.
 
+## ✅ Tests
+
+```bash
+uv pip install -r requirements-test.txt   # NOT requirements.txt: no torch / vLLM
+pytest                                    # ~60 tests, a couple of seconds
+```
+
+`.github/workflows/tests.yml` runs this on every push and PR (Python 3.11 + 3.13).
+The suite exists to catch what a reorg breaks quietly, so it pins the contracts
+rather than the implementation:
+
+*   **Run-directory names** (`tests/test_config.py`) are goldens copied from published
+    runs. `ensure_valid_config` builds them, sweeps and every tool glob them, and the
+    HF archive is keyed by them. A rename orphans data — if a test here fails, do not
+    "update the golden" without knowing what it costs.
+*   **Pickle shims** (`tests/test_compat_shims.py`) must resolve to the *same class
+    objects* as the package, or archived genomes stop unpickling.
+*   **The NEAT preset** (`tests/test_neat_preset.py`) has to load and render
+    deterministically; archive images are regenerated from genomes on demand.
+*   **`core.neat_components` must stay importable without torch / vLLM / google-genai.**
+    That is enforced by a test, and it is why `build_neat_config` lives there rather
+    than in `agents.collaborative_multi_agent`.
+
+Keep tests import-light: `picbreeder_vlm.analysis.*` pulls in torch and open_clip at
+module scope, so `tests/test_analysis_naming.py` inspects those modules with `ast`
+instead of importing them.
+
 ## 🗺️ Project Roadmap
 
 The codebase is organized into several distinct layers, from high-level orchestration to low-level evolutionary mechanics.

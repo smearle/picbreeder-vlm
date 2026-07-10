@@ -11,6 +11,8 @@
 [**📄 Paper**](https://arxiv.org/abs/2605.23908) ·
 [**🤗 Dataset**](https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive)
 
+[![tests](https://github.com/smearle/picbreeder-vlm/actions/workflows/tests.yml/badge.svg)](https://github.com/smearle/picbreeder-vlm/actions/workflows/tests.yml)
+
 ![One cycle of the PicbreederVLM loop: agents sample from the shared archive, a VLM breeder mutates its picks across generations of evolution, and a VLM critic rates the results back into the archive.](figures/system_fig/system_overview.gif)
 
 ---
@@ -47,6 +49,19 @@ uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
 uv pip install -e .          # exposes the `picbreeder_vlm` package + pickle-compat shims
 ```
+
+## Tests
+
+```bash
+uv pip install -r requirements-test.txt   # no torch / vLLM needed
+pytest
+```
+
+They cover the CPPN engine and the plumbing a refactor can quietly break: the NEAT
+preset loads and renders deterministically, run‑directory names still match the
+published runs, worker subprocesses round‑trip their config, and the top‑level
+pickle‑compat shims keep archived genomes loadable. CI runs them on every push and
+pull request against Python 3.11 and 3.13.
 
 ## Quickstart
 
