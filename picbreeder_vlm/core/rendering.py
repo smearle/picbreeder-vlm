@@ -1,19 +1,45 @@
 import base64
 import math
+import warnings
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-import graphviz 
 import neat
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import numpy as np
-from pyparsing import Iterable
+
+try:
+    # Only render_genome_diagram needs graphviz, and diagrams are opt-in debug
+    # artifacts (render_genome_diagrams=true) -- nothing in the evolution loop, the
+    # archive, or any rendered image depends on them. A hard import would make every
+    # CPPN render require a Graphviz install. render_genome_diagram warns and skips.
+    import graphviz
+except ImportError as exc:  # pragma: no cover - depends on the environment
+    graphviz = None
+    _GRAPHVIZ_IMPORT_ERROR: Optional[ImportError] = exc
+else:
+    _GRAPHVIZ_IMPORT_ERROR = None
 
 from picbreeder_vlm.core.picture2d import (
     _canvas_coords,
     eval_genome_as_grayscale_and_color,
 )
+
+
+@lru_cache(maxsize=1)
+def _warn_graphviz_missing() -> None:
+    """Warn once per process. A caller asking for diagrams renders one per genome per
+    generation, so warning per call would emit hundreds of identical lines."""
+    warnings.warn(
+        "graphviz is not installed, so no genome diagrams will be written "
+        f"({_GRAPHVIZ_IMPORT_ERROR}). Everything else -- evolution, rendered images, "
+        "the archive -- is unaffected. Install it with `pip install graphviz` (plus "
+        "the system Graphviz binaries, e.g. `apt install graphviz`) to get diagrams.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 def _format_float(value: float) -> str:
@@ -270,9 +296,14 @@ def render_genome_diagram(
     node_colors: Optional[Dict[int, str]] = None,
     fmt: str = "svg",
 ) -> Optional[Path]:
-    """Render a network topology diagram, annotating every gene attribute."""
+    """Render a network topology diagram, annotating every gene attribute.
+
+    Returns None (having warned) when graphviz is unavailable. There is no fallback
+    renderer: the caller simply gets no diagram for this genome.
+    """
 
     if graphviz is None:
+        _warn_graphviz_missing()
         return None
 
     effective_genome = genome
