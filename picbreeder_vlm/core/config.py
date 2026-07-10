@@ -261,7 +261,9 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
     return cfg
 
 
-PATH_FIELDS = {"config_path", "experiment_dir", "personality_path"}
+# Fields the worker must rehydrate as Path; _serialize_config_for_worker flattens
+# every Path to str. Keep in sync with the Optional[Path] fields on PicbreederConfig.
+PATH_FIELDS = {"neat_config_path", "experiment_dir", "personality_path"}
 
 def _serialize_config_for_worker(cfg: PicbreederConfig) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
