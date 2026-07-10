@@ -12,6 +12,8 @@ import neat
 from neat.graphs import creates_cycle
 from neat.reporting import BaseReporter
 
+from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
+
 CHECKPOINT_SUFFIX = "_checkpoint.pkl.gz"
 LATEST_POPULATION_FILENAME = "latest.pkl.gz"
 
@@ -832,6 +834,36 @@ class GenerationCheckpointer(BaseReporter):
             tmp_path.replace(self.latest_path)
         finally:
             tmp_path.unlink(missing_ok=True)
+
+
+def build_neat_config(
+    neat_config_path: Path,
+    rows: int,
+    cols: int,
+    enable_output_activations: bool,
+    enable_input_activations: bool,
+    enable_crossover: bool,
+) -> neat.Config:
+    """Load the CPPN preset and bind our genome/reproduction/stagnation classes to it.
+
+    Every entry point that evolves goes through here, so the population is sized to the
+    grid the VLM is shown (rows x cols) rather than the preset's own pop_size.
+    """
+    config = neat.Config(
+        PicbreederGenome,
+        PicbreederReproduction,
+        neat.DefaultSpeciesSet,
+        InteractiveStagnation,
+        str(neat_config_path),
+    )
+    apply_picbreeder_config_defaults(
+        config,
+        enable_output_activations=enable_output_activations,
+        enable_input_activations=enable_input_activations,
+        enable_crossover=enable_crossover,
+    )
+    config.pop_size = rows * cols
+    return config
 
 
 def seed_initial_population(population, genome_config) -> None:

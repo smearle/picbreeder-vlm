@@ -67,6 +67,7 @@ from picbreeder_vlm.core.neat_components import (
     InteractiveStagnation,
     PicbreederGenome,
     apply_picbreeder_config_defaults,
+    build_neat_config,
     sync_population_output_activations,
 )
 from picbreeder_vlm.core.constants import (
@@ -425,29 +426,6 @@ class WorkerState:
     errored: bool = False
 
 
-def build_neat_config(
-    neat_config_path: Path,
-    rows: int,
-    cols: int,
-    enable_output_activations: bool,
-    enable_input_activations: bool,
-    enable_crossover: bool,
-) -> neat.Config:
-    config = neat.Config(
-        PicbreederGenome,
-        PicbreederReproduction,
-        neat.DefaultSpeciesSet,
-        InteractiveStagnation,
-        str(neat_config_path),
-    )
-    apply_picbreeder_config_defaults(
-        config,
-        enable_output_activations=enable_output_activations,
-        enable_input_activations=enable_input_activations,
-        enable_crossover=enable_crossover,
-    )
-    config.pop_size = rows * cols
-    return config
 
 
 class CollaborativeMultiAgentOrchestrator:
