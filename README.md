@@ -155,6 +155,41 @@ Useful sweep args:
 | `eval_visual_coverage=true` `eval_semantic_recall=true` `eval_tree=true` | run the novelty / alignment / phylogeny evaluations over completed runs |
 | `cross_eval=true` | aggregate all seeds into summary plots & tables under `cross_eval/<sweep_name>/` |
 
+#### Sweeping a big local model: one GPU daemon, many CPU jobs
+
+A sweep of `model=qwen3-vl-8b` gives every array task its own GPU and makes each
+one load the weights from scratch. For a model too big or too slow to load per
+task, split the work instead: **one** GPU job serves the model for the whole
+sweep, and the sweep's array tasks run CPU‑only and talk to it over HTTP. This is
+how the 235B runs were done.
+
+The server is a standalone SLURM job, not a member of the sweep. It writes its
+own `host:port` to `vllm_daemon.endpoint` as soon as it starts—*before* the
+weights finish loading—so the agent jobs can be queued immediately and will wait
+politely for it to come up:
+
+```bash
+# 1. start the daemon (owns the GPUs; serves until it hits its walltime)
+sbatch scripts/daemon_vllm_235b.sbatch
+
+# 2. point a CPU-only sweep at it
+export VLLM_BASE_URL=$(cat vllm_daemon.endpoint)
+python -m picbreeder_vlm.experiments.sweep \
+    sweep_name=qwen_235b_bf16_daemon slurm=true partition=cpu_short
+```
+
+The sweep config ([`Qwen235BBf16DaemonSweep`](picbreeder_vlm/experiments/sweep_configs.py))
+carries `gpu=False` and a `remote:` model, so `is_local_model` is False and no array
+task tries to start a server of its own. A task still waiting on the daemon keeps
+re‑reading `vllm_daemon.endpoint`, so it follows a daemon that restarts onto a new
+node; a task whose agents have already started only picks up a moved endpoint when
+SLURM requeues it. Besides skipping the repeated model load, this dodges the
+GPU‑utilisation killer: the agent jobs hold no GPU, and the daemon's utilisation
+stays high because every config feeds it at once.
+
+`daemon_vllm_235b.sbatch` hard‑codes an account, partition, and `/scratch` paths—copy
+and edit it for your own cluster.
+
 See **[AGENTS.md](AGENTS.md)** for the full sweep / evaluation / cross‑eval
 workflow and the local vLLM server setup.
 
