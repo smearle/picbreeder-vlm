@@ -27,9 +27,9 @@ In each breeding session, the VLM considers a sample of candidate images for bra
 Multiple such sessions occur in parallel, along with intermittent critic agent sessions, in which VLMs rate images in the archive.
 Candidate CPPNs from the archive are drawn at the beginning of these sessions according to metadata like mean ratings, recency, or number of children in the phylogeny of published images.
 
-This repo contains the full research codebase: the multi‑agent evolutionary
-simulation, the VLM backends, the NEAT/CPPN engine, and the analysis & figure
-pipeline behind the paper and blog.
+This repo contains the multi‑agent Picbreeder evolutionary
+simulation loop, including VLM backends, a Python implementation of the original NEAT/CPPN engine, and archive evaluation routines.
+It also contains code for generating figures for the paper, and the code for the blog, including an interactive interface for viewing archives, and a partial reconstruction of the original Picbreeder interface.
 
 ## Links
 
@@ -202,6 +202,8 @@ Source lives in the **`picbreeder_vlm/`** package:
 Other top‑level directories: **`tools/`** (blog & figure asset builders),
 **`archive_animations/`** (lineage/teaser animations), **`figures/`** (TikZ sources for
 the blog figures), **`data/`** (committed data),
+**`blog/`** (a code‑only snapshot of the interactive report — the hand‑written
+HTML/JS/CSS; generated media and archive mirrors are omitted and rebuilt by `tools/`),
 **`reference/`** (third‑party material, nothing imported by the experiments).
 
 Two pieces of that lineage are worth naming. Our CPPN rasterizer and NEAT preset
