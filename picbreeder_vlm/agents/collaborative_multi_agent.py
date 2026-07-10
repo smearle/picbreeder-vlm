@@ -1218,7 +1218,11 @@ class CollaborativeMultiAgentOrchestrator:
                     try:
                         public_host = subprocess.check_output(["hostname", "-s"], text=True).strip()
                         public_url = f"http://{public_host}:{port}/v1"
-                        endpoint_path = Path("/scratch/se2161/picbreeder-vlm/vllm_daemon.endpoint")
+                        endpoint_path = Path(os.environ.get(
+                            "VLLM_ENDPOINT_FILE",
+                            "/scratch/se2161/picbreeder-vlm/vllm_daemon.endpoint",
+                        ))
+                        endpoint_path.parent.mkdir(parents=True, exist_ok=True)
                         tmp = endpoint_path.with_suffix(endpoint_path.suffix + f".tmp.{os.getpid()}")
                         tmp.write_text(public_url)
                         tmp.replace(endpoint_path)
@@ -2526,7 +2530,14 @@ def _wait_for_remote_vllm_daemon(cfg: PicbreederConfig) -> None:
     timeout = float(os.environ.get("REMOTE_VLLM_WAIT_TIMEOUT", "86400"))
     deadline = time.time() + timeout
 
-    endpoint_candidates = [
+    # VLLM_ENDPOINT_FILE (set it to match the daemon sbatch's endpoint path on a
+    # non-torch cluster) wins; then the repo-root-relative path a same-dir daemon
+    # writes; then the torch scratch default as a last resort.
+    endpoint_candidates = []
+    env_endpoint = os.environ.get("VLLM_ENDPOINT_FILE", "").strip()
+    if env_endpoint:
+        endpoint_candidates.append(Path(env_endpoint))
+    endpoint_candidates += [
         Path("vllm_daemon.endpoint"),
         Path("/scratch/se2161/picbreeder-vlm/vllm_daemon.endpoint"),
     ]

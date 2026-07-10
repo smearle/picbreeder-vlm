@@ -174,8 +174,12 @@ SLURM requeues it. Besides skipping the repeated model load, this dodges the
 GPU‑utilisation killer: the agent jobs hold no GPU, and the daemon's utilisation
 stays high because every config feeds it at once.
 
-`daemon_vllm_235b.sbatch` hard‑codes an account, partition, and `/scratch` paths—copy
-and edit it for your own cluster.
+`daemon_vllm_235b.sbatch` defaults to the torch cluster, but you can retarget it
+without editing the file: override the SLURM resources through the standard
+`SBATCH_ACCOUNT` / `SBATCH_PARTITION` / `SBATCH_QOS` env vars (or `sbatch` flags),
+and the repo path, model, port, and vLLM knobs through the `PB_DAEMON_*` env vars
+documented in the script's header. Submit from the repo root so its relative log
+paths resolve.
 
 See **[AGENTS.md](AGENTS.md)** for the full sweep / evaluation / cross‑eval
 workflow and the local vLLM server setup.
