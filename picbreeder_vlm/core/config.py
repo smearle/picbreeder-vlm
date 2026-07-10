@@ -98,8 +98,10 @@ def resolve_neat_config_path(cfg: PicbreederConfig) -> Path:
     if cfg.neat_config_path is not None:
         path = Path(cfg.neat_config_path)
         if not path.exists() and path.name == NEAT_CONFIG_PATH.name:
-            # Runs recorded before the 2026 restructure pin picture2d/; the preset
-            # moved to data/neat/ but is otherwise unchanged, so resume still works.
+            # Runs record neat_config_path into agents_metadata.json, so resuming one
+            # started before the preset moved (picture2d/ -> data/neat/ ->
+            # picbreeder_vlm/core/) hands us a stale path. The file is unchanged
+            # across those moves, so match on its name and use wherever it lives now.
             return NEAT_CONFIG_PATH
         return path
     return NEAT_CONFIG_PATH

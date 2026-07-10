@@ -35,6 +35,7 @@ import neat
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # repo root
 
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 from picbreeder_vlm.core.neat_components import (
     PicbreederGenome, apply_picbreeder_config_defaults, InteractiveStagnation,
 )
@@ -48,7 +49,7 @@ from neutral_root import (
 )
 
 
-def build_config(config_path: str = "data/neat/interactive_config_color") -> neat.Config:
+def build_config(config_path: str = str(NEAT_CONFIG_PATH)) -> neat.Config:
     config = neat.Config(
         PicbreederGenome, PicbreederReproduction, neat.DefaultSpeciesSet,
         InteractiveStagnation, config_path,
@@ -264,7 +265,7 @@ def main():
     ap.add_argument("--alpha", type=float, default=0.5)
     ap.add_argument("--beta", type=float, default=2.0)
     ap.add_argument("--gamma", type=float, default=1.0)
-    ap.add_argument("--config", default="data/neat/interactive_config_color")
+    ap.add_argument("--config", default=str(NEAT_CONFIG_PATH))
     ap.add_argument("--hold", type=int, default=24, help="extra frames at end")
     ap.add_argument("--sort", choices=["none", "siglip"], default="none",
                     help="cell ordering: 'none' = by walker start; 'siglip' = "

@@ -21,4 +21,9 @@ setup(
     ),
     packages=find_packages(include=["picbreeder_vlm", "picbreeder_vlm.*"]),
     py_modules=_COMPAT_SHIMS,
+    # The NEAT preset lives beside the picture2d renderer that reads it. It has no
+    # suffix, so no wildcard would pick it up; name it or a wheel install ships a
+    # package whose only CPPN config is missing.
+    package_data={"picbreeder_vlm.core": ["interactive_config_color"]},
+    extras_require={"test": ["pytest"]},
 )

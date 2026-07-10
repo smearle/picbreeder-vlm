@@ -40,13 +40,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root for project modules
 
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 from picbreeder_vlm.core.neat_components import PicbreederGenome, apply_picbreeder_config_defaults, InteractiveStagnation
 from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
 from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_frames, pick_variant
 from picbreeder_vlm.core.rendering import render_genome_image
 
 
-def build_config(config_path: str = "data/neat/interactive_config_color") -> neat.Config:
+def build_config(config_path: str = str(NEAT_CONFIG_PATH)) -> neat.Config:
     config = neat.Config(
         PicbreederGenome, PicbreederReproduction, neat.DefaultSpeciesSet,
         InteractiveStagnation, config_path,

@@ -5,6 +5,7 @@ import time
 import hydra
 import neat
 
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 from picbreeder_vlm.core.artifacts import render_genome_images, save_neat_genome_diagrams
 from picbreeder_vlm.core import config
 from picbreeder_vlm.core.neat_components import InteractiveStagnation, PicbreederGenome, apply_picbreeder_config_defaults, seed_initial_population, sync_population_output_activations
@@ -81,7 +82,7 @@ def main(cfg: config.PicbreederConfig):
     dump_initial_populations(
         count=10,
         output_dir=Path(os.path.join("initial_populations", timestamp)),
-        config_path=Path("data/neat/interactive_config_color"),
+        config_path=NEAT_CONFIG_PATH,
         rows=3,
         cols=5,
         thumb_size=200,

@@ -1,6 +1,6 @@
 # AI Picbreeder
 
-### Collaborative evolution of neural image archives by large vision language models
+## Collaborative evolution of neural image archives by large vision language models
 
 <!-- ### In Search of the Ingredients of Open‑Endedness: Replicating Picbreeder with Large Vision‑Language Models -->
 
@@ -58,20 +58,23 @@ can drive it **two ways**: a hosted API or a local model:
   export GEMINI_API_KEY=...        # get one from Google AI Studio
   # then pass e.g. model=gemini-2.5-pro (also: gemini-2.5-flash, gemini-3-pro-preview)
   ```
-- **Local model (Qwen, no API key).** Pass a local Qwen model—weights run on your
-  own GPU, either in‑process (HuggingFace/vLLM) or against a local server:
+- **Local model (Qwen, no API key).** Weights run on your own GPU via vLLM. Either
+  name a Qwen model and let the run serve it, or point the run at a server you
+  started yourself:
   ```bash
-  # in-process weights (simplest): model=qwen3-vl-8b   (also 2b / 4b / 32b)
-  # or start a shared local vLLM server and point runs at it:
+  # simplest: model=qwen3-vl-8b   (also 2b / 4b / 30b-fp8)
+  #   multi-agent runs start a vLLM server for the model and connect the workers to it
+  # or start a shared server once and point runs at it (best when reusing one server):
   ./scripts/serve_local_vlm.sh     # serves an OpenAI-compatible endpoint
   # then pass model=remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
   ```
+  On a machine without vLLM installed, single-worker runs fall back to loading the
+  weights in-process through HuggingFace `transformers`.
 
 ### Run one collaborative session with `evolve_collaborative.py`
 
-`evolve_collaborative.py` is the main entry point for a single run: a session of
-agents that join a shared archive, evolve CPPN images with the VLM in the loop, and
-publish their discoveries. Override any config field Hydra‑style (`key=value`):
+`evolve_collaborative.py` is the main entry point for a single run: a swarm of parallel VLM agents that collaborate on a shared archive, branching and interactively evolving CPPN images through selection, and
+publishing their discoveries. Override any config field Hydra‑style (`key=value`):
 
 ```bash
 # with a hosted API model
@@ -83,7 +86,7 @@ python evolve_collaborative.py \
     model=qwen3-vl-8b num_agents=5 agent_generations=20 seed=0
 ```
 
-Outputs land in `logs_collaborative/<experiment>/` (evolved images, genome
+Outputs are written to `logs_collaborative/<experiment>/` (evolved images, genome
 `.pkl`s, and JSON archive snapshots). Useful CLI args (full list & defaults in
 [`picbreeder_vlm/core/config.py`](picbreeder_vlm/core/config.py)):
 
@@ -147,13 +150,12 @@ Source lives in the **`picbreeder_vlm/`** package:
 
 Other top‑level directories: **`tools/`** (blog & figure asset builders),
 **`archive_animations/`** (lineage/teaser animations), **`figures/`** (TikZ sources for
-the blog figures; the paper itself lives in Overleaf), **`data/`** (committed data,
-including the NEAT preset at `data/neat/interactive_config_color`),
+the blog figures), **`data/`** (committed data),
 **`reference/`** (third‑party material, nothing imported by the experiments).
 
 Two pieces of that lineage are worth naming. Our CPPN rasterizer and NEAT preset
-(`picbreeder_vlm/core/picture2d.py`, `data/neat/interactive_config_color`) began as
-a fork of the `examples/picture2d` demo in
+(`picbreeder_vlm/core/picture2d.py`, `picbreeder_vlm/core/interactive_config_color`)
+began as a fork of the `examples/picture2d` demo in
 [neat‑python](https://github.com/CodeReclaimers/neat-python) (BSD‑3‑Clause) and have
 since diverged substantially — four CPPN inputs, a fully connected initial topology,
 and the `PicbreederGenome` / `PicbreederReproduction` operators. Those operators were

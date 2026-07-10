@@ -44,6 +44,7 @@ import neat
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # repo root
 
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 from picbreeder_vlm.core.neat_components import PicbreederGenome
 
 
@@ -184,7 +185,7 @@ if __name__ == "__main__":
     from PIL import Image
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="data/neat/interactive_config_color")
+    ap.add_argument("--config", default=str(NEAT_CONFIG_PATH))
     ap.add_argument("--out-dir", type=Path, default=Path("archive_animations/out"))
     ap.add_argument("--size", type=int, default=128)
     ap.add_argument("--steps", type=int, default=9, help="frames in test strip")

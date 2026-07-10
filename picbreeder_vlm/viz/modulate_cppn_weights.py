@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 # Add repo root to path
 sys.path.append(str(Path(__file__).resolve().parent))
 
+from picbreeder_vlm._paths import NEAT_CONFIG_PATH
 from picbreeder_vlm.core.neat_components import (
     PicbreederGenome,
     InteractiveStagnation,
@@ -129,7 +130,7 @@ def save_modulation_grid(
 
 def main():
     genome_path = Path("sweep_logs/sweep/th1_ag20_model-gemini-2.5-flash-lite_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5/archive/genomes/img_000447.pkl")
-    config_path = Path("data/neat/interactive_config_color")
+    config_path = NEAT_CONFIG_PATH
     output_path = Path("weight_modulation_grid.png")
     
     if not genome_path.exists():
