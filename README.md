@@ -50,19 +50,6 @@ uv pip install -r requirements.txt
 uv pip install -e .          # exposes the `picbreeder_vlm` package + pickle-compat shims
 ```
 
-## Tests
-
-```bash
-uv pip install -r requirements-test.txt   # no torch / vLLM needed
-pytest
-```
-
-They cover the CPPN engine and the plumbing a refactor can quietly break: the NEAT
-preset loads and renders deterministically, run‑directory names still match the
-published runs, worker subprocesses round‑trip their config, and the top‑level
-pickle‑compat shims keep archived genomes loadable. CI runs them on every push and
-pull request against Python 3.11 and 3.13.
-
 ## Quickstart
 
 The collaborative loop needs a vision‑language model to act as the "breeder." You
@@ -230,6 +217,21 @@ The [**archive dataset**](https://huggingface.co/datasets/picbreeder-vlm/picbree
 holds the evolved archives across runs: rendered images, CPPN genomes, full
 lineages, per‑image VLM captions/ratings, and the sprite sheets + orderings that
 power the interactive gallery in the blog.
+
+## Tests
+
+```bash
+uv pip install -r requirements-test.txt   # no torch / vLLM needed
+pytest
+```
+
+Mostly, these tests exist to ensure that through refactoring, reorganization, and potential extension, the experiments from our paper (and other supplementary, contemporaneous experiments) remain reproducible. There are probably more tests worth adding here, but this is a start.
+
+So far, the tests cover the core CPPN engine and some of the experiment directory and multi-agent plumbing: the NEAT
+preset loads and renders deterministically, run‑directory names still match the
+published runs, worker subprocesses round‑trip their config, and the top‑level
+pickle‑compat shims keep archived genomes loadable. CI runs them on every push and
+pull request against Python 3.11 and 3.13.
 
 ## Citation
 
