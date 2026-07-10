@@ -128,9 +128,26 @@ def capture(args: argparse.Namespace, frame_dir: Path) -> int:
             page.wait_for_function("window.__sysov && window.__sysov.nEpochs > 0")
             page.wait_for_timeout(800)   # fonts + the archive sheet decode
 
-            box = page.locator("#fig").bounding_box()
-            clip = (int(box["x"]), int(box["y"]),
-                    int(box["x"] + box["width"]) + 1, int(box["y"] + box["height"]) + 1)
+            # #fig is overflow:visible and its arrows/box borders spill past its own border
+            # box, so crop to the union of the figure and its visible descendants.
+            box = page.evaluate("""(pad) => {
+                const fig = document.querySelector('#fig');
+                const r = fig.getBoundingClientRect();
+                let [l, t, rt, b] = [r.left, r.top, r.right, r.bottom];
+                for (const el of fig.querySelectorAll('*')) {
+                    const q = el.getBoundingClientRect();
+                    if (q.width <= 0 || q.height <= 0) continue;
+                    const s = getComputedStyle(el);
+                    if (s.visibility === 'hidden' || s.display === 'none') continue;
+                    l = Math.min(l, q.left); t = Math.min(t, q.top);
+                    rt = Math.max(rt, q.right); b = Math.max(b, q.bottom);
+                }
+                return {left: Math.max(0, l - pad), top: Math.max(0, t - pad),
+                        right: Math.min(innerWidth, rt + pad),
+                        bottom: Math.min(innerHeight, b + pad)};
+            }""", 4)
+            clip = (int(box["left"]), int(box["top"]),
+                    int(box["right"]) + 1, int(box["bottom"]) + 1)
 
             if args.speed != 1.0:
                 page.evaluate(f"window.__sysov.setSpeed({args.speed})")
