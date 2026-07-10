@@ -804,34 +804,6 @@ class PicbreederGenome(neat.DefaultGenome):
         return list(result)
 
 
-class InteractiveStagnation:
-    def __init__(self, config, reporters):
-        self.max_stagnation = int(config.get("max_stagnation"))
-        self.reporters = reporters
-
-    @classmethod
-    def parse_config(cls, param_dict):
-        config = {"max_stagnation": 15}
-        config.update(param_dict)
-        return config
-
-    @classmethod
-    def write_config(cls, handle, config):
-        handle.write(f"max_stagnation       = {config['max_stagnation']}\n")
-
-    def update(self, species_set, generation):
-        result = []
-        for species in species_set.species.values():
-            for member in species.members.values():
-                if member.fitness and member.fitness > 0:
-                    species.last_improved = generation
-                    break
-            stagnant_time = generation - species.last_improved
-            is_stagnant = stagnant_time >= self.max_stagnation
-            result.append((species.key, species, is_stagnant))
-        return result
-
-
 class GenerationCheckpointer(BaseReporter):
     def __init__(self, output_dir: Path, latest_filename: str = LATEST_POPULATION_FILENAME):
         self.output_dir = output_dir

@@ -38,7 +38,7 @@ class PicbreederConfig:
     always_include_archive_sample: bool = False  # Keep the branching archive-sample step in context once it falls out of chat history
     allow_restart_from_publications: bool = True  # Allow restart branching from this agent's own prior publications
     model: str = "remote:Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"  # local vLLM server (scripts/serve_local_vlm.sh); was "gemini-2.5-pro"
-    temperature: Union[int, float, str] = 1.0  # Sampling temperature for Gemini responses (or "random")
+    temperature: Union[int, float, str] = 1.0  # Sampling temperature for the VLM, whichever backend (or "random", to draw one per agent)
     thinking_budget: int = -1
     request_rationale: bool = True  # Request natural-language reasoning in agent selections
     keep_query_images: bool = False  # Preserve query images/logs for post-run inspection
@@ -52,7 +52,6 @@ class PicbreederConfig:
     num_agents: int = 200  # How many agents run sequentially in this session
     neat_config_path: Optional[Path] = None  # Path to NEAT config file (uses default if None)
     num_proc: int = 1  # Number of parallel agent processes
-    warm_start_structure: int = 0  # Number of initial agents restricted to structure-only mutation
     experiment_dir: Optional[Path] = None  # Output directory for logs and artefacts
     output_activations: bool = True  # Enable CPPN output activation mutations
     input_activations: bool = False
@@ -68,7 +67,7 @@ class PicbreederConfig:
     seed: int = 0  # Random seed for deterministic behaviour
     render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
     log_raw_responses: bool = False  # When true, dump raw VLM responses to timestamped text files
-    fixed_session_lengths: bool = True  # When true, agents run for exactly 20 generations and must publish at the 20th generation
+    fixed_session_lengths: bool = True  # When true, every agent runs for exactly `agent_generations` generations and must publish on the last one
     nounlist: str = "things_deduped"  # Noun list name (in noun_lists/) or path
     n_personality_traits: int = 0  # Number of random personality traits to prepend to the system prompt
     hydra: HydraConf = field(
@@ -84,7 +83,7 @@ class PicbreederConfig:
                     "  agent_generations       Generations executed by each agent.\n"
                     "  num_agents              Sequential agents to schedule for this run.\n"
                     "  num_proc                Parallel worker processes to launch.\n"
-                    "  temperature             Sampling temperature for Gemini responses (or 'random').\n"
+                    "  temperature             Sampling temperature for the VLM (or 'random').\n"
                     "  experiment_dir          Destination for logs, grids, and archives.\n"
                     "  selection_baseline      Automated parent selection (none/random/max-depth/max-nodes/clip-nouns).\n"
                     "  resume / resume_agent_id Resume an interrupted run from disk records.\n"
@@ -139,8 +138,6 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         raise ValueError("num-proc must be at least 1")
     if cfg.select_k is not None and cfg.select_k < 1:
         raise ValueError("select-k must be at least 1 when provided")
-    if cfg.warm_start_structure < 0:
-        raise ValueError("warm-start-structure must be non-negative")
     if cfg.selection_baseline not in SELECTION_BASELINES:
         raise ValueError(f"selection-baseline must be one of {sorted(SELECTION_BASELINES)}")
     if not (0 <= cfg.rand_select_prob <= 1 or cfg.rand_select_prob == 2):
@@ -206,8 +203,6 @@ def ensure_valid_config(cfg: PicbreederConfig, *, original_cwd: Path) -> Picbree
         experiment_name += f"_scheme-{cfg.scheme}"
         if cfg.thumb_size != 128:
             experiment_name += f"_ts{cfg.thumb_size}"
-        if cfg.warm_start_structure > 0:
-            experiment_name += f"_warmstart{cfg.warm_start_structure}"
         if cfg.selection_baseline != "none":
             experiment_name += f"_baseline-{cfg.selection_baseline}"
         if cfg.rand_select_prob > 0:

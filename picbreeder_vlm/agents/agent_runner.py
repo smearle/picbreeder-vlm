@@ -130,7 +130,6 @@ class AgentRunner:
             Callable[[int, Optional[Dict[str, Any]], Optional[Dict[str, Any]]], None]
         ] = None,
         resume_mode: bool = False,
-        warm_start_active: bool = False,
         render_genome_diagrams: bool = False,
         process_index: Optional[int] = None,
         personality_prompt: Optional[str] = None,
@@ -154,7 +153,6 @@ class AgentRunner:
         self.selection_baseline = selection_baseline
         self.neat_config = neat_config
         self.progress_callback = progress_callback
-        self.warm_start_active = bool(warm_start_active)
         self.resume_mode = resume_mode or (population is not None)
         self.personality_prompt = personality_prompt.strip() if personality_prompt else None
         self.request_rationale = bool(getattr(self.config, "request_rationale", True))
@@ -201,7 +199,7 @@ class AgentRunner:
         sync_population_output_activations(self.population, self.neat_config.genome_config)
         self.population.add_reporter(GenerationCheckpointer(self.population_dir))
 
-        initial_mode = "structure_only" if self.warm_start_active else getattr(
+        initial_mode = getattr(
             self.neat_config.genome_config,
             "picbreeder_mutation_mode",
             "all",
@@ -234,16 +232,10 @@ class AgentRunner:
             archive_novelty_prompt = ""
 
         if self.scheme == "toggle":
-            if self.warm_start_active:
-                mutation_mode_prompt = (
-                    "For the warm-start phase we are focusing on grayscale structure. "
-                    "Keep the `mutation_mode` field set to `structure_only` so only the brightness channel mutates."
-                )
-            else:
-                mutation_mode_prompt = (
-                    "If \"color\" is on, then at each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
-                    "or to mutate the entire CPPN. Indicate your choice in a \"mutation_mode\" field in your JSON response, set to either \"color_only\", \"structure_only\", or \"all\". "
-                )
+            mutation_mode_prompt = (
+                "If \"color\" is on, then at each generation, you may choose to mutate only an isolated subnetwork of the CPPN affecting color or structure, "
+                "or to mutate the entire CPPN. Indicate your choice in a \"mutation_mode\" field in your JSON response, set to either \"color_only\", \"structure_only\", or \"all\". "
+            )
         else:
             mutation_mode_prompt = ""
 
@@ -426,7 +418,7 @@ class AgentRunner:
         setattr(self.population.config.genome_config, "picbreeder_mutation_mode", normalized)
 
     def _update_mutation_mode(self, requested_mode: Optional[str]) -> str:
-        if self.warm_start_active or not self._color_enabled:
+        if not self._color_enabled:
             target = "structure_only"
         else:
             target = self._normalize_mutation_mode(requested_mode)
@@ -812,30 +804,6 @@ class AgentRunner:
             self._set_branched_reference_image(archive_entries[idx])
             if self._branched_reference_image_pairs:
                 return
-
-    def _color_output_keys(self) -> Tuple[int, ...]:
-        output_keys = list(getattr(self.neat_config.genome_config, "output_keys", ()))
-        if len(output_keys) >= 3:
-            return tuple(int(key) for key in output_keys[:2])
-        if len(output_keys) >= 2:
-            return tuple(int(key) for key in output_keys[:-1])
-        return tuple()
-
-    def _zero_color_weights(self, genomes: Iterable[neat.DefaultGenome]) -> None:
-        if not self.warm_start_active:
-            return
-        color_keys = self._color_output_keys()
-        if not color_keys:
-            return
-        for genome in genomes:
-            for (src, dst), connection in genome.connections.items():
-                if int(dst) in color_keys:
-                    connection.weight = 0.0
-
-    def _enforce_structure_only_population(self) -> None:
-        if not self.warm_start_active:
-            return
-        self._zero_color_weights(self.population.population.values())
 
     def _write_generation_checkpoint(self, next_generation: int) -> Path:
         self.population_dir.mkdir(parents=True, exist_ok=True)
@@ -1750,7 +1718,6 @@ class AgentRunner:
         if decision.get("choice") != "branch" or not decision.get("selected_images"):
             seed_initial_population(self.population, self.neat_config.genome_config)
             sync_population_node_indexer(self.population)
-            self._enforce_structure_only_population()
             self._write_generation_checkpoint(int(self.population.generation))
             return
 
@@ -1780,7 +1747,6 @@ class AgentRunner:
         if not selected_records:
             seed_initial_population(self.population, self.neat_config.genome_config)
             sync_population_node_indexer(self.population)
-            self._enforce_structure_only_population()
             self._write_generation_checkpoint(int(self.population.generation))
             return
 
@@ -1818,7 +1784,6 @@ class AgentRunner:
             self.population.generation,
         )
 
-        self._enforce_structure_only_population()
         if branch_color_pref is not None:
             self._color_enabled = bool(branch_color_pref)
             self._update_mutation_mode(self._mutation_mode)
@@ -1828,7 +1793,7 @@ class AgentRunner:
     # ------------------------------------------------------------------
     # Evolution loop
     # ------------------------------------------------------------------
-    def evaluate_generation(
+    def step_generation(
         self,
         genomes: List[Tuple[int, neat.DefaultGenome]],
         config: neat.Config,
@@ -1841,7 +1806,6 @@ class AgentRunner:
                 f"Expected {self.rows * self.cols} genomes, received {len(genomes)}."
             )
 
-        self._zero_color_weights(genome for _, genome in genomes)
 
         if self.render_genome_diagrams:
             diagram_paths = save_neat_genome_diagrams(genomes, config, self.population_dir, generation_i)
@@ -2104,9 +2068,7 @@ class AgentRunner:
         selection_meta["mutation_mode"] = resolved_mode
         resolved_strength = self._update_mutation_strength(selection_meta.get("mutation_strength"))
         selection_meta["mutation_strength"] = resolved_strength
-        if self.warm_start_active:
-            selection_meta["mutation_mode_forced"] = True
-        
+
         selection_path_value = selection_meta.get("selection_path")
         selection_path = Path(selection_path_value) if selection_path_value else Path(grid_path)
         selected_indices: Sequence[int] = selection_meta["selected"]
@@ -2921,10 +2883,10 @@ class AgentRunner:
         try:
             import torch  # type: ignore
             import open_clip  # type: ignore
-            from picbreeder_vlm.analysis.compute_noun_coverage import embed_texts, format_prompts, load_nouns
+            from picbreeder_vlm.analysis.compute_semantic_recall import embed_texts, format_prompts, load_nouns
         except Exception as exc:  # pragma: no cover - import guard
             raise RuntimeError(
-                "CLIP noun baseline requires torch and open_clip (see compute_noun_similarity.py dependencies)."
+                "CLIP noun baseline requires torch and open_clip (see compute_semantic_recall.py dependencies)."
             ) from exc
 
         noun_path = resolve_nounlist(self.config.nounlist, REPO_ROOT)

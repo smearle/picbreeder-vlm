@@ -342,7 +342,6 @@ class AgentTask:
     agent_id: str
     agent_index: int
     resume: bool
-    warm_start_active: bool
     personality_prompt: Optional[str]
     personality_trait: Optional[str] = None
     temperature: Optional[float] = None
@@ -356,7 +355,6 @@ class AgentTask:
             "agent_id": self.agent_id,
             "agent_index": self.agent_index,
             "resume": self.resume,
-            "warm_start_active": self.warm_start_active,
             "personality_prompt": self.personality_prompt,
             "personality_trait": self.personality_trait,
             "temperature": self.temperature,
@@ -466,7 +464,6 @@ class CollaborativeMultiAgentOrchestrator:
         neat_config_path: Path,
         select_k: Optional[int],
         agent_generations: int,
-        warm_start_structure: int,
         enable_output_activations: bool,
         selection_baseline: str,
         seed: Optional[int],
@@ -484,7 +481,6 @@ class CollaborativeMultiAgentOrchestrator:
         self.neat_config_path = neat_config_path
         self.select_k = select_k
         self.agent_generations = agent_generations
-        self.warm_start_structure = warm_start_structure
         self.enable_output_activations = enable_output_activations
         self.enable_input_activations = config.input_activations
         self.enable_crossover = config.enable_crossover
@@ -676,7 +672,6 @@ class CollaborativeMultiAgentOrchestrator:
             "enable_output_activations": self.enable_output_activations,
             "enable_input_activations": self.enable_input_activations,
             "enable_crossover": self.enable_crossover,
-            "warm_start_structure": self.warm_start_structure,
             "selection_baseline": self.selection_baseline,
             "temperature": self.config.temperature,
             "generate_personalities": self.config.generate_personalities,
@@ -693,8 +688,6 @@ class CollaborativeMultiAgentOrchestrator:
         if existing['personality_path']:
             existing["personality_path"] = str(relative_suffix_after_dir(Path(existing.get("personality_path")), dir_name=REPO_NAME))
         missing = []
-        if "warm_start_structure" not in existing:
-            missing.append(("warm_start_structure", 0))
         if "selection_baseline" not in existing:
             missing.append(("selection_baseline", "none"))
         if "temperature" not in existing:
@@ -841,12 +834,6 @@ class CollaborativeMultiAgentOrchestrator:
             metadata["next_agent_number"] = max(metadata.get("next_agent_number", 0), index + 1)
 
         self._mutate_metadata(mutator, read_write=read_write)
-
-    def _is_warm_start_agent(self, agent_id: str) -> bool:
-        if self.warm_start_structure <= 0:
-            return False
-        index = self._parse_agent_index(agent_id)
-        return index is not None and index < self.warm_start_structure
 
     def _find_agent_record(self, agent_id: str) -> Optional[AgentRecord]:
         agents = self._metadata.get("agents", {})
@@ -1059,7 +1046,6 @@ class CollaborativeMultiAgentOrchestrator:
                 population=population,
                 progress_callback=callback,
                 resume_mode=resume,
-                warm_start_active=self._is_warm_start_agent(agent_id),
                 render_genome_diagrams=self.render_genome_diagrams,
                 process_index=self.process_index,
                 personality_prompt=final_personality_prompt,
@@ -1088,7 +1074,6 @@ class CollaborativeMultiAgentOrchestrator:
                     population=None,
                     progress_callback=callback,
                     resume_mode=False,
-                    warm_start_active=self._is_warm_start_agent(agent_id),
                     render_genome_diagrams=self.render_genome_diagrams,
                     process_index=self.process_index,
                     personality_prompt=final_personality_prompt,
@@ -1143,7 +1128,7 @@ class CollaborativeMultiAgentOrchestrator:
         quit_reason: Optional[str] = None
         while remaining > 0:
             try:
-                runner.population.run(runner.evaluate_generation, remaining)
+                runner.population.run(runner.step_generation, remaining)
                 break
             except CompleteExtinctionException:
                 extinct = True
@@ -1618,7 +1603,6 @@ class CollaborativeMultiAgentOrchestrator:
         record = self._register_agent(agent_id, read_write=False)
         if record.status != "in_progress":
             self._update_agent_record(agent_id, status="in_progress", last_generation=0, read_write=False)
-        warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
         temperature = self._resolve_agent_temperature(
             agent_id,
@@ -1645,7 +1629,6 @@ class CollaborativeMultiAgentOrchestrator:
             agent_id=agent_id,
             agent_index=agent_index,
             resume=False,
-            warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
             personality_trait=selected_trait,
             temperature=temperature,
@@ -1658,7 +1641,6 @@ class CollaborativeMultiAgentOrchestrator:
         agent_id = record.agent_id
         # agent_dir = self._agent_dir(agent_id)
         agent_index = self._parse_agent_index(agent_id) or 0
-        warm_start_active = self._is_warm_start_agent(agent_id)
         personality_prompt = self._personality_prompt_for_agent(agent_id)
         temperature = self._resolve_agent_temperature(
             agent_id,
@@ -1683,7 +1665,6 @@ class CollaborativeMultiAgentOrchestrator:
             agent_id=agent_id,
             agent_index=agent_index,
             resume=True,
-            warm_start_active=warm_start_active,
             personality_prompt=personality_prompt,
             personality_trait=record.personality_trait,
             temperature=temperature,
@@ -1896,7 +1877,6 @@ def _build_orchestrator(
         neat_config_path=cfg.neat_config_path,
         select_k=cfg.select_k,
         agent_generations=cfg.agent_generations,
-        warm_start_structure=cfg.warm_start_structure,
         enable_output_activations=cfg.output_activations,
         selection_baseline=cfg.selection_baseline,
         seed=cfg.seed,
@@ -2017,7 +1997,6 @@ def _deserialize_agent_task(payload: Dict[str, Any]) -> AgentTask:
         agent_id=str(payload["agent_id"]),
         agent_index=int(payload.get("agent_index", 0)),
         resume=bool(payload.get("resume")),
-        warm_start_active=bool(payload.get("warm_start_active")),
         personality_prompt=payload.get("personality_prompt"),
         personality_trait=payload.get("personality_trait"),
         temperature=payload.get("temperature"),
@@ -2063,7 +2042,7 @@ def _execute_runner_in_worker(
     quit_reason: Optional[str] = None
     while remaining > 0:
         try:
-            runner.population.run(runner.evaluate_generation, remaining)
+            runner.population.run(runner.step_generation, remaining)
             break
         except CompleteExtinctionException:
             extinct = True
@@ -2381,7 +2360,6 @@ def _execute_agent_task(
             population=population,
             progress_callback=progress_callback,
             resume_mode=task.resume,
-            warm_start_active=task.warm_start_active,
             render_genome_diagrams=agent_cfg.render_genome_diagrams,
             process_index=worker_index,
             personality_prompt=final_personality_prompt,
@@ -2410,7 +2388,6 @@ def _execute_agent_task(
                 population=None,
                 progress_callback=progress_callback,
                 resume_mode=False,
-                warm_start_active=task.warm_start_active,
                 render_genome_diagrams=agent_cfg.render_genome_diagrams,
                 process_index=worker_index,
                 personality_prompt=final_personality_prompt,
