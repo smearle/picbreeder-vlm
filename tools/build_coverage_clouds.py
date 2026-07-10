@@ -16,9 +16,11 @@ build_coverage_atlas_aggregate exactly (keep it in sync if that changes).
 Outputs (under <blog>/assets/coverage_clouds/<space>/):
     grid_<space>.png   the re-rendered coverage panel (replaces assets/grid_<space>.png)
     atlas.jpg          `cell`x`cell` thumbnails of the sampled individuals, atlas order
-    manifest.json      {space,w,h,cell,cols,count,atlas,pts:[[nx,ny],...]}
+    manifest.json      {space,w,h,cell,cols,count,atlas,pts:[[nx,ny],...],caps?:[str,...]}
                        pts are normalized [0,1] positions in the PNG frame (y down),
                        atlas slot i -> (col=i%cols,row=i//cols).
+                       caps (semantic only) is the VLM caption of point i, "" where the
+                       source image was missing; the page shows it on hover.
 
 Usage:
     python tools/build_coverage_clouds.py                    # both spaces -> blog
@@ -189,22 +191,30 @@ def build(space, out_root, sample, cell, quality, refresh_blog=True):
     cols = int(np.ceil(np.sqrt(k)))
     rows = int(np.ceil(k / cols))
     atlas = Image.new("RGB", (cols * cell, rows * cell), (255, 255, 255))
-    pts, miss = [], 0
+    pts, caps, miss = [], [], 0
     for i, li in enumerate(sel_local):
         oi = keep[li]
         try:
             im = Image.open(B._recall_image_path(sources[oi], fnames[oi])).convert("RGB")
             if im.size != (cell, cell):
                 im = im.resize((cell, cell), Image.LANCZOS)
+            missing = False
         except FileNotFoundError:
             miss += 1
             im = Image.new("RGB", (cell, cell), (235, 235, 235))
+            missing = True
         atlas.paste(im, ((i % cols) * cell, (i // cols) * cell))
         pts.append([round(float(norm[i, 0]), 5), round(float(norm[i, 1]), 5)])
+        if captions is not None:
+            caps.append("" if missing else captions[oi].strip())
 
     atlas.save(out / "atlas.jpg", quality=quality, optimize=True)
     manifest = {"space": space, "w": W, "h": H, "cell": cell, "cols": cols,
                 "count": k, "atlas": "atlas.jpg", "pts": pts}
+    # Semantic only: the VLM caption behind each sampled point. coverage-cloud.js
+    # shows the centre individual's caption on hover — the panel IS caption space.
+    if captions is not None:
+        manifest["caps"] = caps
     (out / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")))
     sz = (out / "atlas.jpg").stat().st_size
     print(f"  wrote {out/'atlas.jpg'}  ({sz/1e6:.2f} MB, {k} pts, {miss} missing) "
