@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Plot how the archive's mean pairwise distance shifts as each image is added, plus nearest-neighbor distance stats."""
+"""Compute Visual Coverage for an archive of images.
+
+Embeds every archive image (SigLIP2 by default) and, after each insertion,
+runs greedy k-center over the image embeddings. The headline metric is the
+k-covering RADIUS (`compute_k_covering`): the distance from the worst-covered
+image to its nearest of k representatives. Higher = the archive is more spread
+out, since k representatives no longer cover it tightly. The paper reports k=100.
+
+Mean pairwise distance and nearest-neighbour stats are also recorded, but they
+are secondary diversity numbers, NOT Visual Coverage.
+
+The on-disk artifact keeps its former name -- `embedding_mean_pairwise_distance
+_over_time_<model>.json`, after the secondary stat -- because the paper's runs
+are on disk and on the Hub under it. Coverage lives in its `k_covering_radii`
+key. See picbreeder_vlm/analysis/__init__.py for the full name mapping.
+"""
 
 from dataclasses import dataclass, field
 import json
@@ -25,7 +40,7 @@ from picbreeder_vlm.vlm.model_loader import prepare_model, embed_images
 
 
 @dataclass
-class PairwiseDistanceConfig(PicbreederConfig):
+class VisualCoverageConfig(PicbreederConfig):
     embedding_model: str = "SigLIP2-B-alignet"
     pretrained: str = "laion2b_s32b_b79k"
     batch_size: int = 64
@@ -36,7 +51,7 @@ class PairwiseDistanceConfig(PicbreederConfig):
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
-                app_name="plot_mean_pairwise_distance_over_time",
+                app_name="compute_visual_coverage",
                 header=(
                     "Plots how mean pairwise embedding distance evolves as images enter the archive.\n"
                     "Provide experiment_dir or use goal/scheme/seed to resolve one."
@@ -47,7 +62,7 @@ class PairwiseDistanceConfig(PicbreederConfig):
     )
 
 
-ConfigStore.instance().store(name="pairwise_distance_base", node=PairwiseDistanceConfig)
+ConfigStore.instance().store(name="visual_coverage_base", node=VisualCoverageConfig)
 
 
 def _numeric_suffix(path: Path) -> int:
@@ -105,13 +120,13 @@ def infer_archive_order(exp_dir: Path) -> List[Path]:
     return ordered
 
 
-def _prepare_model(cfg: PairwiseDistanceConfig, device: torch.device):
+def _prepare_model(cfg: VisualCoverageConfig, device: torch.device):
     model, preprocess, _ = prepare_model(cfg, device)
     return model, preprocess
 
 
 def prepare_openclip_components(
-    cfg: PairwiseDistanceConfig,
+    cfg: VisualCoverageConfig,
     device: torch.device,
 ):
     """Create the OpenCLIP model + preprocess transform for this config."""
@@ -122,7 +137,7 @@ def prepare_openclip_components(
 def load_embeddings_in_order(
     image_paths: Sequence[Path],
     exp_dir: Path,
-    cfg: PairwiseDistanceConfig,
+    cfg: VisualCoverageConfig,
     device: torch.device,
     model=None,
     preprocess=None,
@@ -362,9 +377,9 @@ def save_trajectory_json(results, outpath: Path):
     outpath.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
 
 
-@hydra.main(version_base="1.3", config_path=None, config_name="pairwise_distance_base")
+@hydra.main(version_base="1.3", config_path=None, config_name="visual_coverage_base")
 def main(
-    cfg: PairwiseDistanceConfig,
+    cfg: VisualCoverageConfig,
     model=None,
     preprocess=None,
     original_cwd_override: Optional[Path] = None,

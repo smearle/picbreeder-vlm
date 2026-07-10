@@ -69,7 +69,7 @@ def _format_process_exit(eval_name: str, exitcode: Optional[int]) -> str:
 class CollaborativeRun:
     """Submitit-compatible callable that executes a configured run."""
 
-    def __init__(self, sweep_cfg: SweepConfig, run_cfg: PicbreederConfig, mode='train'):
+    def __init__(self, sweep_cfg: SweepConfig, run_cfg: PicbreederConfig):
         self.run_cfg = run_cfg
 
     def __call__(self) -> int:
@@ -175,7 +175,7 @@ def _run_eval_visual_coverage(cfg: SweepConfig, run_configs: Sequence[Picbreeder
     from pathlib import Path
     from dataclasses import fields as dataclass_fields, replace
     from picbreeder_vlm.analysis.compute_visual_coverage import (
-        PairwiseDistanceConfig,
+        VisualCoverageConfig,
         main as novelty_main,
         prepare_openclip_components as prepare_novelty_clip,
     )
@@ -204,7 +204,7 @@ def _run_eval_visual_coverage(cfg: SweepConfig, run_configs: Sequence[Picbreeder
     }
     
     print("\n[Visual Coverage] Evaluating visual novelty...")
-    novelty_cfg0 = PairwiseDistanceConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
+    novelty_cfg0 = VisualCoverageConfig(**base_kwargs0, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
     novelty_model, novelty_preprocess = prepare_novelty_clip(novelty_cfg0, device)
 
     for run_cfg in run_configs:
@@ -223,7 +223,7 @@ def _run_eval_visual_coverage(cfg: SweepConfig, run_configs: Sequence[Picbreeder
             if field_def.name != "hydra"
         }
 
-        novelty_cfg = PairwiseDistanceConfig(**base_kwargs, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
+        novelty_cfg = VisualCoverageConfig(**base_kwargs, embedding_model=cfg.image_embedding_model, pretrained=cfg.image_pretrained)
         novelty_cfg = replace(novelty_cfg, archive_limit=cfg.archive_limit)
         desc = _format_run_prefix(run_cfg, "[local-eval]")
         extra = (
@@ -241,15 +241,15 @@ def _run_eval_visual_coverage(cfg: SweepConfig, run_configs: Sequence[Picbreeder
         )
 
 
-def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str, cross_eval_dir: Path):
+def _run_eval_semantic_recall(cfg: SweepConfig, run_configs: Sequence[PicbreederConfig], original_cwd: Path, device_str: str, cross_eval_dir: Path):
     import torch
     import os
     import shutil
     from pathlib import Path
     from collections import defaultdict
     from dataclasses import fields as dataclass_fields, replace
-    from picbreeder_vlm.analysis.compute_noun_coverage import (
-        NounSimilarityConfig,
+    from picbreeder_vlm.analysis.compute_semantic_recall import (
+        SemanticRecallConfig,
         main as noun_main,
         prepare_openclip_components as prepare_noun_clip,
         prepare_noun_text_embeddings,
@@ -284,7 +284,7 @@ def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederCo
 
     print("\n[Noun Coverage] Evaluating noun similarity...")
     # Initialize model once (assuming embedding model is constant across sweep)
-    noun_cfg_template = NounSimilarityConfig(**base_kwargs0, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+    noun_cfg_template = SemanticRecallConfig(**base_kwargs0, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
     noun_model, noun_preprocess, noun_tokenizer = prepare_noun_clip(noun_cfg_template, device)
 
     # Group runs by nounlist to avoid reloading/re-embedding nouns unnecessarily
@@ -302,7 +302,7 @@ def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederCo
              for field_def in dataclass_fields(PicbreederConfig)
              if field_def.name != "hydra"
         }
-        noun_cfg_group = NounSimilarityConfig(**base_kwargs_group, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+        noun_cfg_group = SemanticRecallConfig(**base_kwargs_group, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
         noun_cfg_group.nounlist = nounlist
 
         nouns_list, prompts_list, noun_text_embeddings, neg_embeddings = prepare_noun_text_embeddings(
@@ -329,7 +329,7 @@ def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederCo
                 for field_def in dataclass_fields(PicbreederConfig)
                 if field_def.name != "hydra"
             }
-            noun_cfg = NounSimilarityConfig(**base_kwargs, render_grid=True, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+            noun_cfg = SemanticRecallConfig(**base_kwargs, render_grid=True, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
             noun_cfg = replace(noun_cfg, archive_limit=cfg.archive_limit)
             
             noun_cfg.nounlist = nounlist
@@ -340,7 +340,7 @@ def _run_eval_noun_coverage(cfg: SweepConfig, run_configs: Sequence[PicbreederCo
                 if cfg.archive_limit is not None
                 else ""
             )
-            print(f"{desc} -> compute_noun_similarity{extra}")
+            print(f"{desc} -> compute_semantic_recall{extra}")
             _call_hydra_wrapped_main(
                 noun_main,
                 noun_cfg,
@@ -516,10 +516,10 @@ def _load_trajectory_metric(path: Path, metric_key: str) -> Dict[int, float]:
     return result
 
 
-def _load_noun_similarity_scalar(exp_dir: Path, model_name: Optional[str] = None, nounlist_name: Optional[str] = None) -> Optional[float]:
+def _load_semantic_recall_scalar(exp_dir: Path, model_name: Optional[str] = None, nounlist_name: Optional[str] = None) -> Optional[float]:
     """Load a single noun similarity scalar for an experiment.
 
-    Prefers noun_similarity_metrics.json (written by compute_noun_similarity.py).
+    Prefers noun_similarity_metrics.json (written by compute_semantic_recall.py).
     Falls back to the final value in noun_similarity_over_time.json.
     """
     model_suffix = ""
@@ -851,7 +851,7 @@ def _compute_mean_scalar(
         if metric_type == "novelty":
             val = _load_embedding_mean_pairwise_distance_scalar(exp_dir, model_name)
         elif metric_type == "noun":
-            val = _load_noun_similarity_scalar(exp_dir, model_name, nounlist_name)
+            val = _load_semantic_recall_scalar(exp_dir, model_name, nounlist_name)
         elif metric_type in ("sackin", "colless", "depth", "j1"):
              metrics_path = exp_dir / "archive" / "phylogeny_metrics.json"
              if metrics_path.exists():
@@ -1122,7 +1122,7 @@ def _plot_seed_aggregates(
             if noun_cont:
                 noun_contrastive_grouped.setdefault(group_key, []).append(noun_cont)
             elif noun:
-                raise ValueError(f"Missing contrastive noun similarity with key {f'mean_max_contrastive{neg_suffix}'} in {noun_path} (eval_noun_coverage was likely run with an old version or incomplete data)")
+                raise ValueError(f"Missing contrastive noun similarity with key {f'mean_max_contrastive{neg_suffix}'} in {noun_path} (eval_semantic_recall was likely run with an old version or incomplete data)")
 
             noun_per_image = _load_trajectory_metric(noun_path, "mean_max_per_image_similarity")
             noun_per_image = {k: v for k, v in noun_per_image.items() if k <= limit}
@@ -1466,7 +1466,10 @@ def _plot_seed_aggregates(
                 seeds_vals = final_novelty_scores[group_key]
                 if seeds_vals:
                     best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
-                    best_seeds_data["visual_coverage"] = {
+                    # mean pairwise distance over image embeddings: a diversity stat,
+                    # not the paper's Visual Coverage (that is the k-covering radius
+                    # recorded below). See picbreeder_vlm/analysis/__init__.py.
+                    best_seeds_data["visual_diversity"] = {
                         "best_seed": best_seed,
                         "value": best_val,
                         "metric": "mean_pairwise_distance"
@@ -1476,17 +1479,18 @@ def _plot_seed_aggregates(
                 seeds_vals = final_noun_scores[group_key]
                 if seeds_vals:
                     best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
-                    best_seeds_data["noun_coverage"] = {
+                    best_seeds_data["semantic_recall"] = {
                         "best_seed": best_seed,
                         "value": best_val,
                         "metric": "mean_max_similarity"
                     }
-                    
+
             if group_key in final_caption_scores:
                 seeds_vals = final_caption_scores[group_key]
                 if seeds_vals:
                     best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
-                    best_seeds_data["semantic_coverage"] = {
+                    # likewise: caption diversity, not Semantic Coverage
+                    best_seeds_data["semantic_diversity"] = {
                         "best_seed": best_seed,
                         "value": best_val,
                         "metric": "mean_pairwise_distance"
@@ -1498,7 +1502,7 @@ def _plot_seed_aggregates(
                     seeds_vals = group_scores[group_key]
                     if seeds_vals:
                         best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
-                        best_seeds_data[f"visual_k_covering_k{k}"] = {
+                        best_seeds_data[f"visual_coverage_k{k}"] = {
                             "best_seed": best_seed,
                             "value": best_val,
                             "metric": f"k_covering_radius_k{k}"
@@ -1509,7 +1513,7 @@ def _plot_seed_aggregates(
                     seeds_vals = group_scores[group_key]
                     if seeds_vals:
                         best_seed, best_val = max(seeds_vals, key=lambda x: x[1])
-                        best_seeds_data[f"semantic_k_covering_k{k}"] = {
+                        best_seeds_data[f"semantic_coverage_k{k}"] = {
                             "best_seed": best_seed,
                             "value": best_val,
                             "metric": f"k_covering_radius_k{k}"
@@ -1860,14 +1864,14 @@ def _run_render_aggregate_noun_grid(cfg: SweepConfig, run_configs: Sequence[Picb
     from dataclasses import fields as dataclass_fields
     from collections import defaultdict
     from scipy.optimize import linear_sum_assignment
-    from picbreeder_vlm.analysis.compute_noun_coverage import (
-        NounSimilarityConfig,
+    from picbreeder_vlm.analysis.compute_semantic_recall import (
+        SemanticRecallConfig,
         prepare_openclip_components,
         prepare_noun_text_embeddings,
         infer_archive_order,
         embed_images,
         compute_max_similarities,
-        render_noun_similarity_grid,
+        render_semantic_recall_grid,
         load_nouns,
     )
     from picbreeder_vlm.core.config import PicbreederConfig
@@ -1899,7 +1903,7 @@ def _run_render_aggregate_noun_grid(cfg: SweepConfig, run_configs: Sequence[Picb
             for field_def in dataclass_fields(PicbreederConfig)
             if field_def.name != "hydra"
         }
-        noun_cfg_template = NounSimilarityConfig(
+        noun_cfg_template = SemanticRecallConfig(
             **base_kwargs0, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained,
             render_grid=cfg.render_noun_grids)
         noun_model, noun_preprocess, noun_tokenizer = prepare_openclip_components(noun_cfg_template, device)
@@ -1914,7 +1918,7 @@ def _run_render_aggregate_noun_grid(cfg: SweepConfig, run_configs: Sequence[Picb
                 for field_def in dataclass_fields(PicbreederConfig)
                 if field_def.name != "hydra"
             }
-            noun_cfg = NounSimilarityConfig(**base_kwargs, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
+            noun_cfg = SemanticRecallConfig(**base_kwargs, embedding_model=cfg.text_image_embedding_model, pretrained=cfg.text_image_pretrained)
             
             # Load and deduplicate nouns
             noun_file = resolve_nounlist(noun_cfg.nounlist, original_cwd)
@@ -2020,7 +2024,7 @@ def _run_render_aggregate_noun_grid(cfg: SweepConfig, run_configs: Sequence[Picb
             output_path = dest_dir / f"aggregate_noun_grid_{nounlist_name}_{model_name_sanitized}.pdf"
             
             print(f"Rendering aggregate grid to {output_path}")
-            render_noun_similarity_grid(
+            render_semantic_recall_grid(
                 nouns_list,
                 max_per_noun,
                 best_image_indices,
@@ -2205,7 +2209,7 @@ def main(cfg: SweepConfig) -> None:
 
     any_eval_or_render = (
         cfg.eval_visual_coverage or
-        cfg.eval_noun_coverage or
+        cfg.eval_semantic_recall or
         cfg.eval_captions or
         cfg.render_archive or
         cfg.eval_tree or
@@ -2235,15 +2239,15 @@ def main(cfg: SweepConfig) -> None:
                         "Hint: try a smaller embedding model or lower archive_limit to reduce memory usage."
                     )
 
-        if cfg.eval_noun_coverage:
+        if cfg.eval_semantic_recall:
             p2 = ctx.Process(
-                target=_run_eval_noun_coverage,
+                target=_run_eval_semantic_recall,
                 args=(cfg, run_configs, original_cwd, device_str, cross_eval_dir)
             )
             p2.start()
             p2.join()
             if p2.exitcode != 0:
-                print(_format_process_exit("Noun coverage eval", p2.exitcode))
+                print(_format_process_exit("Semantic Recall eval", p2.exitcode))
                 if p2.exitcode == -signal.SIGKILL:
                     print(
                         "Hint: this stage loads image/text embeddings together; reduce archive_limit or switch to a lighter model."

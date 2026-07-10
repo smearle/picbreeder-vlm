@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-"""
-Caption archive images using a VLM and embed the captions into a text embedding space.
-Calculates coverage metrics on the text embeddings.
+"""Caption archive images with a VLM, embed the captions, and compute Semantic Coverage.
+
+This is the producer of the paper's Semantic Coverage: greedy k-center over the
+CAPTION embeddings, reported as the k-covering radius (`k_covering_radii`, k=100).
+It is the semantic twin of compute_visual_coverage.py, which runs the same
+construction over IMAGE embeddings.
+
+Mean pairwise distance over the captions is also recorded; that is caption
+diversity, NOT Semantic Coverage.
+
+There is no `compute_semantic_coverage.py` -- the metric is produced here, as a
+by-product of the captioning pass, and is gated by the `eval_captions` sweep flag
+rather than an `eval_semantic_coverage` one. See picbreeder_vlm/analysis/__init__.py
+for the full name mapping.
 """
 
 import json

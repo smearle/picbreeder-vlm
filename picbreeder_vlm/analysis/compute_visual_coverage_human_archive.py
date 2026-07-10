@@ -25,20 +25,20 @@ from picbreeder_vlm.analysis.compute_visual_coverage import (
     plot_mpd_trajectory,
     save_trajectory_json,
     prepare_openclip_components,
-    PairwiseDistanceConfig,
+    VisualCoverageConfig,
     load_embeddings_in_order,
 )
 from picbreeder_vlm.core.utils import load_human_archive_images
 from picbreeder_vlm.core.config import ensure_valid_config
 
 @dataclass
-class HumanPairwiseDistanceConfig(PairwiseDistanceConfig):
+class HumanVisualCoverageConfig(VisualCoverageConfig):
     render_size: int = 128
     k_covering_ks: str = "1,5,10,20,50,100"
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
-                app_name="plot_human_archive_novelty",
+                app_name="compute_visual_coverage_human_archive",
                 header=(
                     "Hydra entry point for human archive novelty metrics.\n"
                     "Plots mean pairwise distance over time for human archives.\n"
@@ -48,11 +48,11 @@ class HumanPairwiseDistanceConfig(PairwiseDistanceConfig):
         )
     )
 
-ConfigStore.instance().store(name="human_pairwise_distance_base", node=HumanPairwiseDistanceConfig)
+ConfigStore.instance().store(name="human_visual_coverage_base", node=HumanVisualCoverageConfig)
 
-@hydra.main(version_base="1.3", config_path=None, config_name="human_pairwise_distance_base")
+@hydra.main(version_base="1.3", config_path=None, config_name="human_visual_coverage_base")
 def main(
-    cfg: HumanPairwiseDistanceConfig,
+    cfg: HumanVisualCoverageConfig,
 ) -> None:
     original_cwd = Path(get_original_cwd())
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)

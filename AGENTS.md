@@ -57,7 +57,7 @@ The codebase is organized into several distinct layers, from high-level orchestr
 
 ### 6. Analysis & Evaluation
 *   **`embed_and_visualize.py`**: Generates embeddings (CLIP/SigLIP) for archives and creates visualizations (t-SNE/UMAP).
-*   **`compute_noun_similarity.py`**: Measures how well evolved images match target nouns (alignment metrics).
+*   **`compute_semantic_recall.py`**: Measures how well evolved images match target nouns (alignment metrics).
 *   **`plot_novelty_over_time.py`**: Visualizes the novelty of the archive over time.
 *   **`tree_metrics.py`**: Calculates phylogenetic statistics (tree depth, branching factors).
 
@@ -97,7 +97,7 @@ Evaluations are often run as a separate step after training. You can enable spec
 
 **Noun Coverage (Alignment):**
 ```bash
-.venv/bin/python -m picbreeder_vlm.experiments.sweep sweep_name=chat_history_turns eval_noun_coverage=true slurm=false
+.venv/bin/python -m picbreeder_vlm.experiments.sweep sweep_name=chat_history_turns eval_semantic_recall=true slurm=false
 ```
 
 **Phylogeny (Tree) Metrics:**

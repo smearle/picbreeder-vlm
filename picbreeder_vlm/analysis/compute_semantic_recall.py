@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Compute CLIP noun similarity metrics for an archive of images.
+"""Compute Semantic Recall for an archive of images.
 
 This utility mirrors the archive layout expected by embed_and_visualize.py:
   <experiment_dir>/archive/images/*.png
 
 It embeds every archive image, embeds every noun in a provided noun list, and
 then measures the maximum cosine similarity between each noun and any image.
-The resulting statistics are saved to JSON for further analysis.
+Averaging that over the nouns gives Semantic Recall: how much of the vocabulary
+the archive has found *some* image for. (The reverse direction -- each image's
+best noun, averaged over images -- is also recorded, but is a different metric.)
+
+The on-disk artifacts still carry this metric's former name, `noun_similarity`
+(`noun_similarity_metrics.json`, `noun_similarity_over_time_*.json`, and the
+`mean_max_similarity` key). Those names are load-bearing: the completed runs
+behind the paper are on disk and on the Hub with them, and ~10 modules read
+them back. Only the Python-side names were updated to match the paper.
 """
 from __future__ import annotations
 
@@ -48,7 +56,7 @@ from picbreeder_vlm.vlm.model_loader import prepare_model, embed_images
 
 
 @dataclass
-class NounSimilarityConfig(PicbreederConfig):
+class SemanticRecallConfig(PicbreederConfig):
     embedding_model: str = "ViT-SO400M-14-SigLIP2"
     pretrained: str = "webli"
     batch_size: int = 64
@@ -69,9 +77,9 @@ class NounSimilarityConfig(PicbreederConfig):
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
-                app_name="compute_noun_similarity",
+                app_name="compute_semantic_recall",
                 header=(
-                    "Hydra entry point for noun coverage metrics.\n"
+                    "Hydra entry point for the Semantic Recall metric.\n"
                     "\n"
                     "Common overrides:\n"
                     "  nounlist           Noun list name (e.g. imagenet_leaves) or path.\n"
@@ -85,10 +93,10 @@ class NounSimilarityConfig(PicbreederConfig):
     )
 
 
-ConfigStore.instance().store(name="noun_similarity_base", node=NounSimilarityConfig)
+ConfigStore.instance().store(name="semantic_recall_base", node=SemanticRecallConfig)
 
 
-def _validate_noun_similarity_options(cfg: NounSimilarityConfig) -> None:
+def _validate_semantic_recall_options(cfg: SemanticRecallConfig) -> None:
     if cfg.batch_size <= 0:
         raise ValueError("batch_size must be positive")
     if cfg.noun_batch_size <= 0:
@@ -109,7 +117,7 @@ def _validate_noun_similarity_options(cfg: NounSimilarityConfig) -> None:
 
 
 def prepare_openclip_components(
-    cfg: NounSimilarityConfig,
+    cfg: SemanticRecallConfig,
     device: torch.device,
 ):
     """Create the OpenCLIP model + preprocess + tokenizer for this config."""
@@ -117,7 +125,7 @@ def prepare_openclip_components(
 
 
 def load_or_compute_noun_embeddings(
-    cfg: NounSimilarityConfig,
+    cfg: SemanticRecallConfig,
     original_cwd: Path,
     device: torch.device,
     prompts_list: List[str],
@@ -156,7 +164,7 @@ def load_or_compute_noun_embeddings(
 
 
 def load_or_compute_negative_embeddings(
-    cfg: NounSimilarityConfig,
+    cfg: SemanticRecallConfig,
     original_cwd: Path,
     device: torch.device,
     model: torch.nn.Module,
@@ -206,7 +214,7 @@ def load_or_compute_negative_embeddings(
 
 
 def prepare_noun_text_embeddings(
-    cfg: NounSimilarityConfig,
+    cfg: SemanticRecallConfig,
     original_cwd: Path,
     device: torch.device,
     model=None,
@@ -221,7 +229,7 @@ def prepare_noun_text_embeddings(
     """
 
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
-    _validate_noun_similarity_options(validated_cfg)
+    _validate_semantic_recall_options(validated_cfg)
 
     if nouns is None:
         noun_file = resolve_nounlist(validated_cfg.nounlist, original_cwd)
@@ -487,14 +495,14 @@ def compute_trajectory_metrics(
     return results
 
 
-def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], outpath: Path) -> None:
+def plot_semantic_recall_trajectory(results: Sequence[Dict[str, object]], outpath: Path) -> None:
     if not results:
         return
     steps = [int(row["index"]) for row in results]
     vals = [float(row["mean_max_similarity"]) for row in results]
 
     fig, ax = plt.subplots(1, 1, figsize=(12, 5))
-    ax.plot(steps, vals, label="Noun Similarity", color="#1f77b4", linewidth=2)
+    ax.plot(steps, vals, label="Semantic Recall", color="#1f77b4", linewidth=2)
     
     if "mean_max_per_image_similarity" in results[0]:
         vals_per_img = [float(row.get("mean_max_per_image_similarity", 0.0)) for row in results]
@@ -525,7 +533,7 @@ def plot_mean_max_similarity_trajectory(results: Sequence[Dict[str, object]], ou
         color = cmap((i + 1) % 10)
         ax.plot(steps, c_vals, label=label, color=color, linewidth=2, linestyle="--")
 
-    ax.set_title("Noun coverage metrics over archive growth")
+    ax.set_title("Semantic Recall over archive growth")
     ax.set_xlabel("Archive insertion order")
     ax.set_ylabel("Metric Value")
     ax.legend()
@@ -581,7 +589,7 @@ def save_trajectory_json(results: Sequence[Dict[str, object]], outpath: Path) ->
 
 
 
-def render_noun_similarity_grid(
+def render_semantic_recall_grid(
     nouns: Sequence[str],
     max_per_noun: np.ndarray,
     best_image_indices: np.ndarray,
@@ -626,8 +634,8 @@ def _resolve_optional_path(value: Optional[Path], base: Path) -> Optional[Path]:
     return _ensure_absolute(Path(value), base)
 
 
-def process_noun_similarity(
-    validated_cfg: NounSimilarityConfig,
+def process_semantic_recall(
+    validated_cfg: SemanticRecallConfig,
     image_paths: List[Path],
     nouns_list: List[str],
     prompts_list: List[str],
@@ -852,7 +860,7 @@ def process_noun_similarity(
         trajectory_plot = output_dir / f"noun_similarity_over_time_{nounlist_name}_{model_name_sanitized}.png"
 
     merged_trajectory = save_trajectory_json(trajectory, trajectory_json)
-    plot_mean_max_similarity_trajectory(merged_trajectory, trajectory_plot)
+    plot_semantic_recall_trajectory(merged_trajectory, trajectory_plot)
     print(f"Saved noun similarity trajectory JSON to {trajectory_json}")
     print(f"Saved noun similarity trajectory plot to {trajectory_plot}")
 
@@ -875,7 +883,7 @@ def process_noun_similarity(
         if grid_output is None:
             suffix = f"_top{validated_cfg.grid_top_k}" if validated_cfg.grid_top_k else ""
             grid_output = output_dir / f"noun_similarity_grid_{nounlist_name}_{model_name_sanitized}{suffix}.pdf"
-        render_noun_similarity_grid(
+        render_semantic_recall_grid(
             nouns_list,
             max_per_noun_grid,
             best_image_indices_grid,
@@ -889,9 +897,9 @@ def process_noun_similarity(
         print(f"Saved noun similarity grid to {grid_output}")
 
 
-@hydra.main(version_base="1.3", config_path=None, config_name="noun_similarity_base")
+@hydra.main(version_base="1.3", config_path=None, config_name="semantic_recall_base")
 def main(
-    cfg: NounSimilarityConfig,
+    cfg: SemanticRecallConfig,
     model=None,
     preprocess=None,
     tokenizer=None,
@@ -911,7 +919,7 @@ def main(
             original_cwd = Path.cwd()
             
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
-    _validate_noun_similarity_options(validated_cfg)
+    _validate_semantic_recall_options(validated_cfg)
 
     exp_dir = Path(validated_cfg.experiment_dir).resolve()
     if not exp_dir.exists():
@@ -938,7 +946,7 @@ def main(
         if len(prompts_list) != len(nouns_list):
             raise ValueError("prompts must have the same length as nouns")
 
-    process_noun_similarity(
+    process_semantic_recall(
         validated_cfg,
         image_paths,
         nouns_list,

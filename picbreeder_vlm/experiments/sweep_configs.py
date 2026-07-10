@@ -59,10 +59,10 @@ class SweepConfig(PicbreederConfig):
     qos: Optional[str] = None  # e.g. "gpu168" for 4-GPU/user >48h jobs
     gpus_per_task: int = 1  # GPUs per array task (e.g. 4 for TP=4 on a 235B model)
     max_concurrent: int = 0  # Cap concurrent array tasks (0 = unlimited); set 1 for sequential
-    render_archive: bool = False  # If true, run evaluation instead of training
-    eval_tree: bool = False  # If true, run phylogeny visualization instead of training
-    eval_visual_coverage: bool = False  # If true, run visual coverage evaluation
-    eval_noun_coverage: bool = False  # If true, run noun coverage evaluation
+    render_archive: bool = False  # If true, post-process completed runs instead of evolving new ones
+    eval_tree: bool = False  # If true, run phylogeny visualization instead of evolving
+    eval_visual_coverage: bool = False  # If true, run the Visual Coverage evaluation
+    eval_semantic_recall: bool = False  # If true, run the Semantic Recall evaluation
     render_noun_grids: bool = False  # If true, render noun similarity grids
     render_aggregate_noun_grid: bool = False # If true, render aggregate noun similarity grid
     overwrite_evals: bool = True  # If false, skip evaluation if output files already exist

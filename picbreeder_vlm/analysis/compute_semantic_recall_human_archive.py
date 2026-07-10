@@ -18,9 +18,9 @@ import numpy as np
 matplotlib.use("Agg")
 
 from typing import Optional, Sequence
-from picbreeder_vlm.analysis.compute_noun_coverage import (
-    NounSimilarityConfig,
-    process_noun_similarity,
+from picbreeder_vlm.analysis.compute_semantic_recall import (
+    SemanticRecallConfig,
+    process_semantic_recall,
     format_prompts,
     load_nouns,
 )
@@ -29,12 +29,12 @@ from picbreeder_vlm.core.config import ensure_valid_config
 
 
 @dataclass
-class HumanNounSimilarityConfig(NounSimilarityConfig):
+class HumanSemanticRecallConfig(SemanticRecallConfig):
     render_size: int = 128
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(
             help=HelpConf(
-                app_name="plot_human_archive_noun_similarity",
+                app_name="plot_human_archive_semantic_recall",
                 header=(
                     "Hydra entry point for human archive noun metrics.\n"
                     "Plots noun similarity score over time for human archives.\n"
@@ -44,11 +44,11 @@ class HumanNounSimilarityConfig(NounSimilarityConfig):
         )
     )
 
-ConfigStore.instance().store(name="human_noun_similarity_base", node=HumanNounSimilarityConfig)
+ConfigStore.instance().store(name="human_semantic_recall_base", node=HumanSemanticRecallConfig)
 
-@hydra.main(version_base="1.3", config_path=None, config_name="human_noun_similarity_base")
+@hydra.main(version_base="1.3", config_path=None, config_name="human_semantic_recall_base")
 def main(
-    cfg: HumanNounSimilarityConfig,
+    cfg: HumanSemanticRecallConfig,
 ) -> None:
     original_cwd = Path(get_original_cwd())
     validated_cfg = ensure_valid_config(cfg, original_cwd=original_cwd)
@@ -99,7 +99,7 @@ def main(
     print(f"Saving results to {output_dir}")
     print(f"Using cache dir: {cache_dir}")
 
-    process_noun_similarity(
+    process_semantic_recall(
         validated_cfg,
         image_paths,
         nouns_list,
