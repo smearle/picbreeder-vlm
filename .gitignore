@@ -9,6 +9,9 @@ multirun
 
 initial_populations/*
 interactive_runs/*
+# transcript bundles staged for the Hub by tools/build_all_transcripts.py (regenerable)
+_transcripts_stage*/
+_tx_*/
 logs_collaborative*
 sweep_logs*
 logs/*
