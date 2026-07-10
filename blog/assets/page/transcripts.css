@@ -1,0 +1,129 @@
+/* Transcript newsreel viewer — parallel columns, one per agent, of everything
+   the agent saw (candidate grids) and said (rationale + picks). */
+
+:root { --tx-accent:#FF6C00; --tx-ink:#222; --tx-mut:#888; --tx-line:#e4e4e4; }
+
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; }
+body.tx {
+  font-family:"LM Roman","Latin Modern Roman","Times New Roman",Times,serif;
+  color:var(--tx-ink); background:#fcfcfd;
+  display:flex; flex-direction:column; height:100vh; overflow:hidden;
+}
+
+/* ---- top bar: run selector + legend ---- */
+.tx-bar {
+  flex:0 0 auto; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  padding:8px 12px; border-bottom:1px solid var(--tx-line); background:#fff;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:12px;
+}
+.tx-bar .run-sel { display:flex; align-items:center; gap:6px; }
+/* embedded as the archive viewer's Transcripts tab: the host pins the run, so hide
+   the selector (the run is already named by the surrounding viewer chrome). */
+body.embed .tx-bar .run-sel { display:none; }
+.tx-bar select {
+  font:inherit; font-size:12px; padding:3px 6px; border:1px solid #d8d8d8;
+  border-radius:4px; background:#fff; max-width:60vw;
+}
+.tx-bar input[type=search] {
+  font:inherit; font-size:12px; padding:3px 8px; border:1px solid #d8d8d8; border-radius:4px;
+  background:#fff; width:160px;
+}
+.tx-bar .tx-check { display:inline-flex; align-items:center; gap:4px; color:#555; cursor:pointer; }
+.tx-bar .tx-check select { font:inherit; font-size:12px; padding:2px 4px; border:1px solid #d8d8d8; border-radius:4px; }
+.tx-bar .meta { color:var(--tx-mut); }
+
+/* pager */
+.tx-pager {
+  flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:5px 12px;
+  border-bottom:1px solid var(--tx-line); background:#fafafa;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:12px; color:#555;
+}
+.tx-pager:empty { display:none; }
+.tx-pager .pg {
+  font:inherit; font-size:12px; padding:3px 10px; border:1px solid #d8d8d8; background:#fff;
+  border-radius:4px; cursor:pointer; color:#333;
+}
+.tx-pager .pg:disabled { opacity:.4; cursor:default; }
+.tx-pager .pg-info { color:var(--tx-mut); }
+.tx-pager .pg-more { color:var(--tx-mut); }
+.tx-legend { display:flex; align-items:center; gap:12px; margin-left:auto; color:var(--tx-mut); }
+.tx-legend .k { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+.tx-legend .swatch { width:13px; height:13px; border-radius:2px; display:inline-block; }
+.tx-legend .swatch.pick { border:2px solid var(--tx-accent); }
+.tx-legend .swatch.recon { border:1px dashed #bbb; background:repeating-linear-gradient(45deg,#f3f3f3,#f3f3f3 3px,#e8e8e8 3px,#e8e8e8 6px); }
+
+/* ---- vertical masonry: N columns wide, agents packed top-to-bottom ---- */
+.tx-wall {
+  flex:1 1 auto; min-height:0; display:flex; flex-direction:row; align-items:flex-start;
+  gap:12px; overflow-y:auto; overflow-x:hidden; padding:12px;
+}
+/* each masonry column owns a vertical stack of agent cards */
+.tx-masonry-col { flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:12px; }
+/* an agent card: fills its column, sizes to its own timeline height */
+.tx-col {
+  width:100%; display:flex; flex-direction:column;
+  border:1px solid var(--tx-line); border-radius:6px; background:#fff; overflow:hidden;
+}
+.tx-col-head {
+  padding:7px 9px; background:#fff; border-bottom:1px solid var(--tx-line);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+.tx-col-head .aid { font-size:11px; color:var(--tx-mut); letter-spacing:.02em; }
+.tx-col-head .title { font-size:13.5px; font-weight:700; color:#000; line-height:1.2; }
+.tx-col-body { flex:1 1 auto; padding:8px; }
+
+/* ---- timeline cards ---- */
+.tx-card { margin:0 0 12px; }
+.tx-card:last-child { margin-bottom:4px; }
+.tx-step {
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--tx-mut);
+  display:flex; align-items:center; gap:6px; margin:0 0 3px;
+}
+.tx-grid-wrap { position:relative; cursor:zoom-in; border-radius:3px; overflow:hidden; background:#fff; }
+.tx-grid-wrap canvas { display:block; width:100%; height:auto; }
+.tx-said {
+  font-size:12.5px; line-height:1.4; color:#333; margin:5px 2px 0;
+}
+.tx-said .picks {
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:11px;
+  color:var(--tx-ink); font-weight:700; margin-right:5px;
+}
+.tx-empty {
+  font-size:12px; color:#777; font-style:italic; padding:14px 8px; text-align:center;
+  border:1px dashed #ddd; border-radius:4px; background:#fafafa;
+}
+.tx-pub {
+  border:1px solid #f0d3b3; background:#fff7ef; border-radius:5px; padding:8px 10px;
+}
+.tx-pub .lab {
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--tx-accent); font-weight:700;
+}
+.tx-pub .ptitle { font-weight:700; font-size:14px; color:#000; margin:2px 0; }
+.tx-pub .preason { font-size:12px; line-height:1.4; color:#444; }
+.tx-loading { padding:18px 8px; text-align:center; color:#aaa; font-size:12px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+
+/* ---- lightbox ---- */
+.tx-lb {
+  position:fixed; inset:0; z-index:50; background:rgba(15,15,20,.82);
+  display:none; align-items:center; justify-content:center; padding:24px;
+}
+.tx-lb.on { display:flex; }
+.tx-lb-inner {
+  background:#fff; border-radius:8px; max-width:min(95vw,1100px); max-height:92vh;
+  display:flex; gap:18px; padding:18px; overflow:auto;
+}
+.tx-lb-inner canvas { max-width:62vw; max-height:84vh; height:auto; border-radius:4px;
+  border:1px solid var(--tx-line); }
+.tx-lb-side { width:300px; min-width:240px; max-width:34vw;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+.tx-lb-side .aid { font-size:12px; color:var(--tx-mut); }
+.tx-lb-side .ttl { font-size:18px; font-weight:700; color:#000; margin:2px 0 8px; }
+.tx-lb-side .said { font-size:14px; line-height:1.5;
+  font-family:"LM Roman","Latin Modern Roman",Times,serif; color:#222; }
+.tx-lb-side .picks { font-size:12px; color:var(--tx-ink); font-weight:700; margin:8px 0; }
+.tx-lb-close { position:fixed; top:16px; right:20px; z-index:51; cursor:pointer;
+  font-size:30px; line-height:1; color:#fff; background:none; border:none; }

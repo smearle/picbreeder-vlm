@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Experiments — Picbreeder · VLM</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+<style>
+  .runtable { width:100%; border-collapse:collapse; font-size:.95em; margin-top:6px; }
+  .runtable th, .runtable td { text-align:left; padding:4px 8px; border-bottom:0.5px solid #d7ddea; }
+  .runtable th { color:#3a59bc; }
+  .runtable tr.off td { color:#aaa; }
+  .runtable .lbl a { font-weight:bold; text-decoration:none; }
+  .runtable .soon { color:#b07a3a; font-size:.85em; }
+  .runtable .cfg { color:#777; font-size:.88em; }
+</style>
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; Experiments</div>
+    <h1 style="font-size:2em;">Experiments</h1>
+    <p class="note" id="subhead">Every published image from every run, browsable and branchable.</p>
+    <div id="list"></div>
+    <p class="note" id="empty" style="display:none;"></p>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="pbsite.js"></script>
+<script src="community.js"></script>
+<script>
+(function () {
+  PB.chrome('runs');
+  const ab = new URLSearchParams(location.search).get('archiveBase');
+  const abq = ab ? '&archiveBase=' + encodeURIComponent(ab) : '';
+
+  PB.loadIndex().then(function (idx) {
+    const runs = (idx.runs || []).slice().sort((a, b) => (b.n_images || 0) - (a.n_images || 0));
+    if (!runs.length) { document.getElementById('empty').style.display = 'block'; document.getElementById('empty').textContent = 'No runs found.'; return; }
+    let rows = '';
+    let ready = 0;
+    runs.forEach(function (r) {
+      const has = r.has || {};
+      const on = !!has.genome_json;
+      if (on) ready++;
+      const lbl = PB.humanizeRun(r) || r.label || r.run;
+      const link = 'browse.html?run=' + encodeURIComponent(r.run) + abq;
+      rows += '<tr class="' + (on ? '' : 'off') + '">' +
+        '<td class="lbl">' + (on ? '<a href="' + link + '">' + lbl + '</a>' : lbl) + '</td>' +
+        '<td class="cfg">' + (r.arc || '') + '</td>' +
+        '<td>' + (r.n_images || 0).toLocaleString() + ' imgs</td>' +
+        '<td>' + (on ? '<a href="' + link + '">browse &raquo;</a>' : '<span class="soon">genomes uploading…</span>') + '</td>' +
+        '</tr>';
+    });
+    document.getElementById('subhead').textContent =
+      ready + ' of ' + runs.length + ' experiments ready to browse; the rest are still uploading.';
+    document.getElementById('list').innerHTML =
+      '<table class="runtable"><thead><tr><th>Experiment</th><th>Arc</th><th>Size</th><th></th></tr></thead><tbody>' +
+      rows + '</tbody></table>';
+  }).catch(function (e) {
+    const el = document.getElementById('empty');
+    el.style.display = 'block';
+    el.innerHTML = 'Could not reach the archive (' + e.message + '). Please try again in a moment.';
+  });
+})();
+</script>
+</body>
+</html>

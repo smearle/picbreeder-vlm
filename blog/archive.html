@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archive viewer &middot; Picbreeder-VLM</title>
+<link rel="icon" type="image/png" href="assets/favicon.png?v=3">
+<link rel="stylesheet" href="assets/page/archive-page.css">
+<!-- The embed protocol (iframe + ordering/seed/model toggles + height relay) is the same
+     PBVLMArcViewer the blog post used when this viewer lived inline. archive-page.js calls
+     it at parse time, so it must load first. -->
+<script src="assets/page/archive-gallery.js"></script>
+</head>
+<body>
+
+<header class="arc-head" id="arc-head">
+  <div class="arc-row-top">
+    <!-- col 1 is an empty spacer, so the source toggle centers on the page rather than on
+         the space the close button leaves over. -->
+    <span aria-hidden="true"></span>
+    <div class="arc-src" id="arc-src"></div>
+    <button class="close" id="arc-close" type="button" title="Close archive view" aria-label="Close archive view">&times;</button>
+  </div>
+  <div class="arc-row-runs" id="arc-runs"></div>
+  <div class="arc-row-order" id="arc-order-row"></div>
+</header>
+
+<div class="arc-body" id="arc-body"></div>
+
+<script src="assets/page/archive-page.js"></script>
+</body>
+</html>

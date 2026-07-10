@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent transcripts — what every agent saw and said</title>
+<link rel="stylesheet" href="../assets/page/transcripts.css">
+</head>
+<body class="tx">
+
+  <div class="tx-bar">
+    <div class="run-sel">
+      <label for="tx-run">Run</label>
+      <select id="tx-run"><option>loading…</option></select>
+    </div>
+    <input id="tx-search" type="search" placeholder="search agents…" autocomplete="off">
+    <label class="tx-check"><input type="checkbox" id="tx-pub-only"> published only</label>
+    <label class="tx-check">sort
+      <select id="tx-sort">
+        <option value="id">chronological</option>
+        <option value="gens">most generations</option>
+        <option value="title">title A–Z</option>
+      </select>
+    </label>
+    <span class="meta" id="tx-meta"></span>
+    <div class="tx-legend">
+      <span class="k"><span class="swatch pick"></span> agent's saved pick</span>
+      <span class="k"><span class="swatch recon"></span> reconstructed candidate</span>
+    </div>
+  </div>
+
+  <div class="tx-pager" id="tx-pager"></div>
+
+  <div class="tx-wall" id="tx-wall"></div>
+
+  <div class="tx-lb" id="tx-lb">
+    <button class="tx-lb-close" id="tx-lb-close" aria-label="Close">&times;</button>
+    <div class="tx-lb-inner" id="tx-lb-inner"></div>
+  </div>
+
+  <script src="../assets/page/transcripts.js"></script>
+</body>
+</html>

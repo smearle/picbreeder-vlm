@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Picbreeder · VLM — collaborative art evolved by AI</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+</head>
+<body id="main_bg">
+<div id="box">
+
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div>
+    <!-- left sidebar -->
+    <div style="float:left; clear:left; width:140px; margin:10px 0 0 10px;">
+      <div id="left-col1">
+        <h4>Browse Images By:</h4>
+        <a href="browse.html?type=UPANDCOME">Best New</a><br>
+        <a href="browse.html?type=RANK">Highest Rated</a><br>
+        <a href="browse.html?type=MB">Most Branched</a><br>
+        <a href="browse.html?type=CREATED">Newest</a><br>
+        <a href="browse.html?type=RANDOM">Random</a><br>
+        <h4>Or:</h4>
+        <a href="play.html">Start from Scratch</a><br>
+        <a href="runs.html">VLM Experiments</a><br>
+        <a href="../">Check out the blog</a><br>
+        <a href="https://github.com/smearle/picbreeder-vlm" target="_blank" rel="noopener">Get the code</a><br>
+      </div>
+      <div id="left-col2">
+        <strong>Quickplay</strong><br>
+        <p style="margin:.4em 0; color:#444;">Breed a brand-new image from a random network.</p>
+        <button class="pbbtn" onclick="location.href='play.html'">&#9658; Start breeding</button>
+      </div>
+      <div id="left-col3">
+        <h4><a href="artists.html" style="text-decoration:none;color:inherit;">Top Artists:</a></h4>
+        <ol id="artists" class="artistlist"><li style="color:#888;list-style:none;">loading&hellip;</li></ol>
+        <p class="artist-note">
+          <!-- Each AI agent is given one personality trait. Ranked by the mean community rating of the images each trait produced, across the personality sweep. -->
+          <!-- <i>Hover a name for its trait; click to see its images.</i></p> -->
+      </div>
+    </div>
+
+    <!-- main content -->
+    <div id="rh-col">
+      <center>
+        <h4><button class="pbbtn" onclick="location.href='play.html'">Quickplay Console</button></h4>
+        <h4 style="font-weight:normal; color:#3a59bc;">The images below were evolved by AI interacting with a pared-down version of this website.</h4>
+      </center>
+
+      <div align="center"><table><tbody>
+        <tr>
+          <td align="left"><div class="quad quad-branch">
+            <img class="icon" src="pb_assets/branchicon.png">
+            <div class="qbody">Evolve new variations on the VLMs' images.<br>Try clicking these!
+              <table class="quad-thumbs" id="teaser-branch"></table>
+            </div>
+          </div></td>
+          <td align="left"><div class="quad quad-scratch">
+            <img class="icon" src="pb_assets/scratchicon.png">
+            <div class="qbody">Create a whole new kind of image.<br>
+              <a href="play.html" title="Start from a random network"><img class="icon" src="pb_assets/gui.png" style="margin-top:6px"></a>
+            </div>
+          </div></td>
+        </tr>
+        <tr>
+          <td align="left"><div class="quad quad-tree">
+            <img class="icon" src="pb_assets/treeicon.png">
+            <div class="qbody">See the family a network comes from. Try clicking these!
+              <table class="quad-thumbs" id="teaser-tree"></table>
+            </div>
+          </div></td>
+          <td align="left"><div class="quad quad-merch">
+            <img class="icon" src="pb_assets/merchicon.png">
+            <div class="qbody">Put a favorite on a mug or print&mdash;like these two.
+              <table class="quad-thumbs" id="teaser-merch"></table>
+              <button class="pbbtn" onclick="location.href='runs.html'">Browse every experiment</button>
+            </div>
+          </div></td>
+        </tr>
+      </tbody></table></div>
+
+      <h2>Top Categories</h2>
+      <p class="tagcloud" id="tagcloud"></p>
+
+      <div id="cats"></div>
+    </div>
+  </div>
+</div>
+
+<div class="disclaimer">
+  This is an attempt to recreate <a href="https://web.archive.org/web/20160304023434/http://picbreeder.org/" target="_blank" rel="noopener">Picbreeder</a>
+  (Secretan et al., 2008) with AI agents. Here, we populate an homage to the original site with CPPN-images bred by Vision-Language Models over the course of <a href="../">our experiments</a>. All images can be branched, rated, and inspected. <a href="../">The AI Picbreeder Experiment&nbsp;&raquo;</a>
+</div>
+
+<script src="cppn.js"></script>
+<script src="pbsite.js"></script>
+<script src="community.js"></script>
+<script>
+(function () {
+  PB.chrome('home');
+
+  PB.load().then(function (d) {
+    // Top Categories: real object tags mined from the VLM's captions across the
+    // WHOLE archive (top_tags = [tag, #images], frequency-ranked). Counts span a
+    // wide range (a few images to a few hundred), so font size scales with the
+    // LOG of the count — otherwise the single most common tag dwarfs the rest.
+    var TAGS = d.top_tags || [];
+    var counts = TAGS.map(function (t) { return t[1]; });
+    var loC = Math.log(Math.min.apply(null, counts) || 1);
+    var hiC = Math.log(Math.max.apply(null, counts) || 1);
+    var span = (hiC - loC) || 1;
+    var cap = function (s) { return s.charAt(0).toUpperCase() + s.slice(1); };
+    document.getElementById('tagcloud').innerHTML = TAGS.map(function (t) {
+      var pct = 90 + Math.round(((Math.log(t[1]) - loC) / span) * 100);   // ~90%–190%
+      return '<a href="browse.html?tag=' + encodeURIComponent(t[0]) +
+        '" title="' + t[1] + ' image' + (t[1] === 1 ? '' : 's') + '" style="font-size:' + pct + '%">' +
+        cap(t[0]) + '</a>';
+    }).join('<b style="font-size:150%"> | </b>');
+
+    // Category strips: 8 thumbnails each, with a blue-italic "More" to the full set.
+    var CATS = [
+      ["Editor's Picks", 'editors',       'EDITORS',   "The images from our paper's banner—each the end-point of a long VLM lineage."],
+      ['All-Time Top Rated', 'highest_rated', 'RANK',   'Highest-rated overall—the VLM raters and your community star-ratings combined.'],
+      ['Best New Images', 'best_new',      'UPANDCOME', 'Recently published—including community uploads—and already well-liked.'],
+      ['Most Branched', 'most_branched',   'MB',        'The images other agents chose to branch from most.'],
+      ['Newest', 'newest',                 'CREATED',   'The most recently published, including images uploaded by the community.'],
+    ];
+    var cats = document.getElementById('cats');
+    // Re-rank the rating/recency strips against live human votes + community
+    // publishes (one shared fetch, reused by the teasers below). Falls back to the
+    // bundled lists if the community API is unreachable.
+    var liveP = PB.liveLists(d);
+    liveP.then(function (live) {
+      CATS.forEach(function (c) {
+        var label = c[0], listKey = c[1], type = c[2], blurb = c[3];
+        var keys = (live.lists[listKey] || []).slice(0, 8);
+        if (!keys.length) return;
+        var more = 'browse.html?type=' + type;
+        var h = document.createElement('h2');
+        h.textContent = label;
+        var note = document.createElement('p'); note.className = 'note'; note.style.margin = '0 0 6px'; note.textContent = blurb;
+        var g = document.createElement('div'); g.className = 'gallery';
+        // "More..." sits right-aligned below the grid, as on the original site
+        var moreP = document.createElement('p'); moreP.className = 'strip-more';
+        moreP.innerHTML = '<a href="' + more + '">More...</a>';
+        cats.appendChild(h); cats.appendChild(note); cats.appendChild(g); cats.appendChild(moreP);
+        PB.fillGallery(g, keys, { items: live.items });
+      });
+    });
+
+    // Top Artists leaderboard: each AI personality trait is one artist.
+    var ael = document.getElementById('artists');
+    function escA(s){return (s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+    if (ael && d.artists && d.artists.length) {
+      ael.innerHTML = d.artists.map(function (a) {
+        var href = 'browse.html?user=' + encodeURIComponent(a.user);
+        return '<li>' +
+          '<a class="aname" href="' + href + '" title="' + escA(a.trait) + '">' + escA(a.user) + '</a>' +
+          '<span class="arating" title="' + a.nimg + ' images · ' + a.seeds + ' seeds">' +
+          a.rating.toFixed(2) + '<span class="aslash">/5</span></span></li>';
+      }).join('');
+      var tot = d.n_artist_users || d.artists.length;
+      if (tot > d.artists.length) {
+        var more = document.createElement('p');
+        more.className = 'artist-note';
+        more.style.margin = '.3em 0 0';
+        more.style.color = '#888';
+        more.innerHTML = '<a href="artists.html" style="color:#3a59bc;">&hellip; and ' +
+          (tot - d.artists.length) + ' more personalities ranked &raquo;</a>';
+        ael.parentNode.insertBefore(more, ael.nextSibling);
+      }
+    }
+    // quad teasers — `dest` is the page each thumbnail opens (Evolve vs Family Tree).
+    // Share the live promise so a community publish can headline a teaser too.
+    liveP.then(function (live) {
+      var IT = live.items;
+      function teaser(el, keys, dest, label) {
+        dest = dest || 'play.html'; label = label || 'Evolve';
+        el.innerHTML = '<tr>' + keys.map(function (k) {
+          var it = IT[k]; if (!it) return '';
+          // the thumbnail opens the individual's detail page; the button keeps its
+          // own action (Evolve / Family Tree).
+          var detail = PB.detailHref(k, it);
+          var href = dest + '?' + PB.navParams(it, k);
+          return '<td><a href="' + detail + '"><canvas class="cellimg sm" width="88" height="88"></canvas></a>' +
+            '<br><button class="pbbtn" onclick="location.href=\'' + href + '\'">' + label + '</button></td>';
+        }).join('') + '</tr>';
+        var cv = el.querySelectorAll('canvas'), i = 0;
+        keys.forEach(function (k) { if (IT[k]) PB.renderThumb(cv[i++], IT[k]); });
+      }
+      teaser(document.getElementById('teaser-branch'), d.teasers.branch);
+      // the Family-Tree box shows the most-branched images (deepest lineages) and
+      // opens each image's tree rather than the breeding console
+      teaser(document.getElementById('teaser-tree'), (live.lists.most_branched || d.teasers.tree || []).slice(0, 2), 'tree.html', 'Family Tree');
+      if (d.teasers.merch) teaser(document.getElementById('teaser-merch'), d.teasers.merch);
+    });
+  });
+})();
+</script>
+</body>
+</html>

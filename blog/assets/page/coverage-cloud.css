@@ -1,0 +1,26 @@
+/* Visual / Semantic Coverage cloud hover-bloom (assets/page/coverage-cloud.js).
+   A transparent canvas is overlaid on the static coverage panel; hovering blooms
+   the nearest sampled individuals in as thumbnails. The panel <img> keeps its
+   dots and alt text underneath. */
+
+.cov-cloud {
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.cov-cloud > img { display: block; width: 100%; height: auto; }
+
+/* overlay sits exactly on the panel image; it never eats pointer events meant
+   for the page (the JS listens on the container), and only paints near the cursor */
+.cov-cloud .cov-cloud-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* a soft cue that the cloud is explorable */
+@media (hover: hover) and (pointer: fine) {
+  .cov-cloud { cursor: crosshair; }
+}

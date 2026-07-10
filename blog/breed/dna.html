@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analyze Image DNA — Picbreeder · VLM</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+<!-- The DNA editor's look-and-feel lives in dna-editor.css; the widget itself in
+     dna-editor.js (PB.DnaEditor). The same pair powers the lazily-loaded DNA panel
+     on play.html — keep editor styles/behaviour in those shared files, not here. -->
+<link rel="stylesheet" href="dna-editor.css">
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; <span id="crumb">Analyze Image DNA</span></div>
+    <h1 style="font-size:2em;">Analyze Image DNA</h1>
+    <p class="note" id="status">Loading this image’s DNA&hellip;</p>
+
+    <div id="main" style="display:none;">
+      <p class="console-intro" style="color:#444; margin:.2em 0 .7em;">
+        This is the picture's <b>DNA</b>—the CPPN that paints it. The graph on the left is its structure;
+        the <b>intermediate pattern at each node</b> is shown as the node itself. <b>Click a node</b> to see its
+        output enlarged on the right and to reveal a ring of controls; <b>drag</b> empty space to pan, <b>drag the
+        zoom slider</b> (or pinch the canvas) to zoom, and <b>drag a link up/down</b> to change its weight. Every change re-renders instantly.
+      </p>
+
+      <!-- the editor widget is built here by PB.DnaEditor -->
+      <div id="dna-editor"></div>
+
+      <h3>Instructions</h3>
+      <ul class="instr">
+        <li><b>Click a node</b> to select it—its output renders on the right and a ring of circular buttons appears:
+          <ul>
+            <li><code>=</code> identity, <code>sin</code>, <code>cos</code>, <code>gau</code>ssian, <code>sig</code>moid—set the node's activation function.</li>
+            <li><code>Lnk</code>—start a new link from this node, then click the target node.</li>
+            <li><code>Edt</code>—open a panel to edit the node's incoming weights.</li>
+            <li><code>Del</code>—delete the node and every link to or from it.</li>
+          </ul>
+        </li>
+        <li><b>Click a link</b> for its ring: <code>Nod</code> (insert a node mid-link), <code>Del</code>, <code>±</code> (type a weight).
+          Or just <b>drag a link up/down</b> to slide its weight value (most weights lie between &minus;3 and 3).</li>
+        <li><b>Drag a node</b> to move it—its links follow. <b>Drag the small ⊕ handle</b> on the node's edge onto
+          another node to wire up a new link (a click on the handle does the same in two steps).</li>
+        <li><b>Double-click</b> empty space to add a new node (or double-click a link to split it with a node).</li>
+        <li><b>Drag</b> empty space to pan; <b>drag the zoom slider</b> in the toolbar (or pinch the canvas) to zoom; <b>Fit</b> re-centers everything.</li>
+        <li>When you like the result, <b>Breed from this DNA</b> to evolve it further, or <b>Download</b> the genome.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="cppn-gl.js"></script>
+<script src="pbsite.js"></script>
+<script src="weight-cmap.js"></script>
+<script src="dna-editor.js"></script>
+<script>
+(function () {
+  PB.chrome('');
+  const P = new URLSearchParams(location.search);
+  const setStatus = (m) => { document.getElementById('status').innerHTML = m; };
+
+  PB.resolveGenome(P).then((rec) => {
+    if (!rec) { setStatus('No image specified. <a href="index.html">Back to the gallery &raquo;</a>'); return; }
+    if (!rec.g) { setStatus('This image’s genome isn’t available, so its DNA can’t be shown. <a href="index.html">Back to the gallery &raquo;</a>'); return; }
+    document.getElementById('crumb').textContent = rec.title + ' — DNA';
+    document.title = rec.title + ' — DNA — Picbreeder · VLM';
+    document.getElementById('status').style.display = 'none';
+    document.getElementById('main').style.display = '';
+    PB.DnaEditor(document.getElementById('dna-editor'), {
+      genome: rec.g,
+      color: rec.color !== false,
+      meta: { title: rec.title, model: rec.model, agent: rec.agent },
+      actions: ['breed', 'download', 'png', 'reset'],
+      instructions: false,     // the page already lists them above
+    });
+  }).catch((e) => setStatus('Could not load this image’s DNA (' + (e && e.message || e) + ').'));
+})();
+</script>
+</body>
+</html>

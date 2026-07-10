@@ -1,0 +1,278 @@
+/* Light theme to match the blog post (sakana_index.css / pub.sakana.ai/picbreeder-vlm). */
+:root {
+  --bg: #ffffff;
+  --fg: #212228;
+  --muted: #6e7079;
+  --rule: rgba(144, 145, 148, 0.22);
+  --soft: rgba(144, 145, 148, 0.06);
+  --tint: rgba(255, 108, 0, 0.10);
+  --accent: #FF6C00;
+  --sel: #d11919;       /* red outline already baked into grid PNG */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "PT Sans", -apple-system, "Helvetica Neue", "Segoe UI", "Roboto", sans-serif;
+  font-weight: 400;
+  font-size: calc(0.8rem + 0.2vw);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1.5em 1.2em 2.4em;
+  position: relative;
+}
+
+header h1 {
+  margin: 0 0 .15em;
+  font-size: 1.55em;
+  font-weight: 400;
+  letter-spacing: 0.1px;
+}
+header h1 { margin-bottom: 1em; }
+header h1 .ttl-accent { color: var(--accent); }
+
+/* ---- stage: two columns ---- */
+.stage {
+  display: grid;
+  grid-template-columns: minmax(0, 56fr) minmax(0, 44fr);
+  gap: 18px;
+  align-items: stretch;
+}
+.left, .right { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+
+.panel {
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 10px 12px 12px;
+}
+.panel-label {
+  font-size: .72em;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* ----- LEFT: grid on top (full width), morph on bottom (half size) ----- */
+/* Fixed-aspect box keeps the panel height constant across steps; --grid-ar is
+   set by JS from the candidate-grid image so the per-gen grids fill it exactly,
+   while the branching step's wide archive strip is letterboxed (padded) within. */
+.gridpanel .gridbox {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--grid-ar, 700 / 424);
+  background: var(--soft);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.gridpanel .gridbox #grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  image-rendering: auto;
+  background: var(--soft);
+}
+.gridcap {
+  margin-top: 8px;
+  font-size: .9em;
+  color: var(--muted);
+}
+.gridcap b { color: var(--fg); font-weight: 600; }
+.gridcap .pub { color: var(--accent); font-weight: 600; }
+.gridpanel .gridbox .empty {
+  position: absolute;
+  inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  text-align: center;
+  background: var(--soft);
+  border: 1px dashed var(--rule);
+  border-radius: 2px;
+  padding: 2em 1.5em;
+  color: var(--muted);
+  font-size: .95em;
+}
+.gridpanel .empty b { color: var(--fg); font-weight: 600; }
+
+/* CPPN morph (image) + CPPN graph play side by side under the candidate grid,
+   each as a square; together they sit at the column's natural width. */
+.morphpanel { width: 100%; }
+.morphpair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.morphpanel .stagebox {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: var(--soft);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.morphpanel .stagebox img,
+.morphpanel .stagebox video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.stagebox-graph { background: #fff; }
+/* In each stagebox, the <img> is the static layer (current step's hero or
+   graph diagram); the <video> sits on top and is only shown during a morph. */
+#morph, #graph { display: none; }
+#morph.show, #graph.show { display: block; }
+#hero.hide, #graph_static.hide { visibility: hidden; }
+.morphpanel.dim .stagebox { opacity: .25; }
+.morphpanel.dim #hero,
+.morphpanel.dim #morph,
+.morphpanel.dim #graph,
+.morphpanel.dim #graph_static { visibility: hidden; }
+
+/* ----- RIGHT: VLM output, step by step, with karaoke highlighting ----- */
+.transcript-wrap { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.transcript {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 280px;
+  max-height: 720px;
+  padding-right: 4px;
+}
+.tline {
+  display: flex;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 2px;
+  border-left: 3px solid transparent;
+  margin-bottom: 2px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: background .15s, color .15s, border-color .15s;
+}
+.tline:hover { background: rgba(144,145,148,0.04); color: var(--fg); }
+.tline.done { color: rgba(33,34,40,.7); }
+.tline.active {
+  background: var(--tint);
+  border-left-color: var(--accent);
+  color: var(--fg);
+}
+.tnum {
+  flex: 0 0 86px;
+  font-variant-numeric: tabular-nums;
+  font-size: .8em;
+  padding-top: 3px;
+  color: inherit;
+}
+.tline.active .tnum { color: var(--accent); font-weight: 600; }
+.tline.branching .tnum { font-style: italic; }
+.tbody { font-size: .95em; line-height: 1.5; text-align: left; }
+.tbody .picks { color: var(--muted); font-size: .8em; margin-top: 2px; }
+.tbody .picks .pub { color: var(--accent); font-weight: 600; }
+
+/* Each step's transcript line carries one or more narrations (its chunks); each
+   narration's word spans are tagged with data-n=N. The announcer narration
+   (system framing -- "Archive empty…", "Publishing as X.") reads in a deeper
+   voice and is styled italic + muted to distinguish from the agent's voice. */
+.narr { display: inline; }
+.narr-announcer {
+  font-style: italic;
+  color: var(--muted);
+}
+.narr-announcer::before { content: " "; }
+.narr-agent + .narr-announcer { margin-left: .15em; }
+
+/* karaoke word highlight. --alpha is set per-line by JS to the audio's level
+   (1 for the current narration, 0.5 for the first trailer, 0.25 for the
+   trailer-of-trailer, etc. -- so a stacked overlap dims twice). */
+.tbody .w {
+  border-radius: 2px;
+  padding: 0 1px;
+  transition: background-color .08s linear;
+}
+.tbody .w.active {
+  background: rgba(255, 108, 0, var(--alpha, 1));
+  box-shadow: 0 0 0 1px rgba(255, 108, 0, var(--alpha, 1));
+}
+
+/* ----- controls ----- */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 8px 12px;
+  background: var(--soft);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  flex-wrap: wrap;
+}
+.controls button {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: 1em;
+  cursor: pointer;
+}
+.controls button:hover { border-color: var(--accent); color: var(--accent); }
+#playpause {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+  min-width: 42px;
+}
+#playpause:hover { background: #e55f00; color: #fff; }
+.ctl-group { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .85em; }
+.controls select {
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--rule); border-radius: 2px; padding: 4px 6px;
+  font-family: inherit; font-size: .9em;
+}
+#scrub { flex: 1 1 180px; min-width: 160px; accent-color: var(--accent); }
+.progress {
+  font-variant-numeric: tabular-nums;
+  font-size: .85em;
+  color: var(--muted);
+  min-width: 96px;
+  text-align: right;
+}
+
+/* Browsers block autoplay-with-sound until a user gesture. If the page load's
+   audio.play() rejects, the player keeps animating silently and surfaces this
+   small hint until the user clicks anywhere to enable audio. */
+.audio-hint {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: var(--accent);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 2px;
+  font-size: .85em;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 5;
+  box-shadow: 0 2px 6px rgba(0,0,0,.15);
+}
+.audio-hint:hover { background: #e55f00; }
+
+@media (max-width: 820px) {
+  .stage { grid-template-columns: 1fr; }
+  .morphpanel { width: 60%; }
+}

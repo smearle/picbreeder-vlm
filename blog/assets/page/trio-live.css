@@ -1,0 +1,42 @@
+/* Interactive archive-growth triptych (replaces the rendered trio_*.mp4 videos).
+   Phylogeny growth · Most-Branched leaderboard · archive reel, all three drawn on
+   <canvas> from one sprite atlas + JSON and scrubbed from a single clock.
+   See assets/page/trio-live.js. */
+.trio-live .trio-live-stage {
+  display:flex; gap:14px; justify-content:center; align-items:flex-start;
+}
+.trio-live .trio-live-stage canvas {
+  display:block; background:#fff; border-radius:4px; box-shadow:0 1px 6px rgba(0,0,0,.16);
+}
+.trio-live .trio-panel { display:flex; flex-direction:column; }
+.trio-live .trio-panel-title {
+  font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.04em;
+  color:rgba(0,0,0,.55); margin:0 0 7px;
+}
+.trio-live .trio-live-loading {
+  width:100%; text-align:center; color:rgba(0,0,0,.45); font-size:13px; padding:40px 0;
+}
+
+.trio-live .trio-ctl { display:flex; align-items:center; gap:.6em; max-width:760px; margin:.7em auto .2em; }
+.trio-live .trio-play {
+  flex:0 0 auto; width:2em; height:2em; border:1px solid rgba(0,0,0,.18); border-radius:50%;
+  background:#fff; color:#222; font-size:13px; line-height:1; cursor:pointer; padding:0;
+  display:flex; align-items:center; justify-content:center; transition:background .15s;
+}
+.trio-live .trio-play:hover { background:#f0f0f0; }
+.trio-live .trio-seek {
+  flex:1 1 auto; -webkit-appearance:none; appearance:none; height:4px; border-radius:3px;
+  background:rgba(0,0,0,.16); outline:none; cursor:pointer; margin:0;
+}
+.trio-live .trio-seek::-webkit-slider-thumb {
+  -webkit-appearance:none; appearance:none; width:15px; height:15px; border-radius:50%;
+  background:#DAA520; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.3); cursor:pointer;
+}
+.trio-live .trio-seek::-moz-range-thumb {
+  width:15px; height:15px; border-radius:50%; background:#DAA520; border:2px solid #fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.3); cursor:pointer;
+}
+.trio-live .trio-time {
+  flex:0 0 auto; font-variant-numeric:tabular-nums; font-size:12px; color:rgba(0,0,0,.6);
+  min-width:5.5em; text-align:right;
+}

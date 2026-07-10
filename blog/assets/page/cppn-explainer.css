@@ -1,0 +1,145 @@
+.cppnx-figs { margin-left:auto; margin-right:auto; }
+.cppnx-card { border:1px solid #e7e7e7; border-radius:7px; background:#fcfcfc;
+  box-shadow:0 1px 6px rgba(0,0,0,.06); padding:18px 16px; }
+.cppnx-accent { color:#3a59bc; font-family:"Latin Modern Roman","Computer Modern",Georgia,"Times New Roman",serif;
+  font-style:italic; padding:0 .04em; }
+
+/* ---- (A) pipeline animation ---- */
+/* Each panel reserves the tallest canvas height and centres its (variously sized)
+   canvas, so the panes and the arrows between them all share one midline. */
+.cppnx-anim .stage { display:flex; align-items:center; justify-content:center;
+  gap:9px; flex-wrap:nowrap; }
+.cppnx-anim .panel { position:relative; flex:0 0 auto; min-height:150px;
+  display:flex; flex-direction:column; justify-content:center; align-items:center; }
+.cppnx-anim canvas { display:block; background:#fff; border:1px solid #e2e2e2;
+  border-radius:4px; image-rendering:auto; }
+.cppnx-anim .arrow { color:#bdbdbd; font-size:22px; flex:0 0 auto; padding:0 2px; }
+@media (max-width:1079px){
+  .cppnx-anim .stage { flex-wrap:wrap; }
+  .cppnx-anim .panel { min-height:0; }
+  .cppnx-anim .arrow { transform:rotate(90deg); margin:2px 0; }
+}
+
+/* ---- (B) interactive DNA inspector — ported from breed/dna.html, blog-themed ---- */
+/* Share the CPPN-animation figure's frame (both figures sit on .l-page-outset), so the
+   editor card lines up edge-to-edge with the animation card above instead of using the
+   wider responsive-media column. */
+.cppnx-dna { margin-left:auto; margin-right:auto; box-sizing:border-box; }
+.cppnx-dna .dnabar { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:0 0 10px; }
+.cppnx-dna .dnabar label { font-size:12px; color:#666; }
+.cppnx-dna .dnabar select { font:inherit; font-size:13px; padding:5px 8px; border:1px solid #d8d8d8;
+  border-radius:5px; background:#fff; color:#222; margin-left:6px; }
+.cppnx-dna .dnameta { font-size:12px; color:#999; margin-left:auto; }
+.cppnx-dna .dna-wrap { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+.cppnx-dna .graphbox { flex:1 1 460px; min-width:300px; position:relative; }
+/* lockView blog editor: the toolbar holds only the "double-click to add…" hint — drop it. */
+.cppnx-dna .graphtools { display:none; }
+.cppnx-dna .graphtools button { font:inherit; font-size:12px; padding:3px 9px; border:1px solid #d8d8d8;
+  border-radius:5px; background:#f7f7f7; color:#333; cursor:pointer; }
+.cppnx-dna .graphtools button:hover { background:#ececec; }
+.cppnx-dna .graphtools .hint { color:#aaa; font-size:11px; margin-left:4px; }
+.cppnx-dna .graphframe { border:1px solid #e2e2e2; border-radius:6px; background:#fafbfc; overflow:hidden;
+  position:relative; height:440px; background-image:radial-gradient(#e9edf3 1px, transparent 1px); background-size:20px 20px; }
+.cppnx-dna .graphframe svg { display:block; width:100%; height:100%; cursor:grab; touch-action:none; }
+.cppnx-dna .graphframe svg.grabbing { cursor:grabbing; }
+.cppnx-dna .wtip { position:absolute; left:0; top:0; pointer-events:none; z-index:6; background:rgba(34,34,34,.92);
+  color:#fff; font:600 11px/1.1 ui-monospace,Menlo,monospace; padding:3px 7px; border-radius:4px;
+  white-space:nowrap; transform:translate(-50%,-150%); opacity:0; transition:opacity .1s; }
+.cppnx-dna .wtip.on { opacity:1; }
+/* vertical "thermometer" weight scale shown while dragging a link (blog-themed copy of dna-editor.css) */
+.cppnx-dna .wscale { position:absolute; left:0; top:0; pointer-events:none; z-index:6;
+  display:flex; flex-direction:column; align-items:center; gap:3px;
+  transform:translate(0,-50%); opacity:0; transition:opacity .12s; }
+.cppnx-dna .wscale.on { opacity:1; }
+.cppnx-dna .wscale-lbl { font:700 10px/1 ui-monospace,Menlo,monospace; color:#5a6b86; }
+.cppnx-dna .wscale-track { position:relative; width:7px; height:132px; border-radius:4px;
+  background:#dfe6f1; border:1px solid #aebdd3; box-shadow:0 1px 3px rgba(0,0,0,.2); }
+.cppnx-dna .wscale-zero { position:absolute; left:-3px; right:-3px; height:1px; background:#9aa8bf; }
+.cppnx-dna .wscale-fill { position:absolute; left:0; right:0; border-radius:4px; }
+.cppnx-dna .wscale-knob { position:absolute; left:50%; top:50%; width:15px; height:15px; border-radius:50%;
+  background:#fff; border:2px solid #3a59bc; box-shadow:0 1px 3px rgba(0,0,0,.33);
+  transform:translate(-50%,-50%); transition:border-color .1s, background .1s; }
+.cppnx-dna .wscale.lim .wscale-knob { border-color:#e08a1a; background:#ffe9c7; }
+.cppnx-dna .wscale.lim .wscale-track { border-color:#e08a1a; }
+.cppnx-dna .zoomctl { display:inline-flex; align-items:center; gap:5px; }
+.cppnx-dna .zoomctl .zlbl { color:#3a59bc; font:700 13px/1 sans-serif; opacity:.7; }
+.cppnx-dna .zoomrange { width:118px; accent-color:#3a59bc; cursor:pointer; vertical-align:middle; }
+.cppnx-dna .graph-conn { stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+.cppnx-dna .graph-hit { stroke:transparent; stroke-width:22; cursor:ns-resize; }
+.cppnx-dna .connwrap:hover .graph-conn { stroke:#FF6C00; stroke-width:14; }
+.cppnx-dna .graph-node .tilebg { fill:#fff; cursor:grab; }
+.cppnx-dna .graph-node .frame { fill:none; }
+.cppnx-dna .graph-node .hit { fill:transparent; cursor:grab; }
+.cppnx-dna svg.grabbing .graph-node .tilebg,
+.cppnx-dna svg.grabbing .graph-node .hit { cursor:grabbing; }
+.cppnx-dna .graph-node text.cap { font:600 11px ui-sans-serif,system-ui,sans-serif; text-anchor:middle; fill:#555;
+  pointer-events:none; paint-order:stroke; stroke:#fafbfccc; stroke-width:3px; }
+.cppnx-dna .frame-input { stroke:#3a59bc; stroke-width:2.5; }
+.cppnx-dna .frame-grey { stroke:#9a9a9a; stroke-width:2.5; }
+.cppnx-dna .frame-color { stroke:#8190c6; stroke-width:2.5; }
+.cppnx-dna .frame-output { stroke:#FF6C00; stroke-width:3; }
+.cppnx-dna .node-sel .frame { stroke:#FF6C00 !important; stroke-width:4 !important; }
+.cppnx-dna .node-lit .frame { stroke:#ffa75c !important; stroke-width:4 !important; }
+/* rubber-band line while dragging a new link from one node to another (PB.DnaEditor) */
+.cppnx-dna .linkdrag { stroke:#FF6C00; stroke-width:2.5; stroke-dasharray:6 4; pointer-events:none; }
+/* the ⊕ link handle on a node's border: drag it onto another node to wire a link. Shown only
+   on the hovered node, and never during a link drag (svg.linking) — drop targets are hit by
+   overlap. Mirrors the .linkhandle block in breed/dna-editor.css, in the blog's palette. */
+.cppnx-dna .linkhandle { opacity:0; pointer-events:none; transition:opacity .12s ease; }
+.cppnx-dna .graph-node:hover .linkhandle { opacity:1; pointer-events:auto; }
+.cppnx-dna svg.linking .graph-node .linkhandle { opacity:0 !important; pointer-events:none; }  /* beats :hover */
+.cppnx-dna .linkhandle .lh-hit { fill:transparent; cursor:crosshair; }
+.cppnx-dna .linkhandle .lh-dot { fill:#fff; stroke:#FF6C00; stroke-width:1.5; cursor:crosshair; }
+.cppnx-dna .linkhandle:hover .lh-dot { fill:#FF6C00; }
+.cppnx-dna .linkhandle:hover .lh-plus { fill:#fff; }
+/* no font-size here: it comes from the element's attribute, scaled to the node tile size */
+.cppnx-dna .linkhandle .lh-plus { font-family:ui-sans-serif,system-ui,sans-serif; font-weight:600;
+  text-anchor:middle; dominant-baseline:central; fill:#FF6C00; pointer-events:none; }
+/* transient status line (e.g. "would create a cycle") emitted by the widget */
+.cppnx-dna .dna-status { margin:6px 0; font-size:12px; color:#c0392b; }
+/* The widget emits its own (picbreeder-coloured) legend inside the graph box; hide it and
+   keep the blog's orange-matched legend (the <p class="legend"> sibling below the editor). */
+.cppnx-dna .graphbox .legend { display:none; }
+.cppnx-dna .ctrlbtn { cursor:pointer; }
+.cppnx-dna .ctrlbtn circle { fill:#fff; stroke:#cfcfcf; stroke-width:1; }
+.cppnx-dna .ctrlbtn:hover circle { fill:#FF6C00; stroke:#FF6C00; }
+.cppnx-dna .ctrlbtn:hover text { fill:#fff; }
+.cppnx-dna .ctrlbtn text { font:600 9px ui-sans-serif,system-ui,sans-serif; text-anchor:middle;
+  dominant-baseline:central; fill:#333; pointer-events:none; }
+.cppnx-dna .ctrlbtn.cur circle { fill:#FF6C00; stroke:#e05f00; }
+.cppnx-dna .ctrlbtn.cur text { fill:#fff; }
+.cppnx-dna .ctrlbtn.danger:hover circle { fill:#c0392b; stroke:#c0392b; }
+.cppnx-dna .rpanel { flex:0 0 206px; }
+.cppnx-dna .rpanel .card { border:1px solid #e7e7e7; border-radius:6px; background:#fff; margin:0 0 12px; }
+.cppnx-dna .rpanel .card h4 { margin:0; padding:5px 9px; background:#f6f6f6; color:#FF6C00; font-size:11px;
+  text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid #eee; }
+.cppnx-dna .rpanel .card .body { padding:8px; text-align:center; }
+.cppnx-dna .rpanel canvas { width:188px; height:188px; max-width:100%; border:1px solid #e2e2e2;
+  border-radius:4px; background:#fff; }
+.cppnx-dna .rpanel .meta { font-size:11.5px; color:#555; margin-top:5px; line-height:1.45; text-align:left; }
+.cppnx-dna .rpanel .meta b { color:#111; }
+.cppnx-dna .rpanel .row { margin-top:6px; font-size:12px; color:#555; }
+.cppnx-dna .rpanel .placeholder { color:#aaa; font-size:12px; padding:26px 6px; }
+.cppnx-dna .linkmode-banner { background:#fff7e0; border:1px solid #e9d08a; color:#7a5a10; padding:5px 9px;
+  margin:0 0 8px; border-radius:5px; display:none; font-size:12px; }
+.cppnx-dna .linkmode-banner.on { display:block; }
+.cppnx-dna .linkmode-banner a { color:#FF6C00; }
+.cppnx-dna .legend { font-size:11px; color:#888; margin:7px 0 0; line-height:1.7; }
+.cppnx-dna .legend .sw { display:inline-block; width:20px; height:0; border-top-width:3px; border-top-style:solid;
+  vertical-align:middle; margin:0 3px; }
+.cppnx-dna .legend .dot { display:inline-block; width:11px; height:11px; border-radius:50%; vertical-align:middle;
+  margin:0 2px; box-sizing:border-box; background:#fff; }
+.cppnx-dna .editpanel { border:1px solid #e7e7e7; border-radius:6px; background:#fff; padding:9px 11px;
+  margin:10px 0; font-size:12px; display:none; }
+.cppnx-dna .editpanel.on { display:block; }
+.cppnx-dna .editpanel h4 { margin:0 0 6px; color:#FF6C00; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+.cppnx-dna .editpanel table { border-collapse:collapse; width:100%; }
+.cppnx-dna .editpanel td, .cppnx-dna .editpanel th { padding:2px 8px; text-align:left; border-bottom:1px solid #f0f0f0; font-size:12px; }
+.cppnx-dna .editpanel input[type=number] { width:66px; font:inherit; }
+.cppnx-dna .editpanel select { font:inherit; }
+.cppnx-dna .editpanel button, .cppnx-dna .dna-actions button { font:inherit; font-size:12px; padding:3px 9px;
+  border:1px solid #d8d8d8; border-radius:5px; background:#f7f7f7; color:#333; cursor:pointer; }
+.cppnx-dna .editpanel button:hover, .cppnx-dna .dna-actions button:hover { background:#ececec; }
+.cppnx-dna .dna-actions { margin:10px 0 0; display:flex; flex-wrap:wrap; gap:6px; }
+.cppnx-dna .dna-actions .ic { color:#FF6C00; }
+@media (max-width:680px){ .cppnx-dna .rpanel { flex:1 1 auto; } .cppnx-dna .graphframe { height:340px; } }

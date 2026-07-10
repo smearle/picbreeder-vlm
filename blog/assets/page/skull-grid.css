@@ -1,0 +1,37 @@
+/* 3-up grid for the skull weight-sweep comparison. CSS-grid subgrid is used so
+   image *bottoms* align across columns (so the per-panel captions start at the
+   same y) despite the three images having different aspect ratios. The middle
+   column is given a slightly larger fraction because our weight-sweep image is
+   landscape (1600x1274) while the FER panels are nearly square (996x1020); at
+   equal column widths the per-cell skulls in ours render visibly smaller. */
+.figrow.figrow-weights {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 0.3em 1.2em;
+  align-items: stretch;
+}
+.figrow.figrow-weights > span {
+  flex: none;
+  max-width: none;
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 2;
+}
+.figrow.figrow-weights > span img {
+  width: 100%;
+  display: block;
+  align-self: end;        /* image hugs the bottom of its row track */
+  border-radius: 3px;
+}
+.figrow.figrow-weights > span .cap {
+  align-self: start;      /* captions all start at the same y */
+}
+/* Subtle accent outline on the middle (VLM / ours) panel to mark it as the
+   current contribution among the three regimes. Uses the page's #FF6C00 accent
+   and outline-offset so the ring sits just outside the image without touching
+   it (and without shifting layout / breaking bottom-alignment). */
+.figrow.figrow-weights > span:nth-child(2) img {
+  outline: 2px solid #FF6C00;
+  outline-offset: 3px;
+}

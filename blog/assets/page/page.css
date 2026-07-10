@@ -1,0 +1,320 @@
+body { overflow-x: hidden; }
+p, ul, ol { text-align: justify !important; }
+.responsive-media { width: 100%; margin: 0; }
+@media (min-width: 768px) { .responsive-media { width: 90%; } }
+
+figcaption { padding: 0.5em; color: rgba(0,0,0,0.6); font-size: 13px; line-height: 1.5em; text-align: left; }
+dt-article figcaption { padding: 0.5em; color: rgba(0,0,0,0.6); font-size: 13px; line-height: 1.5em; text-align: left; }
+dt-article figcaption a { color: rgba(0,0,0,0.6); }
+dt-article figcaption b { font-weight: 600; color: rgba(0,0,0,1.0); }
+.figlabel { color:#FF6C00; }
+/* near-constant cell size; columns chosen in JS. The grid is a vertical stack
+   of rows. When the last row would be ragged AND there are >2 rows, the leftover
+   images are parked just off the ends of rows (hidden by .shiftable's clip) and
+   that row gently auto-shifts / can be dragged to slide them into view. Rows that
+   exactly fill or are the only ragged row stay un-clipped and center normally.
+   padding-bottom replaces the old row-gap, leaving room for hover titles. */
+#hero-grid { display:flex; flex-direction:column; align-items:center; width:100%; margin:0 auto; }
+.hero-row { position:relative; padding-bottom:28px; }
+/* clip the off-screen buffer images (a full cell away) but let the ±20px hover-
+   title tails of edge cells through. overflow:hidden is the fallback for browsers
+   without overflow:clip / overflow-clip-margin (they just clip titles at the edge). */
+.hero-row.shiftable { overflow:hidden; overflow:clip; overflow-clip-margin:22px; }
+.hero-row-track { display:flex; column-gap:4px; transition:transform .55s cubic-bezier(.4,0,.2,1); will-change:transform; }
+.hero-row.shiftable .hero-row-track { cursor:grab; touch-action:pan-y; }
+.hero-row.dragging .hero-row-track { transition:none; cursor:grabbing; }
+.hero-cell { position:relative; display:block; line-height:0; }
+#hero-grid canvas { width:88px; aspect-ratio:1/1; display:block; border-radius:2px; background:#f2f2f2; cursor:crosshair; }
+/* Host is hover-gated; the two stacked title divs inside it crossfade through
+   the lineage's published titles as the sprite morphs. JS drives their
+   opacities with an S-curve so we don't linger in the mid-fade overlap. */
+.hero-title-host {
+  position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  display:grid; justify-items:center;       /* shrink-wrap to the wider title; both layers share one cell */
+  padding:5px 4px 0;
+  opacity:0; pointer-events:none;
+  /* opaque (page-matching) bg, sized to the text, so when an adjacent cell's title
+     overlaps this one the cell raised to the front (see titleZ) cleanly obscures the
+     one behind — without painting a bar wider than the title itself. */
+  background:#fff;
+  transition:opacity .18s ease-in-out;
+}
+.hero-cell.show-title .hero-title-host { opacity:1; }
+/* Latin Modern = Computer Modern family, matching the system-overview figure's
+   italic image titles (the figure is plain LaTeX, i.e. Computer Modern, not Times).
+   url() is relative to this stylesheet (assets/page/), so the OTFs live one dir up. */
+@font-face {
+  font-family:"LM Roman"; font-style:normal; font-weight:400; font-display:swap;
+  src:url("../fonts/lmroman10-regular.otf") format("opentype");
+}
+@font-face {
+  font-family:"LM Roman"; font-style:normal; font-weight:700; font-display:swap;
+  src:url("../fonts/lmroman10-bold.otf") format("opentype");
+}
+@font-face {
+  font-family:"LM Roman"; font-style:italic; font-weight:400; font-display:swap;
+  src:url("../fonts/lmroman10-italic.otf") format("opentype");
+}
+.hero-title-under {
+  grid-area:1 / 1;                           /* both titles occupy one cell -> overlap for the crossfade */
+  text-align:center; color:#222;
+  font-family:"LM Roman", "Times New Roman", Times, serif; font-style:italic;
+  font-size:14px; line-height:1.2;
+  white-space:nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-title-host { transition:none; }
+}
+
+/* pull the title up closer to the hero banner */
+dt-article > h1:first-of-type { margin-top:0; padding-top:0; }
+dt-byline.transparent { margin:0; padding:0; border:0; min-height:0; display:block; }
+
+/* Base article typography, hoisted from lib/template.v1.js so first paint uses the
+   right sans-serif font/size instead of the browser-default Times serif before the
+   template script runs. Keep in sync with the <style> string in template.v1.js. */
+dt-article {
+  display:block; color:rgba(0,0,0,0.8);
+  font:17px/1.55em -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
+  padding-bottom:72px; background:white;
+}
+@media(min-width:1024px){ dt-article { font-size:20px; } }
+
+/* Byline layout, hoisted from lib/template.v1.js so it applies at first paint.
+   The Distill template injects these same rules via JS after the script runs;
+   without a render-blocking copy here the authors flash block-level, left-aligned
+   and in the default serif on hard refresh before that script executes. Keep in
+   sync with the <style> string in template.v1.js. */
+dt-byline {
+  font-size:12px; line-height:18px; display:block; color:rgba(0,0,0,0.5);
+  border-top:1px solid rgba(0,0,0,0.1); border-bottom:1px solid rgba(0,0,0,0.1);
+  padding-top:12px; padding-bottom:12px;
+}
+@media(min-width:1080px){ dt-byline { border-bottom:none; margin-bottom:70px; } }
+dt-byline .authors { text-align:left; }
+dt-byline .name { display:inline; text-transform:uppercase; }
+dt-byline .affiliation { display:inline; }
+dt-byline .date { display:block; text-align:left; }
+dt-byline .year, dt-byline .month { display:inline; }
+@media(min-width:1080px){
+  dt-byline .authors { display:inline-block; }
+  dt-byline .author { display:inline-block; margin-right:12px; }
+  dt-byline .author:last-child { margin-right:0; }
+  dt-byline .affiliation { display:block; }
+  dt-byline .name { display:block; }
+  dt-byline .date {
+    border-left:1px solid rgba(0,0,0,0.1);
+    padding-left:15px; margin-left:15px; display:inline-block;
+  }
+  dt-byline .year, dt-byline .month { display:block; }
+}
+
+/* author names in black (override distill default link color) */
+#authors_section .byline .author .name,
+#authors_section .byline .author a.name { color:#000; }
+#authors_section .byline .author a.name:hover { color:#FF6C00; }
+
+/* author note under byline */
+.author-note { display:flex; flex-wrap:wrap; gap:.25em 1em; font-size: 13px; color: #888; margin-top: .4em; }
+.author-note .note-left  { text-align:left; }
+.author-note .note-right { margin-left:auto; text-align:right; }
+.author-note a { color:#FF6C00; }
+
+/* epigraph */
+p.epigraph { font-style: italic; margin: 1.5em 0 2em; text-align: center; color:#666; }
+@media(min-width:1080px){ p.epigraph { margin-left:15%; width:70%; } }
+.epigraph-source { font-style: normal; font-size:.9em; }
+
+/* results table — Latin Modern (Computer Modern), matching the TikZ figures */
+table.results { border-collapse: collapse; width: 100%; font-size: 11.5px; margin: 1em 0;
+  font-family:"LM Roman", "Latin Modern Roman", "Times New Roman", Times, serif;
+  font-variant-numeric: lining-nums tabular-nums; }
+table.results th, table.results td { padding: .12em .5em; box-shadow: 0 0 0 1px rgba(0,0,0,.10); text-align: center; line-height: 1.2; }
+table.results th { font-weight: 700; }
+table.results td.lab, table.results th.lab { text-align: left; }
+/* divider between the semantic/visual metrics and the structural Tree Balance column (always the last cell in each row) */
+table.results th:last-child, table.results td:last-child { border-left: 1.5px solid rgba(0,0,0,.30); }
+table.results .best { font-weight: 700; }
+table.results .win { background: rgb(206,242,206); font-weight: 700; }
+/* heavier rule separating the hyperparameter sweeps from the Random/Human baselines */
+table.results tbody:last-child > tr:first-child > td { border-top: 1.5px solid rgba(0,0,0,.55); }
+/* ± std over seeds: lighter, smaller, never inherits the bold of best/win cells */
+table.results .pm { font-size: .82em; font-weight: 400; color: rgba(0,0,0,.42); white-space: nowrap; }
+
+/* framed multi-page screenshot (reads as a static capture, not a live site) */
+.screenshot { border:1px solid #cfcfcf; background:#ececec; padding:8px; border-radius:5px;
+  box-shadow:0 2px 12px rgba(0,0,0,.14); margin:0 auto; }
+.screenshot .pages { display:flex; gap:8px; align-items:center; }
+.screenshot .pages > a { flex:1 1 0; min-width:0; display:block; line-height:0;
+  border:1px solid #d6d6d6; background:#fff; border-radius:2px; }
+.screenshot .pages > a img { width:100%; height:auto; display:block; margin:0; border:0; border-radius:2px; }
+@media (max-width:760px){ .screenshot .pages { flex-direction:column; } }
+/* Hover Easter egg: the original site's orange "TM" mark peels up to reveal our
+   "VLM" mark (lifted straight from our modified logo). The overlay box is placed
+   by % over the first page so it tracks the screenshot at any size; the TM crop is
+   the real pixels from the capture, so at rest the figure looks untouched. */
+.screenshot .pages > a.peelhost { position:relative; }
+.tm-peel { position:absolute; left:31.91%; top:5.78%; width:4.11%; height:1.33%;
+  pointer-events:none; /* let the click fall through to the link */ }
+.tm-peel .vlm, .tm-peel .lift { position:absolute; inset:0;
+  background-size:100% 100%; background-repeat:no-repeat; }
+.tm-peel .vlm  { background-image:url('../vlm_patch.png?v=2'); }
+/* Turn the page: the TM sheet is hinged on the left edge (between the box's
+   upper-left and bottom-left corners); on hover a solid-white panel bearing the
+   VLM mark grows rightward from that hinge, wiping the TM away. Flat 2D wipe &mdash;
+   a mock-3D page curl can layer on later. The faint crease shadow sells the lift.
+   Driven by a transition so it plays in reverse (TM grows back) on mouse-out, and
+   smoothly reverses even if you leave mid-wipe. */
+.tm-peel .lift { background-image:url('../tm_peel.png?v=2');
+  clip-path: inset(0 0 0 0);
+  transition: clip-path .42s cubic-bezier(.4,0,.2,1), filter .42s cubic-bezier(.4,0,.2,1); }
+.peelhost:hover .tm-peel .lift {
+  clip-path: inset(0 0 0 100%);
+  filter: drop-shadow(-.16em 0 .1em rgba(0,0,0,.22)); }
+
+/* two-up figure row */
+.figrow { display:flex; flex-wrap:wrap; gap:1em; justify-content:center; align-items:flex-start; }
+.figrow > span { flex:1 1 280px; max-width:360px; }
+.figrow .cap { display:block; font-size:13px; color:rgba(0,0,0,0.6); line-height:1.5em; margin-top:.3em; }
+.figrow .cap b { color:#000; font-weight:600; }
+
+/* image + CPPN dual-panel videos */
+.dualgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(330px,1fr)); gap:1em; margin:0 auto; }
+.dualgrid figure { margin:0; }
+.dualgrid video { width:100%; display:block; border-radius:3px; background:#f2f2f2; box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.dualgrid .vlab { display:block; font-size:12px; color:rgba(0,0,0,.55); margin-top:.3em; text-align:center; }
+.dualgrid .vlab b { color:#000; font-weight:600; }
+
+/* three traversal columns: phylogeny-trail video stacked over CPPN-morph-grid video */
+.tripgrid { display:grid; grid-template-columns:repeat(3, 1fr); gap:1em; margin:0 auto; width:100%; }
+.tripgrid figure { margin:0; }
+.tripgrid .stack { border-radius:4px; overflow:hidden; box-shadow:0 1px 5px rgba(0,0,0,.14); background:#f6f6f6; }
+.tripgrid video { width:100%; display:block; background:#f6f6f6; }
+.tripgrid .vlab { display:block; font-size:12px; color:rgba(0,0,0,.55); margin-top:.4em; text-align:center; }
+.tripgrid .vlab b { color:#000; font-weight:600; }
+@media (max-width:600px){ .tripgrid { grid-template-columns:1fr; max-width:340px; } }
+
+/* clickable results rows: each opens the archive viewer page at that arc */
+table.results tbody tr[data-arc] { cursor:pointer; }
+table.results tbody tr[data-arc]:hover td { background:rgba(255,214,0,.28); }
+/* the group header (rowspan cell) tracks hover of ANY row in its group; each group
+   lives in its own <tbody> so :hover reaches the rowspan cell */
+table.results tbody:hover td.lab[rowspan] { background:rgba(255,214,0,.28); }
+.arc-intro { font-size:12px; color:rgba(0,0,0,.6); text-align:center; margin:0 0 .8em; line-height:1.5; }
+/* isolated view + tab strip */
+.arc-tabs { display:flex; justify-content:center; gap:0; margin:0 auto .6em; max-width:560px;
+  border-bottom:1px solid #e2e2e2; }
+.arc-tabs button { border:none; background:none; font:inherit; font-size:13px; color:#555;
+  cursor:pointer; padding:.45em .9em; border-bottom:2px solid transparent; margin-bottom:-1px; }
+.arc-tabs button:hover { color:#FF6C00; }
+.arc-tabs button.on { color:#FF6C00; border-bottom-color:#FF6C00; font-weight:600; }
+.arc-stage { position:relative; max-width:560px; margin:0 auto; }
+.arc-stage.zoomable { cursor:zoom-in; }
+.arc-stage img, .arc-stage video { width:100%; display:block; border-radius:4px; background:#f2f2f2; }
+/* phylogeny is a very wide horizontal strip; show it scrollable so text stays readable */
+.arc-stage.wide { max-width:none; overflow-x:auto; cursor:zoom-in; }
+.arc-stage.wide img { width:auto; min-width:100%; max-height:260px; }
+.arc-cap { font-size:12px; color:rgba(0,0,0,.6); margin-top:.6em; text-align:center; line-height:1.5; }
+.arc-cap b { color:#000; font-weight:600; }
+/* fullscreen lightbox */
+.arc-lightbox { position:fixed; inset:0; background:rgba(0,0,0,.92); display:none;
+  align-items:center; justify-content:center; z-index:1000; padding:24px;
+  box-sizing:border-box; }
+.arc-lightbox.on { display:flex; }
+/* fit mode (default): width/height + object-fit:contain preserves the aspect
+   ratio while filling as much of the viewport as possible (upscales if needed).
+   A second click swaps in the _native.webp source and adds .native to switch to
+   intrinsic-size pan/scroll. */
+.arc-lightbox img { width:100%; height:100%; object-fit:contain; display:block;
+  cursor:zoom-in; }
+.arc-lightbox.native { overflow:auto; align-items:flex-start; justify-content:flex-start; padding:0; }
+.arc-lightbox.native img { width:auto; height:auto; max-width:none; max-height:none;
+  object-fit:initial; cursor:zoom-out; }
+/* per-image library renderer (prototype, used only for default_s4 right now):
+   absolutely-positioned <img loading="lazy"> tiles in a sized container that the
+   lightbox scrolls. Each tile is 128 px (the agent's native view) and we draw
+   small 1px gutters so cells are distinguishable. */
+.arc-lib-grid { position:relative; background:#000; }
+.arc-lib-grid img { position:absolute; width:128px; height:128px; display:block;
+  background:#0c0c0c; cursor:zoom-out; }
+.arc-lightbox.lib { overflow:auto; align-items:flex-start; justify-content:center;
+  padding:0; cursor:zoom-out; }
+.arc-lightbox.lib .arc-lib-grid { cursor:zoom-out; }
+.arc-lightbox.wide { overflow:auto; align-items:flex-start; justify-content:flex-start; }
+.arc-lightbox.wide img { width:auto; height:auto; max-width:none; max-height:none;
+  object-fit:initial; cursor:default; }
+.arc-lightbox.fit-only img { cursor:default; }
+.arc-lightbox .lb-close { position:fixed; top:14px; right:18px; background:rgba(0,0,0,.5); color:#fff;
+  border:none; font-size:28px; line-height:1; padding:.1em .35em; border-radius:50%; cursor:pointer;
+  z-index:2; }
+.arc-lightbox .lb-close:hover { background:#FF6C00; }
+.arc-lightbox .lb-hint { position:fixed; left:50%; bottom:18px; transform:translateX(-50%);
+  font-size:12px; color:#fff; background:rgba(0,0,0,.45); padding:.35em .8em; border-radius:14px;
+  pointer-events:none; opacity:0; transition:opacity .25s; z-index:2; }
+.arc-lightbox.on .lb-hint { opacity:.85; }
+.arc-lightbox.on .lb-hint:empty { display:none; }
+
+/* reflowing lineage strips: individual steps fill the column width and wrap to
+   a new row when squeezed; the partial last row is ragged. Each wrapped row's
+   horizontal direction is reversed (boustrophedon / snake) by lineage-snake.js,
+   which also sets the per-item arrow class and the --img-h var for arrow centering. */
+.lineage { position:relative; display:grid; grid-template-columns:repeat(auto-fit, 120px); justify-content:center; gap:16px 18px; max-width:1280px; margin:.6em auto .2em; }
+/* the figure's own caption (the one describing the whole strip) sits under a full-width
+   l-screen figure; keep it readable and centered under the grid */
+.l-screen > figcaption { max-width:900px; margin:.4em auto 0; text-align:left; }
+.lineage figure { position:relative; margin:0; }
+.lineage img { width:100%; aspect-ratio:1/1; display:block; border-radius:3px; background:#f2f2f2; }
+/* per-thumbnail VLM titles: the model's own published titles, set in the same
+   Latin Modern italic as the banner's hover titles (.hero-title-under). */
+.lineage figcaption { padding:0; margin-top:.34em; text-align:center;
+  font-family:"LM Roman", "Times New Roman", Times, serif; font-style:italic;
+  font-size:13px; line-height:1.2; color:#222; }
+.lineage figcaption b { color:#222; font-weight:400; }
+/* each lineage is its own subfigure with a subcaption below it; the subcaption
+   matches the main figure caption (.l-screen > figcaption): centered, narrow. */
+.lineage-sub { margin:0 auto 1.1em; }
+.lineage-sub > figcaption { max-width:900px; margin:.4em auto 0; text-align:left; }
+/* the "riding" CPPN morph (lineage-ride.js): one tile glides along the strip,
+   parking on each published thumbnail. It is absolutely positioned over the grid
+   and sized/placed in JS to overlay whichever station it is on; the accent ring
+   marks it as the live morph and highlights the publication it has reached. */
+.lineage-rider { position:absolute; left:0; top:0; pointer-events:none; z-index:3;
+  border-radius:3px; background:#f2f2f2;
+  box-shadow:0 0 0 2px #FF6C00, 0 3px 12px rgba(0,0,0,.30); }
+/* generation-scaled timeline (lineage-timeline.js): thumbnails are laid out in a
+   single row with each gap proportional to the number of generations between the
+   two publications, so the strip reads as an evolutionary axis. The figures are
+   absolutely placed (left/width set in JS); a labeled connector spans each gap. */
+.lineage.lineage-tl { display:block; gap:0; overflow-y:visible; }
+.lineage.lineage-tl > figure { position:absolute; }
+/* one connector per edge: a dashed line of generation-proportional length with an
+   arrowhead at the next node and the generation count floating above it. */
+.lineage-edge { position:absolute; height:0; pointer-events:none; z-index:1; }
+.lineage-edge::before { content:""; position:absolute; left:0; right:7px; top:0;
+  border-top:1.5px dashed rgba(0,0,0,.30); }
+.lineage-edge::after { content:""; position:absolute; right:0; top:0; transform:translateY(-50%);
+  border-left:7px solid rgba(0,0,0,.42); border-top:4px solid transparent; border-bottom:4px solid transparent; }
+.lineage-edge-label { position:absolute; left:50%; top:0; transform:translate(-50%, -118%);
+  font-size:10px; line-height:1.2; color:rgba(0,0,0,.5); background:#fff; padding:0 3px; white-space:nowrap; }
+
+/* call-to-action linking to the interactive single-agent player */
+a.player-cta { display:flex; align-items:center; gap:15px; text-decoration:none;
+  border:1px solid #e2e2e2; border-radius:8px; background:#fafafa; color:inherit;
+  padding:14px 18px; margin:1.4em auto; max-width:720px;
+  box-shadow:0 1px 6px rgba(0,0,0,.07);
+  transition:border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+a.player-cta:hover { border-color:#FF6C00; transform:translateY(-1px);
+  box-shadow:0 2px 12px rgba(0,0,0,.14); }
+a.player-cta .play { flex:none; width:38px; height:38px; border-radius:50%; background:#FF6C00;
+  display:flex; align-items:center; justify-content:center; }
+a.player-cta .play::before { content:""; border-style:solid; border-width:8px 0 8px 13px;
+  border-color:transparent transparent transparent #fff; margin-left:3px; }
+a.player-cta .txt { flex:1; min-width:0; }
+a.player-cta .txt .t { font-weight:600; color:#222; font-size:15px; line-height:1.3; }
+a.player-cta .txt .t .arrow { color:#FF6C00; display:inline-block; transition:transform .15s ease; }
+a.player-cta:hover .txt .t .arrow { transform:translateX(3px); }
+a.player-cta .txt .d { display:block; font-size:13px; color:rgba(0,0,0,.6); line-height:1.5; margin-top:.25em; }
+
+/* System figure: static diagram. */
+.sysfig { position:relative; max-width:900px; margin:0 auto; }
+.sysfig img { display:block; width:100%; height:auto; }

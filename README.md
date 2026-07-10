@@ -2,9 +2,7 @@
 
 ## Collaborative evolution of neural image archives by large vision language models
 
-<!-- ### In Search of the Ingredients of Open‑Endedness: Replicating Picbreeder with Large Vision‑Language Models -->
-
-<!-- Sam Earle, Kai Arulkumaran, Andrew Dai, Akarsh Kumar, Julian Togelius, Sebastian Risi—**GECCO 2026** (Best Paper nominee) -->
+This is the codebase for the paper [_In Search of the Ingredients of Open‑Endedness: Replicating Picbreeder with Large Vision‑Language Models_](https://arxiv.org/abs/2605.23908), by Sam Earle, Kai Arulkumaran, Andrew Dai, Akarsh Kumar, Julian Togelius, Sebastian Risi, at GECCO 2026.
 
 [**📝 Blog**](https://pub.sakana.ai/picbreeder-vlm) ·
 [**🔍 Viewer**](https://pub.sakana.ai/picbreeder-vlm/archive.html) ·
@@ -17,7 +15,7 @@
 
 ---
 
-**Picbreeder** (Secretan et al., 2008) was a casual online 2D art-making tool that had crowds of humans evolve
+**Picbreeder** [[1](https://www.campbellssite.com/papers/secretan_chi08.pdf),[2](https://stars.library.ucf.edu/cgi/viewcontent.cgi?article=2880&context=facultybib2010)] was a casual online 2D art-making tool that had crowds of humans evolve
 images in concert. Over time the users grew an open‑ended tree of diverse and often recognizable artifacts (butterflies, skulls, automobiles), through indirect encodings of these images that cast them as evolvable
 [CPPNs](https://en.wikipedia.org/wiki/Compositional_pattern-producing_network).
 This project asks whether a swarm of Vision‑Language Models can replace the human breeders and convincingly reproduce this open-ended effect. 
@@ -28,7 +26,7 @@ Multiple such sessions occur in parallel, along with intermittent critic agent s
 Candidate CPPNs from the archive are drawn at the beginning of these sessions according to metadata like mean ratings, recency, or number of children in the phylogeny of published images.
 
 This repo contains the multi‑agent Picbreeder evolutionary
-simulation loop, including VLM backends, a Python implementation of the original NEAT/CPPN engine, and archive evaluation routines.
+simulation loop, including VLM backends, a Python implementation of the original NEAT/CPPN engine, and the archive evaluation routines used to generate the paper's quantitative results.
 It also contains code for generating figures for the paper, and the code for the blog, including an interactive interface for viewing archives, and a partial reconstruction of the original Picbreeder interface.
 
 ## Links

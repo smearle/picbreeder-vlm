@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Information — Picbreeder · VLM</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+<style>
+  /* ===================================================================
+   * Image-information page — a faithful re-creation of the original
+   * picbreeder.org showgenome.php: the Parent on the left, the focused
+   * image (big) in the centre with its stats / rating / actions, and the
+   * images other agents Branched off it (its Children) on the right.
+   * =================================================================== */
+  .ginfo { width:100%; }
+  .ginfo td { vertical-align:top; }
+  .col-parent  { width:180px; padding:0 14px 0 0; }
+  .col-main    { text-align:center; }
+  .col-kids    { width:200px; padding:0 0 0 14px; }
+
+  .col-parent h7, .col-kids h7 { display:block; color:#3a59bc; font-size:1em; font-weight:bold; margin:0 0 6px; }
+  .col-main h2 { color:#cd6137; margin:0 0 2px; }
+  .lineagecell { text-align:center; font-size:.85em; margin:0 0 14px; }
+  .lineagecell .by { color:#555; }
+  .lineagecell canvas, .lineagecell img { border:1px solid #888; display:block; margin:2px auto; background:#f2f2f2; }
+  .kidgrid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px 6px; }
+  .kidgrid .lineagecell { margin:0; }
+  .kidgrid canvas, .kidgrid img { width:88px; height:88px; }
+
+  .heroimg { border:1px solid #777; background:#000; image-rendering:auto; }
+  .herometa { color:#444; line-height:1.5; margin:4px 0 6px; }
+  .herometa .idline { color:#777; font-size:.9em; }
+  .heroactions { margin:6px 0 8px; }
+  .heroactions .pbbtn { font-size:1.05em; padding:3px 10px; }
+  .heroactions .pbbtn .ic { color:#1d7a1d; }
+  .ratingbig { margin:4px 0; }
+  /* Big rating uses the larger single-star tile (alt_star.gif: 25px-wide tile, three
+     25px rows = empty / alt / full) at its NATIVE size, repeated 5×. The old override
+     scaled the 10px-wide small-star tile via background-size, stretching one star to
+     100px wide — that was the warping. */
+  .ratingbig .small-star,
+  .ratingbig .small-star .current-rating { width:125px; height:25px; line-height:25px;
+    background-image:url(pb_assets/alt_star.gif); }
+  .ratingbig .small-star { background-repeat:repeat-x; background-position:left top; }
+  .ratingbig .small-star .current-rating { background-repeat:repeat-x; background-position:left bottom; }
+  .ratingnum { color:#cd6137; font-weight:bold; }
+  .founder-note { color:#888; font-size:.9em; }
+  .caption { max-width:300px; margin:8px auto 2px; color:#444; font-size:.92em;
+             line-height:1.45; font-style:italic; }
+  .caption .caplabel { display:block; color:#888; font-style:normal; font-size:.85em;
+                       margin-bottom:2px; }
+  .relink { text-decoration:none; }
+  .relink:hover { background:#2d68d4; color:#fff; }
+
+  /* The reviews this image received: a lazily-expanded, paginated list of the
+     individual VLM critiques (rating + the title the rater saw + comment). */
+  .reviewsbox { margin:8px 0 4px; }
+  .reviews { text-align:left; max-width:420px; margin:8px auto 0; }
+  .review { border-top:1px solid #e3e3e3; padding:7px 2px; }
+  .review:first-child { border-top:none; }
+  .review .rhead { display:flex; align-items:center; gap:8px; margin:0 0 3px; }
+  .review .rtitle { color:#cd6137; font-style:italic; font-size:.92em; }
+  .review .rcomment { color:#444; font-size:.92em; line-height:1.45; }
+  .reviewsnav { text-align:center; margin:8px 0 2px; font-size:.9em; color:#666; }
+  .reviewsnav .pbbtn { margin:0 8px; }
+</style>
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; <a href="browse.html?type=RANK">Browse</a> &raquo; <span id="crumb">Image</span></div>
+    <h1 style="font-size:2em;" id="heading">Image Information</h1>
+    <p class="note" id="status">Loading this image&hellip;</p>
+
+    <table class="ginfo" id="ginfo" style="display:none;"><tr>
+      <td class="col-parent"><h7>Parent</h7><div id="parent"></div></td>
+      <td class="col-main">
+        <h2 id="title"></h2>
+        <div class="herometa" id="meta"></div>
+        <canvas id="hero" class="heroimg" width="256" height="256"></canvas>
+        <div class="caption" id="caption" style="display:none;"></div>
+        <div class="heroactions" id="actions"></div>
+        <div class="ratingbig">
+          <span class="inline-rating"><ul class="star-rating small-star"><li class="current-rating" id="starbar" style="width:0%"></li></ul></span>
+        </div>
+        <div id="ratingtxt" class="note"></div>
+        <div class="reviewsbox" id="reviewsbox" style="display:none;">
+          <button class="pbbtn" id="reviewsbtn"></button>
+          <div class="reviews" id="reviews" style="display:none;"></div>
+          <div class="reviewsnav" id="reviewsnav" style="display:none;"></div>
+        </div>
+      </td>
+      <td class="col-kids"><h7 id="kidhead">Branched From This</h7><div id="kids"></div></td>
+    </tr></table>
+
+    <p class="note" style="margin-top:16px;">
+      Each image is painted by a CPPN&mdash;a small network that maps every pixel's <i>(x, y, r, bias)</i>
+      to a color. <b>Evolve</b> opens the breeding console seeded from this network; <b>DNA</b> opens the network
+      itself for inspection and hand-editing; <b>Family Tree</b> shows where it sits in its lineage.
+      <a href="index.html">&laquo; Back to the gallery</a>
+    </p>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="pbsite.js"></script>
+<script src="community.js"></script>
+<script>
+(function () {
+  PB.chrome('');
+  const P = new URLSearchParams(location.search);
+  const KID_CAP = 12;
+
+  function renderInto(canvas, gjson, color) {
+    try {
+      const g = genomeFromJSON(gjson);
+      canvas.getContext('2d').putImageData(renderGenome(g, canvas.width, color !== false), 0, 0);
+    } catch (e) { /* leave blank */ }
+  }
+
+  function fmtDate(s) { return s ? String(s).slice(0, 10) : ''; }
+
+  // Small thumbnail cell for a parent / child image, linking to its own detail page.
+  function lineageCell(href, title, by, gjson, color, evolveHref, dnaHref, small) {
+    const sz = small ? 88 : 128;
+    const wrap = document.createElement('div');
+    wrap.className = 'lineagecell';
+    const safe = (title || 'Untitled');
+    wrap.innerHTML =
+      `<div class="title"><a class="relink" href="${href}">${esc(safe)}</a></div>` +
+      (by ? `<div class="by">By ${esc(by)}</div>` : '') +
+      `<a href="${href}" title="Image information"><canvas width="${sz}" height="${sz}"></canvas></a>` +
+      `<div class="btns"><button class="pbbtn" onclick="location.href='${evolveHref}'">Evolve</button>` +
+      `<button class="pbbtn" onclick="location.href='${dnaHref}'">DNA</button></div>`;
+    renderInto(wrap.querySelector('canvas'), gjson, color);
+    return wrap;
+  }
+  function esc(s) { return (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  function fail(msg) {
+    document.getElementById('status').innerHTML = msg + ' <a href="index.html">Back to the gallery &raquo;</a>';
+  }
+
+  PB.resolveGenome(P).then(async function (rec) {
+    if (!rec) { fail('No image specified.'); return; }
+
+    // ---- lineage context: parent + children, by run kind ------------------
+    // canon run → bundled tree.json.gz / tree_genomes.json.gz
+    // other runs → per-run sidecar (PB.treeShardURL) + the run's genomes
+    let lineage = null;
+    try {
+      if (rec.canon) {
+        const [tg, t] = await Promise.all([PB.fetchGz('data/tree_genomes.json.gz'), PB.fetchGz('data/tree.json.gz')]);
+        if (!rec.g) rec.g = tg[rec.id];                 // fill main genome for non-bundled canon ids
+        lineage = {
+          node: (i) => t.nodes[i], genome: (i) => tg[i], model: t.model,
+          dHref: (i) => 'detail.html?tree=' + encodeURIComponent(i),
+          eHref: (i) => 'play.html?tree=' + encodeURIComponent(i),
+          xHref: (i) => 'dna.html?tree=' + encodeURIComponent(i),
+          nodes: t.nodes, treeKey: 'tree.html?g=c_' + encodeURIComponent(rec.id),
+        };
+      } else if (rec.run) {
+        const [shard, rd] = await Promise.all([
+          PB.fetchGz(PB.treeShardURL(rec.run)).catch(() => null),
+          PB.loadRun(rec.run).catch(() => null),
+        ]);
+        if (shard && rd) {
+          const gOf = (i) => (rd.items[rec.run + '::' + i] || {}).g;
+          lineage = {
+            node: (i) => shard.nodes[i], genome: gOf, model: shard.model,
+            dHref: (i) => 'detail.html?run=' + encodeURIComponent(rec.run) + '&id=' + encodeURIComponent(i),
+            eHref: (i) => 'play.html?run=' + encodeURIComponent(rec.run) + '&id=' + encodeURIComponent(i),
+            xHref: (i) => 'dna.html?run=' + encodeURIComponent(rec.run) + '&id=' + encodeURIComponent(i),
+            nodes: shard.nodes, treeKey: 'tree.html?run=' + encodeURIComponent(rec.run) + '&id=' + encodeURIComponent(rec.id),
+          };
+        }
+      }
+    } catch (e) { lineage = null; }
+
+    // ---- centre: the focused image ----------------------------------------
+    document.getElementById('status').style.display = 'none';
+    document.getElementById('ginfo').style.display = '';
+    document.getElementById('crumb').textContent = rec.title;
+    document.title = rec.title + ' — Picbreeder · VLM';
+    document.getElementById('title').textContent = rec.title;
+
+    const isHuman = rec.run === 'human';
+    const by = rec.user || PB.artistLabel(rec);
+    const byHref = rec.user ? 'browse.html?user=' + encodeURIComponent(rec.user)
+                            : 'browse.html?model=' + encodeURIComponent(rec.model || '');
+    // Human Picbreeder images were bred by people (names unknown); the VLM only
+    // captioned them (shown in the caption block below). AI runs link to the model.
+    const byLine = isHuman
+      ? 'Bred by a human on the original <a class="relink" href="https://web.archive.org/web/20160304023434/http://picbreeder.org/" target="_blank" rel="noopener">Picbreeder</a>'
+      : 'By <a class="relink" href="' + byHref + '">' + esc(by) + '</a>';
+    const nNodes = rec.g ? rec.g.nodes.length : '?';
+    const nConns = rec.g ? rec.g.connections.length : '?';
+    const dateBit = rec.added_at ? 'Published: ' + fmtDate(rec.added_at) + '<br>' : '';
+    const genBit = (rec.gen != null) ? ' &middot; generation ' + rec.gen : '';
+    const tagBit = (rec.tags && rec.tags.length)
+      ? '<br><span class="taglist">Tags: ' + rec.tags.map((t) =>
+          '<a class="relink" href="browse.html?tag=' + encodeURIComponent(t) + '">' + esc(t) + '</a>').join(', ') + '</span>'
+      : '';
+    document.getElementById('meta').innerHTML =
+      byLine + genBit + '<br>' +
+      dateBit +
+      '<span class="idline">ID: ' + esc(rec.id) + ', Nodes: ' + nNodes + ', Connections: ' + nConns + '</span>' + tagBit;
+
+    const hero = document.getElementById('hero');
+    if (rec.g) renderInto(hero, rec.g, rec.color);
+    else if (rec.thumb) {                  // view-only banner image
+      const img = new Image(); img.onload = () => hero.getContext('2d').drawImage(img, 0, 0, 256, 256); img.src = rec.thumb;
+    }
+
+    // VLM-generated caption (human images have no human-given title)
+    if (rec.caption) {
+      const cap = document.getElementById('caption');
+      // Credit the VLM that wrote the caption — for human images that's the
+      // captioner (gemini-2.5-pro), not the human breeder in rec.model.
+      const capModel = rec.captionModel || (isHuman ? 'gemini-2.5-pro' : (rec.model || 'gemini-2.5-pro'));
+      cap.innerHTML = '<span class="caplabel">Captioned by ' + esc(capModel) +
+        ':</span> &ldquo;' + esc(rec.caption) + '&rdquo;';
+      cap.style.display = '';
+    }
+
+    // actions
+    const acts = document.getElementById('actions');
+    const branch = PB.branchHref(rec.key, rec), dna = PB.dnaHref(rec.key, rec);
+    let aHTML = '';
+    if (rec.g) {
+      aHTML += '<button class="pbbtn" onclick="location.href=\'' + branch + '\'"><span class="ic">&#9654;</span> Evolve</button> ';
+      aHTML += '<button class="pbbtn" onclick="location.href=\'' + dna + '\'">DNA</button> ';
+    }
+    if (lineage) aHTML += '<button class="pbbtn" onclick="location.href=\'' + lineage.treeKey + '\'">Family Tree</button> ';
+    if (rec.g) aHTML += '<button class="pbbtn" onclick="PB.downloadDNA(\'' + rec.key + '\')">Download DNA</button>';
+    acts.innerHTML = aHTML;
+
+    // rating — VLM (middle) bar; PBC layers human-aggregate (above) + your rating (below)
+    const pct = rec.rating == null ? 0 : Math.max(0, Math.min(5, rec.rating)) / 5 * 100;
+    document.getElementById('starbar').style.width = pct + '%';
+    document.getElementById('ratingtxt').innerHTML = rec.rating == null
+      ? 'Not yet rated by the VLM critics.'
+      : 'VLM Rating: <span class="ratingnum">' + rec.rating.toFixed(2) + '</span> / 5 &nbsp;(' + rec.nrat + ' rating' + (rec.nrat === 1 ? '' : 's') + ')';
+    if (window.PBC && rec.key) PBC.mountRating(document.querySelector('.ratingbig'), rec.key, rec.rating, rec.nrat);
+
+    // ---- reviews: a lazily-loaded, paginated list of the individual critiques
+    if (rec.nrat > 0) {
+      const REV_PER_PAGE = 5;
+      const box = document.getElementById('reviewsbox');
+      const btn = document.getElementById('reviewsbtn');
+      const listEl = document.getElementById('reviews');
+      const navEl = document.getElementById('reviewsnav');
+      const closedLabel = 'Show ' + rec.nrat + ' review' + (rec.nrat === 1 ? '' : 's') + ' ▾';
+      box.style.display = '';
+      btn.textContent = closedLabel;
+      let reviews = null, page = 0, open = false;
+
+      function renderPage() {
+        const pages = Math.max(1, Math.ceil(reviews.length / REV_PER_PAGE));
+        page = Math.max(0, Math.min(page, pages - 1));
+        const slice = reviews.slice(page * REV_PER_PAGE, page * REV_PER_PAGE + REV_PER_PAGE);
+        listEl.innerHTML = slice.map((rv) => {
+          const stars = rv.rating == null ? '' : PB.starHTML(rv.rating);
+          const t = rv.title ? '<span class="rtitle">“' + esc(rv.title) + '”</span>' : '';
+          const c = rv.comment ? '<div class="rcomment">' + esc(rv.comment) + '</div>' : '';
+          return '<div class="review"><div class="rhead">' + stars + t + '</div>' + c + '</div>';
+        }).join('') || '<p class="founder-note">No written reviews for this image.</p>';
+        navEl.style.display = pages > 1 ? '' : 'none';
+        navEl.innerHTML = pages > 1
+          ? '<button class="pbbtn" id="rprev"' + (page === 0 ? ' disabled' : '') + '>&laquo; Prev</button>' +
+            'Page ' + (page + 1) + ' of ' + pages +
+            '<button class="pbbtn" id="rnext"' + (page === pages - 1 ? ' disabled' : '') + '>Next &raquo;</button>'
+          : '';
+        const pv = document.getElementById('rprev'), nx = document.getElementById('rnext');
+        if (pv) pv.onclick = () => { page--; renderPage(); };
+        if (nx) nx.onclick = () => { page++; renderPage(); };
+      }
+
+      btn.onclick = async () => {
+        open = !open;
+        if (!open) { listEl.style.display = 'none'; navEl.style.display = 'none'; btn.textContent = closedLabel; return; }
+        btn.textContent = 'Hide reviews ▴';
+        listEl.style.display = '';
+        if (reviews === null) {
+          listEl.innerHTML = '<p class="note">Loading reviews&hellip;</p>';
+          navEl.style.display = 'none';
+          try {
+            reviews = await PB.loadReviews(rec);
+            page = 0;
+          } catch (e) {
+            listEl.innerHTML = '<p class="founder-note">Couldn’t load reviews&mdash;the image archive isn’t reachable. ' +
+              'Click again to retry.</p>';
+            return;   // leave reviews null so the next click retries
+          }
+        }
+        renderPage();
+      };
+    }
+
+    // ---- parent ------------------------------------------------------------
+    const parentEl = document.getElementById('parent');
+    if (lineage) {
+      const nd = lineage.node(rec.id) || {};
+      const pid = nd.p;
+      if (pid && lineage.genome(pid)) {
+        const pn = lineage.node(pid) || {};
+        parentEl.appendChild(lineageCell(
+          lineage.dHref(pid), pn.t || pid, pn.u || (lineage.model + (pn.a ? ' · agent ' + pn.a : '')),
+          lineage.genome(pid), pn.col, lineage.eHref(pid), lineage.xHref(pid), false));
+      } else {
+        parentEl.innerHTML = '<p class="founder-note">This is a <b>founder</b>&mdash;it was bred from a random network, with no parent in the archive.</p>';
+      }
+    } else {
+      parentEl.innerHTML = '<p class="founder-note">Lineage isn’t available for this image.</p>';
+    }
+
+    // ---- children ----------------------------------------------------------
+    const kidsEl = document.getElementById('kids');
+    if (lineage) {
+      const kids = Object.keys(lineage.nodes).filter((i) => (lineage.nodes[i] || {}).p === rec.id && lineage.genome(i));
+      document.getElementById('kidhead').textContent = kids.length ? 'Branched From This (' + kids.length + ')' : 'Branched From This';
+      if (!kids.length) {
+        kidsEl.innerHTML = '<p class="founder-note">No agent has branched from this image yet.</p>';
+      } else {
+        const grid = document.createElement('div'); grid.className = 'kidgrid';
+        kids.slice(0, KID_CAP).forEach((cid) => {
+          const cn = lineage.node(cid) || {};
+          grid.appendChild(lineageCell(lineage.dHref(cid), cn.t || cid, cn.u || (cn.a ? 'agent ' + cn.a : ''),
+            lineage.genome(cid), cn.col, lineage.eHref(cid), lineage.xHref(cid), true));
+        });
+        kidsEl.appendChild(grid);
+        if (kids.length > KID_CAP) {
+          const more = document.createElement('p'); more.className = 'note'; more.style.marginTop = '6px';
+          more.innerHTML = '<a class="relink" href="' + lineage.treeKey + '">+ ' + (kids.length - KID_CAP) + ' more in the family tree &raquo;</a>';
+          kidsEl.appendChild(more);
+        }
+      }
+    } else {
+      document.getElementById('col-kids');
+      kidsEl.innerHTML = '<p class="founder-note">&mdash;</p>';
+    }
+  }).catch(function (e) {
+    fail('Could not load this image (' + (e && e.message || e) + ').');
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Discourage caching so iterating on player.js / manifest doesn't need a hard
+     refresh in VS Code's Simple Browser (which otherwise clings to stale files). -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>Life of an Agent — Picbreeder-VLM</title>
+<link rel="stylesheet" href="player.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1 id="title">Life of an Agent</h1>
+  </header>
+
+  <div class="stage">
+    <!-- LEFT: candidate grid (top, full width) + CPPN Morph (bottom, half size) -->
+    <div class="left">
+      <div class="panel gridpanel">
+        <div class="panel-label" id="gridlabel">The candidate grid&mdash;its picks outlined in red</div>
+        <div class="gridbox" id="gridbox">
+          <img id="grid" alt="candidate grid">
+          <div class="empty" id="emptygrid" style="display:none"></div>
+        </div>
+        <div class="gridcap" id="gridcap"></div>
+      </div>
+      <div class="panel morphpanel" id="morphpanel">
+        <div class="panel-label">CPPN graph &amp; morph</div>
+        <div class="morphpair">
+          <div class="stagebox stagebox-graph">
+            <img id="graph_static" alt="">
+            <video id="graph" muted playsinline preload="auto"></video>
+          </div>
+          <div class="stagebox">
+            <img id="hero" alt="">
+            <video id="morph" muted playsinline preload="auto"></video>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: the agent's VLM output, step by step, with karaoke highlighting -->
+    <div class="right">
+      <div class="panel transcript-wrap">
+        <div class="panel-label">VLM output</div>
+        <div class="transcript" id="transcript"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="playpause" title="Play / pause">▶</button>
+    <button id="prev" title="Previous step">⏮</button>
+    <button id="next" title="Next step">⏭</button>
+    <span class="ctl-group">
+      <label for="speed">Speed</label>
+      <select id="speed">
+        <option value="0.75">0.75×</option>
+        <option value="1">1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5" selected>1.5×</option>
+        <option value="2">2×</option>
+      </select>
+    </span>
+    <button id="mute" title="Mute / unmute narration">🔊</button>
+    <input type="range" id="scrub" min="0" max="0" step="1" value="0">
+    <span id="progress" class="progress">Gen 0 / 0</span>
+  </div>
+
+  <div class="audio-hint" id="audiohint" hidden>
+    🔊 click to enable narration
+  </div>
+</div>
+
+<script src="player.js"></script>
+</body>
+</html>

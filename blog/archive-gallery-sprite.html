@@ -1,0 +1,1977 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Picbreeder-VLM · sprite-sheet archive</title>
+<style>
+  :root { --accent:#FF6C00; --ink:#222; --muted:#777; --line:#e6e6e6;
+          --gold:#daa520; --star-off:#c7c7c7; }
+  /* Latin Modern italic: the info-layout captions set their titles in the same face as
+     the hero banner's hover titles and the system-overview figure's image titles. */
+  @font-face {
+    font-family:"LM Roman"; font-style:italic; font-weight:400; font-display:swap;
+    src:url("assets/fonts/lmroman10-italic.otf") format("opentype");
+  }
+  body { font-family:"PT Sans",-apple-system,system-ui,sans-serif; color:var(--ink);
+         margin:0; padding:22px 26px 64px; background:#fff; }
+  h1 { font-size:19px; font-weight:700; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 14px; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:14px;
+         position:sticky; top:0; z-index:5; background:#fff; padding:6px 0; }   /* float while the standalone page scrolls */
+  .seg button { font:inherit; font-size:13px; padding:6px 12px; border:1px solid var(--line);
+                background:#fff; cursor:pointer; }
+  .seg button:first-child { border-radius:6px 0 0 6px; }
+  .seg button:last-child { border-radius:0 6px 6px 0; border-left:none; }
+  .seg button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .seg button[disabled] { color:#bbb; background:#f7f7f7; cursor:default; }
+  /* nested sub-row (grid sorts / phylogeny variants) — smaller, darker active state */
+  .subseg { margin-left:8px; }
+  .subseg button { font-size:12px; padding:5px 10px; background:#fafafa; color:#555; }
+  .subseg button.on { background:#333; color:#fff; border-color:#333; }
+  .subseg:empty { display:none; }
+  #info { font-size:12px; color:var(--muted); margin-left:8px; }
+  #stage { position:relative; margin-top:8px; }
+  /* phylogeny renders larger than the viewport (legible thumbnails) inside a bounded,
+     pannable viewport (like the breed Family-Tree page) — scroll both ways to roam it.
+     No visible frame: it should read as the same flat white surface as the grid, not a
+     separate bordered "canvas". The 1px transparent border keeps the +2 sizing math intact. */
+  #stage.phscroll { overflow:hidden; border:1px solid transparent; box-sizing:border-box; background:#fff; }
+  #grid { display:block; cursor:crosshair; }
+  #grid.immersed { cursor:none; }
+  #grid.panning { cursor:grab; }
+  #grid.panning:active { cursor:grabbing; }
+  /* immersive enters fullscreen so the full-res pan gets a viewport-shaped frame */
+  #stage:fullscreen { background:#000; display:flex; align-items:center; justify-content:center; }
+  #stage:-webkit-full-screen { background:#000; display:flex; align-items:center; justify-content:center; }
+  /* small, unobtrusive keyboard-shortcut cue pinned to the bottom-left of the viewport
+     (a child of #stage so it survives fullscreen). Black on a faint white wash so it stays
+     legible over the white archive canvas and over any thumbnail that pans under it. */
+  /* One pill for all the cues, stacked bottom-left; later cues sit beneath earlier ones
+     inside the same wash rather than each carrying their own. */
+  #hint { position:fixed; left:12px; bottom:12px; z-index:10; display:none;
+          flex-direction:column; align-items:flex-start; gap:4px;
+          background:rgba(255,255,255,.72); padding:4px 8px; border-radius:5px;
+          pointer-events:none; user-select:none; }
+  #hint.on { display:flex; }
+  #hint div { font-size:12px; line-height:1; color:#111; letter-spacing:.02em; }
+  #hint b { color:#111; font-weight:700; }
+  #status { font-size:13px; color:var(--muted); }
+  #status.err { color:#c0392b; }
+  #loupe { position:fixed; border-radius:50%; pointer-events:none; display:none; z-index:9;
+           box-shadow:0 6px 28px rgba(0,0,0,.4); background:#eee; image-rendering:pixelated; }
+  #loupe.on { display:block; }
+  /* a programmatic "focus" loupe (hero double-click) is anchored to the document
+     so it rides with the canvas as the page scrolls, unlike the hover loupe which
+     tracks the cursor in viewport coords. A ring marks the focused image. */
+  #loupe.focus { position:absolute; box-shadow:0 6px 28px rgba(0,0,0,.45), 0 0 0 3px var(--accent); }
+  /* embed: no inner scrollbar — the host iframe is sized to our content height (see postHeight).
+     overflow:hidden also stops a transient scrollbar from stealing width and starting an
+     autosize oscillation (scrollbar -> narrower -> shorter -> no scrollbar -> ...). */
+  body.embed { padding:8px 4px 16px; overflow:hidden; }
+  body.embed h1, body.embed .sub { display:none; }
+  body.embed .bar { display:none; }   /* embed: the ordering toggle lives in the host's sticky header instead */
+</style>
+</head>
+<body>
+  <h1>Published archive <span style="color:var(--accent)">· sprite sheets</span></h1>
+  <p class="sub">Hover for a full-res loupe; <b>click</b> to lock the pointer and pan the archive at full res. Toggle ordering with no refetch.</p>
+  <div class="bar">
+    <span class="seg" id="seg"></span>
+    <span class="seg subseg" id="subseg"></span>
+    <span id="info"></span>
+  </div>
+  <div id="status">Loading sheets&hellip;</div>
+  <div id="stage"><div id="hint"></div></div>
+  <canvas id="loupe"></canvas>
+
+<script>
+(function () {
+  const HF_BASE = "https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive/resolve/main";
+  const params = new URLSearchParams(location.search);
+  const ARCHIVE_BASE = (params.get("archiveBase") || HF_BASE).replace(/\/$/, "");
+  let run = params.get("run") || "";
+  const wantArc = params.get("arc"), wantSeed = params.get("seed"), wantModel = params.get("model");
+  const DEFAULT_MODEL = "gemini-2.5-pro";          // the canonical model; others are an orthogonal axis
+  const MODEL_PREF = ["gemini-2.5-pro", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-random"];
+  const modelOf = (e) => e.model || (e.config && e.config.model) || DEFAULT_MODEL;
+  const FIXED_CELL = params.has("cell") ? parseInt(params.get("cell"), 10) : null;
+  const LENS = parseInt(params.get("lens") || "320", 10);   // loupe diameter px
+  const PAN_SPEED = parseFloat(params.get("panspeed") || "1.2");
+  const LOUPE_FRAC = parseFloat(params.get("loupefrac") || "0.667");  // 0=grid size, 1=full native res
+  const ORDER_LABELS = { chronological: "Chronological", siglip: "SigLIP-sorted", branched: "Most Branched", ratings: "Top Rated", phylogeny: "Phylogeny", growth: "Growth" };
+  const ORDER_PREF = ["chronological", "siglip", "branched", "ratings", "phylogeny", "growth"];   // display order; unknown keys appended
+  // "growth" is a synthetic ordering: not a stored layout, but an animated playback
+  // of the phylogeny filling in publication order. Available whenever the run has a
+  // (scatter) phylogeny layout to borrow positions + edges from.
+  const orderKeys = () => Object.keys(layout.layouts).sort((a, b) => {
+    const ia = ORDER_PREF.indexOf(a), ib = ORDER_PREF.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  // Full canonical button set (every ordering the gallery knows about), so a run that lacks
+  // one — e.g. the human archive has no VLM "Top Rated" — still shows it, greyed, rather than
+  // dropping the button. = ORDER_PREF, plus any present-but-unlisted keys appended.
+  const allOrderKeys = () => ORDER_PREF.concat(orderKeys().filter((k) => ORDER_PREF.indexOf(k) < 0));
+  const hasScatter = () => !!(layout && orderKeys().some(isScatter));
+  let morphRuns = new Set();                          // runs with a prebuilt scrubbable-morph layout (breed/data/morph/<run>/)
+  const hasMorph = () => morphRuns.has(run);          // gates the Morph meta-button (the embedded viewer needs that layout)
+  let transcriptRuns = new Set();                     // runs with a built transcript wall listed in the committed manifest (assets/transcripts/<run>/)
+  // Gates the Transcripts meta-button: either the committed manifest lists this run, OR we
+  // found a wall live on HF (hfWallRuns) — so walls built & pushed after the manifest was
+  // baked light up without a blog redeploy. Greyed (with a reason tooltip) when neither holds.
+  const hasTranscripts = () => transcriptRuns.has(run) || hfWallRuns.has(run);
+  const isHumanArc = () => resolvedArc === "human";
+  // Human t'scripts: original Picbreeder never recorded the breeder's thoughts. AI runs
+  // that lack a wall DO have raw reasoning on HF (results/<run>/), just not a built wall yet.
+  function metaReason(m) {                             // why meta m is greyed (only called when !metaPresent(m))
+    if (m === "transcripts") return isHumanArc()
+      ? "Users’ thoughts were not recorded in the original Picbreeder."
+      : "Reasoning traces for this run are on HF, but a transcript wall hasn’t been built for it yet.";
+    if (m === "phylogeny") return "No phylogeny (family-tree) layout was built for this run.";
+    if (m === "growth")    return "Growth animates the phylogeny, which wasn’t built for this run.";
+    if (m === "morph")     return "No scrubbable-morph layout was built for this run.";
+    if (m === "grid")      return "No image grid is available for this run.";
+    return "Not available for this run.";
+  }
+  function subReason(k) {                              // why grid sort k is greyed
+    const label = orderLabel(k);
+    return isHumanArc()
+      ? "The human archive has no VLM “" + label + "” ordering."
+      : "The “" + label + "” ordering isn’t available for this run.";
+  }
+  const hasOrder = (k) => k === "growth" ? hasScatter() : !!(layout && layout.layouts[k]);
+  const orderLabel = (k) => ORDER_LABELS[k] || (k[0].toUpperCase() + k.slice(1));
+  // ---- meta-categories ----
+  // The grid sorts (chronological/siglip/branched/ratings) collapse under a single "Grid"
+  // meta-button with a sub-row, alongside Phylogeny (its own radial/twopi/sfdp sub-row) and
+  // Growth. This mirrors the existing phylogeny-variant sub-toggle pattern: a meta-button picks
+  // the category, the sub-row picks the exact ordering/variant within it.
+  const META_LABELS = { grid: "Grid", phylogeny: "Phylogeny", morph: "Morph", growth: "Growth", transcripts: "Transcripts" };
+  const META_PREF = ["grid", "phylogeny", "morph", "growth", "transcripts"];
+  const GRID_PREF = ["chronological", "siglip", "branched", "ratings"];   // grid sub-orderings, display order
+  const PHY_PREF = ["tidy", "radial", "twopi", "sfdp"];   // phylogeny variant display order — the breed-style "tidy" radial (default) leftmost
+  // variant keys in display order: preferred first (so Radial leads), any others appended
+  const phyloVariants = (L) => { const ks = (L && (L.variant_order || (L.variants && Object.keys(L.variants)))) || [];
+    return PHY_PREF.filter((v) => ks.indexOf(v) >= 0).concat(ks.filter((k) => PHY_PREF.indexOf(k) < 0)); };
+  const isGridKey = (k) => k !== "growth" && !!(layout && layout.layouts[k]) && !isScatter(k);
+  const scatterKey = () => orderKeys().find(isScatter);                   // the (single) phylogeny layout key, if any
+  const metaOf = (k) => k === "growth" ? "growth" : k === "morph" ? "morph" : k === "transcripts" ? "transcripts"
+                      : (layout && layout.layouts[k] && isScatter(k)) ? "phylogeny" : "grid";
+  const metaPresent = (m) => m === "grid" ? orderKeys().some(isGridKey)
+                           : m === "morph" ? hasMorph()
+                           : m === "transcripts" ? hasTranscripts()
+                           : hasScatter();   // phylogeny & growth need a scatter layout; morph/transcripts need prebuilt data
+  const firstAvailGrid = () => GRID_PREF.find(isGridKey) || orderKeys().find(isGridKey);
+  // canonical grid sorts first, then any present-but-unlisted grid ordering appended (matches the old allOrderKeys robustness)
+  const gridSubKeys = () => GRID_PREF.concat(orderKeys().filter((k) => isGridKey(k) && GRID_PREF.indexOf(k) < 0));
+  const currentMeta = () => metaOf(currentKey);
+  const currentSub = () => { const m = currentMeta(); return m === "grid" ? currentKey : m === "phylogeny" ? activeVariant : null; };
+  let DC = FIXED_CELL || 20, base = "", runBase = ARCHIVE_BASE;   // runBase: per-run host (index entry may override, e.g. human row on gh-pages)
+  const DEFAULT_SEED = "4";          // when no ?seed given, prefer the canonical replicate seed (s4)
+  let availSeeds = [], resolvedSeed = null;   // seeds with sprites for this arc(+model) + the one we loaded (for the host's seed sub-toggle)
+  let availModels = [], resolvedModel = null; // models with sprites for this arc + the one we loaded (for the host's model sub-toggle)
+  let allModels = [], modelArcs = {};          // every model present anywhere + model -> arcs it was run in, so the host can show ALL
+                                               // models on the sub-toggle even for an arc that lacks some, and snap the arc on click.
+  let resolvedArc = null;                      // the arc this run belongs to (drives the "why greyed" tooltips, esp. the human archive)
+  let hfWallRuns = new Set();                  // runs whose transcript wall we found live on HF (built + pushed after the committed manifest was baked)
+  if (params.has("embed")) document.body.classList.add("embed");
+
+  const $ = (id) => document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const ease = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const status = (m, err) => { $("status").innerHTML = m; $("status").className = err ? "err" : ""; };
+  const DEFAULT_STATUS = "Hover = loupe · click = fullscreen + pan full-res (Esc/click to exit) · toggle ordering above.";
+  const GROWTH_STATUS = "";   // growth mode shows no status line — the scrub/play controls speak for themselves
+  const sheetFile = (sp, s) => sp.sheet_tmpl.replace("{s:03d}", String(s).padStart(3, "0"));
+
+  async function getJSON(p) {
+    const r = await fetch(base + p, { mode: "cors" });
+    if (!r.ok) throw new Error("HTTP " + r.status + " " + p);
+    return r.json();
+  }
+  function packPos(sp, i) {
+    const within = i % sp.per_sheet;
+    return { sheet: Math.floor(i / sp.per_sheet),
+             sx: (within % sp.sheet_cols) * sp.cell,
+             sy: Math.floor(within / sp.sheet_cols) * sp.cell };
+  }
+
+  // ---- canvas grid + morph + immersive (all one main canvas) ----
+  let SP, layout, sheetImgs = [], gridIndex = new Map();
+  let currentKey = "chronological", gridDims = [0, 0], scatterEdges = null, activeVariant = null;
+  let immersed = false, panX = 0, panY = 0, gz = 1, morphing = false;   // gz: grid-immersive zoom (wheel/pinch), 1 = native res
+  let pendingKey = null;   // ordering requested mid-morph; applied when the current morph lands (so fast grid-sort clicks aren't dropped)
+  // free pan+zoom over the phylogeny tree at native res (separate from the grid's wrap-pan)
+  let immScatter = false, iz = 1, iox = 0, ioy = 0;
+  // "tidy" is the breed Family-Tree radial (Reingold–Tilford), computed in-browser; it
+  // supersedes the old graphviz "radial" as the canonical Radial view (which is dropped
+  // from the sub-row when tidy is present, but kept labelled for any run that lacks it).
+  const SUB_LABELS = { tidy: "Radial", radial: "Radial (graphviz)", twopi: "Twopi", sfdp: "sfdp" };
+  const cv = document.createElement("canvas"); cv.id = "grid";
+  const ctx = cv.getContext("2d");
+  const loupe = $("loupe"), lctx = loupe.getContext("2d");
+
+  // A "scatter" layout (e.g. phylogeny) places each image at a free normalized
+  // (x,y) in the unit square + carries parent->child edges, instead of a grid.
+  const isScatter = (k) => !!(layout.layouts[k] && layout.layouts[k].kind === "scatter");
+
+  // ---- "tree of life" radial layout, computed in-browser -----------------------
+  // The stored phylogeny variants (radial/twopi/sfdp) are graphviz output, which tangles
+  // at the VLM runs' high branching factor. We instead lay the whole forest out as a
+  // circular dendrogram, the clean tree-of-life form: a size-aware Reingold–Tilford pass
+  // (each node claims angular room ∝ its descendants and sits at its children's angular
+  // midpoint, so no edge crosses) gives every node an angle; we then set radius = its tree
+  // DEPTH (founders at the center, leaves at the rim) and normalize the frontier to a
+  // single full turn. Drawn with curved radial links (see strokeBranches) it reads as
+  // concentric rings of lineage. Result is in the unit square so it slots into the existing
+  // variant machinery (morph / loupe / immersive) unchanged. Computed from the loaded edges.
+  function computeTidyRadial(N, edges) {
+    const parent = new Array(N).fill(-1), children = Array.from({ length: N }, () => []);
+    for (let k = 0; k < edges.length; k++) {
+      const p = Math.min(edges[k][0], edges[k][1]), c = Math.max(edges[k][0], edges[k][1]);   // parent = earlier-published (smaller index)
+      if (p !== c) { parent[c] = p; children[p].push(c); }
+    }
+    const roots = []; for (let i = 0; i < N; i++) if (parent[i] < 0) roots.push(i);
+    // subtree sizes → order siblings biggest-first (tidy: the big branches lead)
+    const size = new Array(N).fill(1);
+    const sizeOf = (id) => { let s = 1; const ch = children[id]; for (let i = 0; i < ch.length; i++) s += sizeOf(ch[i]); return (size[id] = s); };
+    roots.forEach(sizeOf);
+    const cmp = (a, b) => (size[b] - size[a]) || (a - b);
+    for (let i = 0; i < N; i++) if (children[i].length > 1) children[i].sort(cmp);
+    roots.sort(cmp);
+    // a virtual super-root (id = N) gathers the whole forest into one disc
+    const ROOT = N, kidsOf = (id) => id === ROOT ? roots : children[id];
+    const ext = new Float64Array(N + 1), ang = new Float64Array(N + 1), depth = new Int32Array(N);
+    // angular extent = its leaf count (≥1) → leaves spread evenly, big clades get more of the circle
+    const measure = (id) => { const ch = kidsOf(id); if (!ch.length) return (ext[id] = 1); let sum = 0; for (let i = 0; i < ch.length; i++) sum += measure(ch[i]); return (ext[id] = sum); };
+    const place = (id, dep, a0) => {
+      const ch = kidsOf(id);
+      let a;
+      if (!ch.length) a = a0 + ext[id] / 2;
+      else {
+        let cur = a0; for (let i = 0; i < ch.length; i++) { place(ch[i], dep + 1, cur); cur += ext[ch[i]]; }
+        a = (ang[ch[0]] + ang[ch[ch.length - 1]]) / 2;   // parent at its children's angular midpoint -> no crossings
+      }
+      ang[id] = a;
+      if (id !== ROOT) depth[id] = dep;
+    };
+    measure(ROOT); place(ROOT, 0, 0);
+    const total = ext[ROOT] || 1;
+    let maxDepth = 1; for (let i = 0; i < N; i++) if (depth[i] > maxDepth) maxDepth = depth[i];
+    // depth -> radius (founders inner, leaves out); small inner offset so the founder ring isn't a
+    // point, and sqrt so the crowded shallow rings get a little more room than a linear scale.
+    const xy = new Array(N);
+    for (let i = 0; i < N; i++) {
+      const a = (ang[i] / total) * 2 * Math.PI, r = 0.07 + 0.93 * Math.sqrt(depth[i] / maxDepth);
+      xy[i] = [0.5 + 0.5 * r * Math.cos(a), 0.5 + 0.5 * r * Math.sin(a)];
+    }
+    return xy;
+  }
+
+  // ---- phylogeny (scatter) inline sizing ---------------------------------------
+  // A radial tree-of-life is a disc: its populated rings sit in an annulus around an empty
+  // founder core, so the whole disc has to be in view at once (enlarging + centering would
+  // just frame the empty middle). We therefore FIT the disc into a bordered SQUARE viewport
+  // sized to the full window WIDTH (a tall square the page scrolls past) for a clean, large
+  // overview; a click drops into the full-res immersive pan/zoom for legible detail. The
+  // thumbnails are deliberately small (overview) and overlap into clades.
+  // Available CSS px for the inline tree square: the full content width of the page.
+  // Measure the BODY content box (not #stage — sizeCanvas() constrains #stage's width to
+  // the square in phscroll mode, so reading it back would feed the square's own size in).
+  const availWidth = () => Math.max(320, (document.body.clientWidth || 1000) - (document.body.classList.contains("embed") ? 8 : 52));
+  const phySide = () => clamp(availWidth(), 320, 2000);                   // square side (CSS px) = full content width
+  const phyCell = () => clamp(phySide() * 0.018, 10, 24);                 // on-screen thumbnail px in the inline tree
+  const curCell = () => isScatter(currentKey) ? phyCell() : DC;           // thumbnail draw size for the active view
+  // Unit-space bounding box of the active scatter variant. A radial tree rarely fills the
+  // whole [0,1] square — the tidy human disc, say, lives in y[0.16,0.86], x[0.05,0.80] —
+  // so fitting it into a full square leaves dead margins (a tall empty band at top) and an
+  // oversized, internally-scrolling box. We crop to this bbox so the disc fills the canvas
+  // and the host iframe ends up exactly as tall as the tree (like the grid views). Cached
+  // per variant (keyed by name + node count).
+  const _phyBoxCache = {};
+  function phyBounds(L) {
+    const xy = scatterXY(L);
+    if (!xy || !xy.length) return { x0: 0, y0: 0, x1: 1, y1: 1 };
+    const key = activeVariant + "@" + xy.length;
+    if (_phyBoxCache[key]) return _phyBoxCache[key];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < xy.length; i++) {
+      const p = xy[i];
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+    }
+    if (!isFinite(x0)) { x0 = 0; y0 = 0; x1 = 1; y1 = 1; }
+    return (_phyBoxCache[key] = { x0, y0, x1, y1 });
+  }
+  function centerPhyScroll() {                       // open the tree centered; user scrolls out in any direction
+    if (!isScatter(currentKey)) return;
+    const st = $("stage");
+    st.scrollLeft = Math.max(0, (cv.clientWidth - st.clientWidth) / 2);
+    st.scrollTop = Math.max(0, (cv.clientHeight - st.clientHeight) / 2);
+  }
+
+  function maxDims() {                     // grid extent (scatter layouts impose no grid -> skipped)
+    let r = 0, c = 0;
+    for (const k in layout.layouts) {
+      const d = layout.layouts[k].dims; if (!d) continue;
+      r = Math.max(r, d[0]); c = Math.max(c, d[1]);
+    }
+    return [r, c];
+  }
+  // Rows the ordering on screen actually fills. The orderings of one run pack to different
+  // extents (siglip is 50x40 where chronological is 45x45), so a canvas at the union height
+  // — maxDims — strands dead rows under the shorter ones, and the host iframe, sized to our
+  // content, lets the reader scroll down into that void. Size to the live ordering instead;
+  // morphTo() widens us to span both endpoints for the length of the tween.
+  let morphRows = 0;                      // rows the in-flight grid morph needs (0 = not morphing)
+  function rowsOf(key) { const d = layout.layouts[key] && layout.layouts[key].dims; return d ? d[0] : maxDims()[0]; }
+  function gridRows() { return morphRows || rowsOf(currentKey); }
+  function computeDC() {
+    if (FIXED_CELL) return FIXED_CELL;
+    const st = $("stage");                         // measure the actual content box (handles embed vs standalone padding)
+    const avail = (st && st.clientWidth) || ((document.body.clientWidth || 1000) - (document.body.classList.contains("embed") ? 8 : 52));
+    // fractional cell so cols*cell == avail exactly (no right-edge remainder strip); cap at native res
+    return Math.max(2, Math.min(SP.cell, avail / maxDims()[1]));
+  }
+  function sizeScatterCanvas(w, h, box) {            // size the tree canvas (+ its bordered box) to a given pixel extent
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    const st = $("stage");
+    st.classList.toggle("phscroll", box);
+    st.style.height = box ? (h + 2) + "px" : "";     // +2 for the 1px border each side (border-box) so the rim isn't clipped
+    st.style.width  = box ? (w + 2) + "px" : "";
+    st.style.margin = box ? "8px auto 0" : "";       // center the cropped box on the page
+  }
+  function sizeCanvas() {
+    if (infoOn()) { sizeCanvasInfo(); return; }       // ranked-grid info layout: thumbnails spaced out + caption strips
+    if (isScatter(currentKey)) {                     // phylogeny: the disc cropped to its bbox into a bordered viewport
+      const b = phyBounds(layout.layouts[currentKey]);
+      const cell = phyCell(), S = Math.max(1, phySide() - cell);
+      const w = Math.round((b.x1 - b.x0) * S + cell), h = Math.round((b.y1 - b.y0) * S + cell);
+      sizeScatterCanvas(w, h, !immersed && !immScatter);
+      return;
+    }
+    { const st = $("stage"); st.classList.remove("phscroll"); st.style.height = ""; st.style.width = ""; st.style.margin = ""; }
+    const w = maxDims()[1] * DC, h = gridRows() * DC;   // width spans every ordering (DC divides it); height tracks this one
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  let lastPostedH = -1;
+  function contentHeight() {
+    // measure to the BOTTOM of the canvas (true content), not documentElement.scrollHeight —
+    // scrollHeight floors to the iframe viewport, so our own iframe resize would inflate it and
+    // ratchet upward forever (+2 each echo). A rect-based bottom is viewport-independent.
+    const st = $("stage");
+    const bottom = st ? st.getBoundingClientRect().bottom : document.body.scrollHeight;
+    return Math.ceil(bottom + 16);        // + bottom padding
+  }
+  function postHeight() {                  // embed: report our natural height so the host sizes the iframe to fit (no inner scrollbar)
+    if (!params.has("embed") || window.parent === window) return;
+    const h = contentHeight();
+    if (h === lastPostedH) return;         // dedupe: a same-height echo must not drive a feedback loop
+    lastPostedH = h;
+    try { window.parent.postMessage({ pbvlmHeight: h }, "*"); } catch (e) {}
+  }
+  function postGrowthState() {            // embed: growth leaderboard position + play state, for the blog #trio hand-off
+    if (!params.has("embed") || window.parent === window || !growing || !gLb) return;
+    const lbY = gLb.getBoundingClientRect().top + window.scrollY;   // this doc's Y of the leaderboard canvas top
+    try { window.parent.postMessage({ pbvlmGrowth: { lbY: lbY, playing: gPlaying } }, "*"); } catch (e) {}
+  }
+  function buildGridIndex(key) {
+    const rc = layout.layouts[key].rc; gridIndex = new Map();
+    for (let i = 0; i < rc.length; i++) gridIndex.set(rc[i][0] + "," + rc[i][1], i);
+  }
+  // [x,y] per image. Grid: cell*DC. Scatter: unit-square xy mapped into a square
+  // region of side min(W,H), centered in the canvas, so the tree keeps its aspect.
+  // a scatter layout carries either a flat `xy` or a {variants:{name:xy}} set
+  // (phylogeny: radial/twopi/sfdp); pick the active variant's coordinates.
+  const scatterXY = (L) => L.variants
+    ? (L.variants[activeVariant] || L.variants[L.default] || L.variants[Object.keys(L.variants)[0]])
+    : L.xy;
+  const posOf = (key) => {
+    const L = layout.layouts[key];
+    if (L.kind === "scatter") {
+      // map unit-square xy -> top-left coords, cropped to the variant's bbox (so the disc
+      // fills the canvas with no dead margin), leaving a thumbnail's margin so rim
+      // thumbnails stay fully on-canvas.
+      const side = phySide(), cell = phyCell(), S = Math.max(1, side - cell), b = phyBounds(L);
+      return scatterXY(L).map((p) => [(p[0] - b.x0) * S, (p[1] - b.y0) * S]);
+    }
+    return L.rc.map((p) => [p[1] * DC, p[0] * DC]);
+  };
+
+  // ---- "Info" overlay for the grids ---------------------------------------------
+  // Press "i" on any grid to spread the thumbnails apart and print each one's title
+  // below it. The ranked grids also print the metric that ordered them (branch count
+  // for Most Branched, a five-star rating for Top Rated); Chronological and SigLIP-
+  // sorted show the title alone. The zoomed-out overview just shows the images with
+  // whitespace between them; the captions are drawn at full thumbnail resolution, so
+  // they only become legible once you zoom in (hover loupe / click-to-fullscreen).
+  // Titles + metrics come from the same per-run tree sidecar gLoadTitles() reads,
+  // keyed img_{i+1:06d} (fields t / c / r).
+  let infoMode = false, infoMeta = null, infoMetaPromise = null, infoScale = 1;
+  const infoEligible = (k) => isGridKey(k);
+  const infoOn = () => infoMode && !!layout && infoEligible(currentKey) && !isScatter(currentKey);
+  const infoRanked = () => currentKey === "branched" || currentKey === "ratings";   // the two grids that caption a metric under the title
+  // All native px (SP.cell = full thumbnail res). Box = thumbnail + a gap + a caption strip.
+  const IN_GAP  = () => SP.cell * 0.14;                    // whitespace between thumbnails
+  const IN_FONT = () => SP.cell * 0.15;                    // caption font size
+  const IN_CAP  = () => IN_FONT() * (infoRanked() ? 3.1 : 1.8);   // caption strip: title line (+ metric line on the ranked grids)
+  const IN_BW   = () => SP.cell + IN_GAP();                // horizontal box pitch
+  const IN_BH   = () => SP.cell + IN_GAP() + IN_CAP();     // vertical box pitch
+  let _infoPos = {};                                       // native top-left [x,y] per image, cached per grid key
+  function infoPos() {
+    const k = currentKey; if (_infoPos[k]) return _infoPos[k];
+    const rc = layout.layouts[k].rc, bw = IN_BW(), bh = IN_BH(), g = IN_GAP() / 2;
+    return (_infoPos[k] = rc.map((p) => [p[1] * bw + g, p[0] * bh + g]));
+  }
+  function infoExtent() { const d = layout.layouts[currentKey].dims; return [d[1] * IN_BW(), d[0] * IN_BH()]; }
+  function infoAvail() { const st = $("stage"); return (st && st.clientWidth) || ((document.body.clientWidth || 1000) - (document.body.classList.contains("embed") ? 8 : 52)); }
+  // Branch counts for "Most Branched" come from the phylogeny edges (full coverage on any
+  // run with a tree), independent of the sometimes-partial title sidecar; fall back to the
+  // sidecar's `c` when a run has no edges. Ratings + titles are sidecar-only.
+  let _branchCount = null;
+  function branchCounts() {
+    if (_branchCount) return _branchCount;
+    const n = SP ? SP.n : 0, cnt = new Array(n).fill(null);
+    if (scatterEdges) {
+      for (let i = 0; i < n; i++) cnt[i] = 0;
+      for (let k = 0; k < scatterEdges.length; k++) { const a = scatterEdges[k][0], b = scatterEdges[k][1], p = Math.min(a, b); if (p >= 0 && p < n) cnt[p]++; }
+    }
+    return (_branchCount = cnt);
+  }
+  function infoMetricStr(i) {
+    if (!infoRanked() || currentKey === "ratings") return "";   // ratings caption their metric as star glyphs, not text
+    let b = branchCounts()[i]; if (b == null && infoMeta) b = infoMeta.c[i];
+    return b == null ? "" : b + (b === 1 ? " branch" : " branches");
+  }
+  // canvas fillText silently falls back to the next family until the webfont is decoded,
+  // so pull Latin Modern in once (best effort) and repaint whatever the captions landed in.
+  let captionFontPromise = null;
+  function ensureCaptionFont() {
+    if (captionFontPromise || !document.fonts || !document.fonts.load) return;
+    captionFontPromise = document.fonts.load('italic 400 16px "LM Roman"')
+      .then(() => { if (infoOn()) { if (immersed) drawImmersive(); else redraw(); } })
+      .catch(() => {});
+  }
+  // best-effort, once per run: fetch the tree sidecar and pull title/rating/branch-count.
+  function ensureInfoMeta() {
+    if (infoMetaPromise) return infoMetaPromise;
+    if (!window.DecompressionStream) return (infoMetaPromise = Promise.resolve(null));
+    infoMetaPromise = fetch("breed/data/tree/" + run + ".json.gz")
+      .then((r) => { if (!r.ok) throw 0; return new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).json(); })
+      .then((d) => {
+        // Titles + ratings come from the dense per-image arrays when the sidecar has
+        // them (`ti`/`ra`, one slot per published image); `nodes` only covers images
+        // with a genome, so older sidecars blank the captions past the genome dump.
+        // Branch counts stay nodes-only — a genome-less image has no children anyway.
+        const nd = d.nodes || {}, n = SP ? SP.n : 0, t = new Array(n), rr = new Array(n), cc = new Array(n);
+        for (let i = 0; i < n; i++) { const node = nd["img_" + String(i + 1).padStart(6, "0")]; if (node) { t[i] = node.t; rr[i] = node.r != null ? node.r : null; cc[i] = node.c != null ? node.c : null; } }
+        if (d.ti) for (let i = 0; i < n; i++) { if (d.ti[i]) t[i] = d.ti[i]; }
+        if (d.ra) for (let i = 0; i < n; i++) { if (d.ra[i] != null) rr[i] = d.ra[i]; }
+        infoMeta = { t: t, r: rr, c: cc }; if (infoOn()) { if (immersed) drawImmersive(); else redraw(); } return infoMeta;
+      }).catch(() => (infoMeta = null));
+    return infoMetaPromise;
+  }
+  // Draw the whole info layout into ctx `c` under a native->screen mapping (scale k,
+  // translate tx,ty). One routine serves the overview, the hover loupe and the immersive
+  // pan — they differ only in that camera. Captions are skipped when they'd be sub-pixel.
+  function paintInfo(c, k, tx, ty, cw, ch) {
+    const N = SP.cell, thumb = N * k, pos = infoPos(), font = IN_FONT() * k, caps = font >= 4 && (infoMeta || scatterEdges);
+    c.imageSmoothingEnabled = false;
+    if (caps) c.textAlign = "center";
+    for (let i = 0; i < pos.length; i++) {
+      const sx = pos[i][0] * k + tx, sy = pos[i][1] * k + ty;
+      if (sx > cw || sy > ch || sx + thumb < 0 || sy + thumb < 0) continue;
+      const img = sheetImgs[Math.floor(i / SP.per_sheet)];
+      if (img && img.complete && img.naturalWidth) { const p = packPos(SP, i); c.drawImage(img, p.sx, p.sy, N, N, sx, sy, thumb, thumb); }
+      if (caps) drawCaption(c, i, sx, sy, thumb, font);
+    }
+    if (caps) c.textAlign = "left";
+  }
+  // Titles are set in Latin Modern italic and ratings as five gold/grey stars, matching
+  // the hero banner's hover titles and the system-overview figure's rated cells.
+  const IN_TITLE_FONT = (font) => "italic 400 " + font.toFixed(1) + 'px "LM Roman","Times New Roman",Times,serif';
+  function drawCaption(c, i, sx, sy, thumb, font, wide) {
+    const cx = sx + thumb / 2, maxw = wide || thumb + IN_GAP() * (font / IN_FONT());
+    let y = sy + thumb + font * 0.45;
+    c.textBaseline = "top";
+    const title = infoMeta && infoMeta.t[i];
+    if (title && title !== "None") { c.fillStyle = "#222"; c.font = IN_TITLE_FONT(font); c.fillText(trunc(c, title, maxw), cx, y); y += font * 1.35; }
+    if (!infoRanked()) return;
+    if (currentKey === "ratings") { const r = infoMeta ? infoMeta.r[i] : null; if (r != null) drawStars(c, cx, y, font, r); return; }
+    const m = infoMetricStr(i);
+    if (m) { c.fillStyle = "#FF6C00"; c.font = "700 " + font.toFixed(1) + 'px "PT Sans",-apple-system,system-ui,sans-serif'; c.fillText(m, cx, y); }
+  }
+  // Five glyphs, the first round(r) of them gold — the system-overview .rt-stars run,
+  // drawn by hand because canvas has no letter-spacing and no per-span colour.
+  function drawStars(c, cx, y, font, r) {
+    const n = Math.max(0, Math.min(5, Math.round(r)));
+    c.font = "400 " + font.toFixed(1) + 'px "PT Sans",-apple-system,system-ui,sans-serif';
+    const w = c.measureText("★").width, step = w * 0.94;   // slight negative tracking, as in .rt-stars
+    c.textAlign = "left";
+    let x = cx - (step * 4 + w) / 2;
+    for (let k = 0; k < 5; k++, x += step) { c.fillStyle = k < n ? "#daa520" : "#c7c7c7"; c.fillText("★", x, y); }
+    c.textAlign = "center";
+  }
+  // Zoomed in, the image under the crosshair is the one being read, so its caption comes to
+  // the front: set in full rather than truncated to the thumbnail's width, still centred on
+  // the image, over a plate that hides whatever neighbouring captions it runs across. Same
+  // trade the hero banner makes for its hover titles.
+  function drawFocusCaption(c, k, tx, ty) {
+    const font = IN_FONT() * k;
+    if (!infoMeta || font < 4) return;
+    const i = immersedFocusIndex();
+    if (i == null) return;
+    const title = infoMeta.t[i];
+    const pos = infoPos(), thumb = SP.cell * k, sx = pos[i][0] * k + tx, sy = pos[i][1] * k + ty;
+    c.textAlign = "center";
+    c.font = IN_TITLE_FONT(font);
+    const tw = title && title !== "None" ? c.measureText(title).width : 0;
+    const plate = Math.max(tw, thumb) + IN_GAP() * k;   // never narrower than the image it belongs to
+    c.fillStyle = "#fff";
+    c.fillRect(sx + thumb / 2 - plate / 2, sy + thumb, plate, IN_CAP() * k);
+    drawCaption(c, i, sx, sy, thumb, font, Infinity);
+    c.textAlign = "left";
+  }
+  function sizeCanvasInfo() {
+    const [W, H] = infoExtent(); infoScale = infoAvail() / W;
+    const w = Math.round(W * infoScale), h = Math.round(H * infoScale);
+    const st = $("stage"); st.classList.remove("phscroll"); st.style.height = ""; st.style.width = ""; st.style.margin = "";
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  function drawInfoOverview() {
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.imageSmoothingEnabled = false; ctx.clearRect(0, 0, w, h);
+    paintInfo(ctx, infoScale, 0, 0, w, h);
+  }
+  function drawImmersiveInfo() {
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+    paintInfo(ctx, gz, -panX, -panY, w, h);
+    drawFocusCaption(ctx, gz, -panX, -panY);
+    if (chShow) drawCrosshair(w / 2, h / 2);   // focal point (right-click -> the centred image's detail page)
+  }
+  function clampInfoPan() {
+    const [W, H] = infoExtent(), w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    panX = clamp(panX, 0, Math.max(0, W * gz - w));
+    panY = clamp(panY, 0, Math.max(0, H * gz - h));
+  }
+  function drawLoupeInfo(mx, my) {
+    const N = SP.cell, thumbO = N * infoScale, M = thumbO + (N - thumbO) * LOUPE_FRAC, Z = M / thumbO;
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0); lctx.imageSmoothingEnabled = false;
+    lctx.fillStyle = "#fff"; lctx.fillRect(0, 0, LENS, LENS);
+    paintInfo(lctx, infoScale * Z, LENS / 2 - mx * Z, LENS / 2 - my * Z, LENS, LENS);
+  }
+  // The grids keep the same loupe/click status as every other view; the "i"
+  // info-labels toggle is advertised separately in the corner cue (updateHint), and
+  // only once you've zoomed in — see setHint below.
+  function maybeInfoHint() {
+    if (growing || morphMode || transMode || immersed || immScatter) return;
+    if (!infoEligible(currentKey)) return;
+    status(DEFAULT_STATUS);
+  }
+
+  // Corner cues (bottom-left of the viewport): quiet reminders of the gestures that do
+  // something non-obvious in the current view — the phylogeny fullscreen's space-to-flip
+  // stacking, the grid "i" labels, and the right-click that opens the focused image's
+  // detail page. All the cues share one pill, stacked in the order given.
+  function setHint(lines) {
+    const el = $("hint");
+    if (!lines || !lines.length) { el.classList.remove("on"); el.innerHTML = ""; return; }
+    el.innerHTML = lines.map((h) => "<div>" + h + "</div>").join("");
+    el.classList.add("on");
+  }
+  function updateHint() {
+    const lines = [];
+    if (immScatter) lines.push("<b>spacebar</b> to flip");
+    // the "i" labels only pay off once you're zoomed in (captions become legible), so the
+    // cue waits until the grid is fullscreen rather than crowding the overview.
+    if (immersed && infoEligible(currentKey) && !isScatter(currentKey))
+      lines.push(infoMode ? "<b>i</b> to hide info" : "press <b>i</b> for info");
+    // right-click only reaches a focused image from inside one of the immersive cameras
+    if (immersed || immScatter) lines.push("<b>right-click</b> for details");
+    setHint(lines);
+  }
+
+  // thumbnails at per-image positions; clears first. In scatter (tree) views
+  // thumbnails can overlap, so draw NEWEST-first (reversed) -> the OLDER parent
+  // (lower published index) lands on top. Grids never overlap, so forward is fine.
+  function drawThumbs(positions, reversed) {
+    const cell = curCell();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    for (let j = 0; j < positions.length; j++) {
+      const i = reversed ? positions.length - 1 - j : j;
+      const img = sheetImgs[Math.floor(i / SP.per_sheet)];
+      if (!img || !img.complete || !img.naturalWidth) continue;
+      const p = packPos(SP, i);
+      ctx.drawImage(img, p.sx, p.sy, SP.cell, SP.cell, positions[i][0], positions[i][1], cell, cell);
+    }
+  }
+  // stroke the branch network into context c (positions in CSS px; c must already
+  // carry the dpr transform). Strokes are the expensive part — see the offscreen cache below.
+  function strokeBranches(c, positions) {
+    const cell = curCell(), h = cell / 2, n = positions.length;
+    // Curved radial links (D3 / breed Family-Tree style): each edge eases out radially
+    // then sweeps round, instead of cutting a straight chord across the disc — which is
+    // what makes a dense radial tree read as clean concentric rings rather than a tangle.
+    // The pole is the geometric center of the node bbox (the radial layout's center).
+    let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+    for (let i = 0; i < n; i++) { const p = positions[i]; if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0]; if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1]; }
+    const cx = (minx + maxx) / 2 + h, cy = (miny + maxy) / 2 + h;
+    c.strokeStyle = "#555"; c.lineWidth = Math.max(0.5, cell * 0.05);
+    c.beginPath();
+    for (let k = 0; k < scatterEdges.length; k++) {
+      const A = positions[scatterEdges[k][0]], B = positions[scatterEdges[k][1]];
+      if (!A || !B) continue;
+      const ax = A[0] + h, ay = A[1] + h, bx = B[0] + h, by = B[1] + h;
+      const ra = Math.hypot(ax - cx, ay - cy), rb = Math.hypot(bx - cx, by - cy), rm = (ra + rb) / 2;
+      const aa = Math.atan2(ay - cy, ax - cx), ab = Math.atan2(by - cy, bx - cx);
+      c.moveTo(ax, ay);
+      c.bezierCurveTo(cx + rm * Math.cos(aa), cy + rm * Math.sin(aa),
+                      cx + rm * Math.cos(ab), cy + rm * Math.sin(ab), bx, by);
+    }
+    c.stroke();
+  }
+  // Stroking ~1500 antialiased branches costs ~150ms on the full-size canvas, which made
+  // every grid<->tree morph (and variant morph) crawl at a few fps and let the compositor
+  // present partially-repainted tiles (stale grid edges peeking through). So we rasterize
+  // the branches ONCE into an offscreen layer, cache it per (variant, canvas-size), and blit
+  // it (a single ~15ms drawImage) — fading via globalAlpha — instead of re-stroking each frame.
+  const edgeCache = new Map();                      // "variant@WxH" -> offscreen canvas of stroked branches
+  function edgeLayer(variant, positions) {          // cached branch raster for `variant` at `positions`
+    const key = variant + "@" + cv.width + "x" + cv.height;
+    let lc = edgeCache.get(key);
+    if (lc) return lc;
+    lc = document.createElement("canvas"); lc.width = cv.width; lc.height = cv.height;
+    const lx = lc.getContext("2d");
+    lx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    strokeBranches(lx, positions);
+    edgeCache.set(key, lc);
+    return lc;
+  }
+  function blitEdges(layer, alpha) {                // draw a prebuilt branch layer (device-pixel 1:1) at opacity
+    if (!layer || alpha <= 0) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 0.35 * alpha;
+    ctx.drawImage(layer, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+  function drawGrid(positions, edgeAlpha) {   // single static frame: thumbnails + (optional) branches on top
+    const scat = edgeAlpha > 0 && scatterEdges;
+    drawThumbs(positions, scat);
+    if (scat) {                               // branch lines over the thumbnails (faint)
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.globalAlpha = 0.35 * edgeAlpha;
+      strokeBranches(ctx, positions);
+      ctx.globalAlpha = 1;
+    }
+  }
+  const redraw = () => { updateHint(); return infoOn() ? drawInfoOverview() : drawGrid(posOf(currentKey), isScatter(currentKey) ? 1 : 0); };
+  function drawImmersive() {             // full-res cells, panned by (panX,panY) + zoomed by gz, wrapping at the archive edges
+    if (infoOn()) return drawImmersiveInfo();   // ranked-grid info layout pans/zooms with captions instead of wrapping
+    const N = SP.cell, cell = N * gz, w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    const R = gridDims[0], C = gridDims[1];     // wrap period (rows, cols) of the current ordering
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#eee"; ctx.fillRect(0, 0, w, h);
+    const c0 = Math.floor(panX / cell), c1 = Math.ceil((panX + w) / cell);
+    const r0 = Math.floor(panY / cell), r1 = Math.ceil((panY + h) / cell);
+    for (let row = r0; row <= r1; row++)
+      for (let col = c0; col <= c1; col++) {
+        const wr = ((row % R) + R) % R, wc = ((col % C) + C) % C;   // wrap the lookup into the grid; draw at the unwrapped slot
+        const i = gridIndex.get(wr + "," + wc); if (i === undefined) continue;
+        const img = sheetImgs[Math.floor(i / SP.per_sheet)];
+        if (!img || !img.complete || !img.naturalWidth) continue;
+        const p = packPos(SP, i);
+        ctx.drawImage(img, p.sx, p.sy, N, N, col * cell - panX, row * cell - panY, cell, cell);
+      }
+    if (chShow) drawCrosshair(w / 2, h / 2);   // focal point (right-click -> the centred image's detail page)
+  }
+  function archiveExtent() {             // on-screen archive size (zoom-scaled) for current ordering; wrap period for the pan
+    const cell = SP.cell * gz; return [gridDims[1] * cell, gridDims[0] * cell];
+  }
+
+  function morphTo(key) {
+    if (morphing || key === currentKey || immersed || immScatter || growing) return;
+    const fromScatter = isScatter(currentKey), toScatter = isScatter(key);
+    const from = posOf(currentKey), to = posOf(key), t0 = performance.now(), dur = 650;
+    morphing = true; loupe.classList.remove("on");
+    // Grow to span both endpoints for the tween, so thumbnails gliding out of (or into) the
+    // taller ordering's bottom rows aren't clipped. We shrink back to the target once it lands.
+    if (!fromScatter && !toScatter) {
+      morphRows = Math.max(rowsOf(currentKey), rowsOf(key));
+      sizeCanvas(); postHeight();
+    }
+    // the branch layer (cached) sits at whichever endpoint carries the tree; the
+    // faded-in (or out) ends mask the slight position mismatch while thumbnails glide.
+    const branches = toScatter ? edgeLayer(activeVariant, to)
+                   : fromScatter ? edgeLayer(activeVariant, from) : null;
+    function frame(now) {
+      const e = ease(clamp((now - t0) / dur, 0, 1));
+      // A layout's rc can be SHORTER than the sprite set (e.g. siglip: embeddings were
+      // computed before the last few images published). Those trailing images have no
+      // destination position — hold them at their current spot; they drop out when the
+      // destination grid redraws (drawThumbs then only reaches to.length). Without this
+      // guard `to[i]` is undefined and the morph frame throws, so the grid never transitions.
+      drawThumbs(from.map((p, i) => { const d = to[i] || p; return [p[0] + (d[0] - p[0]) * e, p[1] + (d[1] - p[1]) * e]; }),
+                 toScatter || fromScatter);
+      if (toScatter) blitEdges(branches, e);       // fade branches in/out with the morph
+      else if (fromScatter) blitEdges(branches, 1 - e);
+      if (e < 1) requestAnimationFrame(frame);
+      else {
+        currentKey = key; gridDims = layout.layouts[key].dims || null;
+        if (!toScatter) buildGridIndex(key);
+        morphing = false;
+        if (morphRows) { morphRows = 0; sizeCanvas(); redraw(); postHeight(); }   // settle onto the target's own height
+        if (!toScatter) { if (infoEligible(key)) maybeInfoHint(); else status(DEFAULT_STATUS); }
+        drainPending();
+      }
+    }
+    setActiveBtn(key);
+    requestAnimationFrame(frame);
+  }
+  // morph between phylogeny position variants (radial<->twopi<->sfdp): same nodes
+  // & edges, new coordinates. Only valid while a scatter ordering is active.
+  function morphVariant(name) {
+    const L = layout.layouts[currentKey];
+    if (morphing || !L || L.kind !== "scatter" || !L.variants || !L.variants[name] || name === activeVariant) return;
+    const fromVar = activeVariant, from = posOf(currentKey);
+    activeVariant = name; setActiveBtn(currentKey);
+    const to = posOf(currentKey), t0 = performance.now(), dur = 650;
+    morphing = true; loupe.classList.remove("on");
+    // variants have different bboxes (the tidy disc is cropped tighter than graphviz's) ->
+    // resize the box to the destination's crop now, so the morph settles into the right frame.
+    sizeCanvas(); edgeCache.clear(); postHeight();
+    // both endpoints carry branches -> crossfade two cached layers (old geometry out,
+    // new geometry in) instead of re-stroking ~1500 edges every frame.
+    const layerFrom = edgeLayer(fromVar, from), layerTo = edgeLayer(name, to);
+    function frame(now) {
+      const e = ease(clamp((now - t0) / dur, 0, 1));
+      drawThumbs(from.map((p, i) => [p[0] + (to[i][0] - p[0]) * e, p[1] + (to[i][1] - p[1]) * e]), true);
+      blitEdges(layerFrom, 1 - e); blitEdges(layerTo, e);
+      if (e < 1) requestAnimationFrame(frame); else { morphing = false; drainPending(); }
+    }
+    requestAnimationFrame(frame);
+  }
+  // ---- "Growth": the archive-growth TRIPTYCH, generated on the fly ------------
+  // Same three panels as the blog's trio figures, but built live from data the
+  // gallery already loaded for ANY run (no precompute): the phylogeny scatter
+  // positions (sfdp) + parent->child edges + the sprite sheets, plus best-effort
+  // titles from the same-origin per-run tree sidecar. Reveal order = sprite index
+  // = publication (added_at) order.
+  //   LEFT   phylogeny growth (narrow/portrait): opaque lineage-coloured edges,
+  //          the fresh edge flashed in front then receding, hubs swelling.
+  //   MIDDLE Most-Branched leaderboard (live child counts; titles when known).
+  //   RIGHT  the archive reel, filling bottom-up in publication order.
+  let growing = false, gP = 0, gPlaying = true, gLast = null, gRAF = 0;
+  let gInitP = null, gInitPlaying = null;   // one-shot: seek/pause growth on entry (blog #trio dblclick hand-off)
+  let gN = 0, gParent = null, gChildren = null, gCount = null, gColor = null, gHubs = null;
+  let gSfdp = null, gBoard = null, gTitles = null;
+  let gStage = null, gCtl = null, gSeek = null, gPlayBtn = null, gTime = null;
+  let gPhy, gLb, gReel, gPhyCtx, gLbCtx, gReelCtx;             // panel canvases + 2d contexts
+  let PW = 0, PH = 0, LW = 0, LH = 0, RW = 0, RH = 0;          // panel sizes (CSS px)
+  let pPx = null, pPy = null, pTH = 7;                         // phylo node positions + thumb px
+  let pEdgeBuf, pNodeBuf, pECtx, pNCtx, pBuilt = 0;            // phylo incremental layers
+  let lbDisp = {};                                            // leaderboard eased rows
+  // Pre-baked trio_demo data (the SAME source the inline blog #trio figure renders from).
+  // When present for this run, growth renders from it — pixel-identical to, and as light as,
+  // the inline figure (a compact 40 px atlas instead of the large grid sprite sheets).
+  let gTrio = null, gTrioPromise = null;                      // {phylo, lb, atlas} once fetched
+  let gAtlasImg = null, gAtlasCell = 0, gAtlasCols = 0;       // when set, gblit sources from the trio atlas
+  // constant publication rate across runs (NOT a fixed total duration) — matches
+  // the blog's #trio reel: 3123 publications over its 110 s pass ≈ 28.4 pubs/sec.
+  const GROWTH_RATE = 3123 / 110, PHY_ASPECT = 554 / 1028, LB_RATIO = 0.62, RE_RATIO = 0.50;
+  const GOLD = "#DAA520", INK = "#1c1c1c", MUT = "#8c8c8c", TRACK = "#e4e4e4", ROWALT = "#f6f6f6";
+  const lerp = (a, b, k) => a + (b - a) * k;
+
+  function hsv(h, s, v) {                          // -> [r,g,b] 0..255
+    const i = Math.floor(h * 6), f = h * 6 - i, p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+    const [r, g, b] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i % 6];
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  }
+  const gblit = (c, idx, dx, dy, dw, dh) => {       // draw thumbnail `idx` from the sprite sheets
+    if (gAtlasImg) {                                 // trio mode: compact 40 px atlas (matches the inline figure, keeps growth light)
+      const sx = (idx % gAtlasCols) * gAtlasCell, sy = Math.floor(idx / gAtlasCols) * gAtlasCell;
+      c.drawImage(gAtlasImg, sx, sy, gAtlasCell, gAtlasCell, dx, dy, dw, dh); return;
+    }
+    const img = sheetImgs[Math.floor(idx / SP.per_sheet)];
+    if (!img || !img.complete || !img.naturalWidth) return;
+    const q = packPos(SP, idx); c.drawImage(img, q.sx, q.sy, SP.cell, SP.cell, dx, dy, dw, dh);
+  };
+  function newCanvas(parent) {
+    const c = document.createElement("canvas");
+    // flat, frameless surface (no card shadow/radius) so growth reads like the grid, not a separate canvas
+    c.style.cssText = "display:block;background:#fff;";
+    parent.appendChild(c); return c;
+  }
+  function sizeC(c, w, h) {                          // CSS px -> backing * dpr; return dpr-scaled ctx
+    c.style.width = w + "px"; c.style.height = h + "px";
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    const x = c.getContext("2d"); x.setTransform(dpr, 0, 0, dpr, 0, 0); return x;
+  }
+
+  function growthPrep() {
+    gAtlasImg = null;                                     // recompute path: source thumbnails from the grid sheets (until/unless trio data applies)
+    const scKey = orderKeys().find(isScatter), L = layout.layouts[scKey];
+    gSfdp = (L.variants && (L.variants.sfdp || L.variants[L.default])) || L.xy;   // raw unit-square xy
+    gN = gSfdp.length;
+    gParent = new Array(gN).fill(-1);
+    gChildren = Array.from({ length: gN }, () => []);
+    gCount = new Array(gN).fill(0);
+    for (let k = 0; k < scatterEdges.length; k++) {        // edges are [parent,child] (parent published earlier)
+      const a = scatterEdges[k][0], b = scatterEdges[k][1], pp = Math.min(a, b), cc = Math.max(a, b);
+      gParent[cc] = pp; gChildren[pp].push(cc); gCount[pp]++;
+    }
+    // lineage colours: each root a golden-ratio hue; descendants inherit
+    const rootOf = new Array(gN).fill(-1);
+    const root = (n) => { let x = n; const st = []; while (gParent[x] >= 0 && rootOf[x] < 0) { st.push(x); x = gParent[x]; }
+      const r = rootOf[x] >= 0 ? rootOf[x] : x; for (const y of st) rootOf[y] = r; rootOf[x] = r; return r; };
+    const rcol = {}; let ri = 0; gColor = new Array(gN);
+    for (let i = 0; i < gN; i++) { const r = root(i); if (!(r in rcol)) { rcol[r] = hsv((ri * 0.6180339887) % 1, 0.62, 0.95); ri++; } gColor[i] = rcol[r]; }
+    gHubs = Array.from({ length: gN }, (_, i) => i).filter((i) => gCount[i] > 0).sort((a, b) => gCount[b] - gCount[a]).slice(0, 16);
+    gComputeBoard();
+    gLoadTitles();
+  }
+  // Most-Branched board step-function (faithful to leaderboard.py: live child
+  // counts, re-ranked every EV publications, ties by final count then index).
+  function gComputeBoard() {
+    const K = 10, EV = 4, cnt = new Array(gN).fill(0); let cur = [], se = 0; gBoard = [];
+    for (let i = 0; i < gN; i++) {
+      const p = gParent[i]; if (p >= 0) cnt[p]++;
+      if (++se >= EV || i === gN - 1) {
+        se = 0;
+        const arr = []; for (let j = 0; j < gN; j++) if (cnt[j] > 0) arr.push(j);
+        arr.sort((a, b) => (cnt[b] - cnt[a]) || (gCount[b] - gCount[a]) || (a - b));
+        const nb = arr.slice(0, K);
+        if (nb.length !== cur.length || nb.some((x, ix) => x !== cur[ix])) { cur = nb; gBoard.push({ count: i + 1, board: nb }); }
+      }
+    }
+  }
+  function gLoadTitles() {                            // best-effort: tree sidecar, dense `ti` or nodes keyed img_{i+1:06d}
+    gTitles = null;
+    if (!window.DecompressionStream) return;
+    fetch("breed/data/tree/" + run + ".json.gz").then((r) => { if (!r.ok) throw 0; return new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).json(); })
+      .then((d) => { if (gAtlasImg) return;           // trio data already supplied its own titles — don't clobber
+        const nd = d.nodes || {}, t = new Array(gN);
+        for (let i = 0; i < gN; i++) { const n = nd["img_" + String(i + 1).padStart(6, "0")]; if (n && n.t) t[i] = n.t; }
+        if (d.ti) for (let i = 0; i < gN; i++) { if (d.ti[i]) t[i] = d.ti[i]; }
+        gTitles = t; if (growing) gSetP(gP); }).catch(() => {});
+  }
+  // Fetch the pre-baked trio_demo assets for this run (resolves to gTrio, or null if absent).
+  // Path is relative to this viewer (a local asset), independent of the HF archive base.
+  function trioLoad() {
+    if (gTrioPromise) return gTrioPromise;
+    const base = "assets/trio_demo/" + run;
+    gTrioPromise = Promise.all([
+      fetch(base + "/phylo.json").then((r) => { if (!r.ok) throw 0; return r.json(); }),
+      fetch(base + "/leaderboard.json").then((r) => { if (!r.ok) throw 0; return r.json(); }),
+      new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = base + "/atlas.jpg"; })
+    ]).then((out) => (gTrio = { phylo: out[0], lb: out[1], atlas: out[2] })).catch(() => (gTrio = null));
+    return gTrioPromise;
+  }
+  // Overwrite the recompute-derived growth state with the pre-baked trio data so the viewer
+  // renders exactly what the inline #trio figure does (positions, lineage colours, board
+  // timeline, titles) and blits from the same compact atlas. Caller must re-run gLayout().
+  function trioApply() {
+    const P = gTrio.phylo, L = gTrio.lb;
+    gN = P.n;
+    gSfdp = P.nodes.map((nd) => [nd.x, nd.y]);
+    gParent = P.nodes.map((nd) => nd.p);
+    gChildren = Array.from({ length: gN }, () => []);
+    gCount = new Array(gN).fill(0);
+    gColor = new Array(gN);
+    for (let i = 0; i < gN; i++) { const p = gParent[i]; if (p >= 0) { gChildren[p].push(i); gCount[p]++; } gColor[i] = P.nodes[i].col; }
+    gBoard = L.timeline.slice();                       // [{count, board}] — same shape boardAt() expects
+    gTitles = L.items.map((it) => (it && it.t) || "");
+    gAtlasImg = P.cols && P.cell ? gTrio.atlas : null; gAtlasCell = P.cell; gAtlasCols = P.cols;
+  }
+  const boardAt = (count) => { const tl = gBoard; let lo = 0, hi = tl.length - 1, res = []; while (lo <= hi) { const m = (lo + hi) >> 1; if (tl[m].count <= count) { res = tl[m].board; lo = m + 1; } else hi = m - 1; } return res; };
+  const gCurCount = (idx, f) => { const ch = gChildren[idx]; let c = 0; for (let k = 0; k < ch.length; k++) if (ch[k] < f) c++; return c; };
+
+  function gLayout() {
+    const gap = 14, Wc = ($("stage").clientWidth || document.body.clientWidth || 960);
+    const H = clamp((Wc - 2 * gap) / (PHY_ASPECT + LB_RATIO + RE_RATIO), 340, 720);
+    PH = LH = RH = Math.round(H);
+    PW = Math.round(H * PHY_ASPECT); LW = Math.round(H * LB_RATIO); RW = Math.round(H * RE_RATIO);
+    gPhyCtx = sizeC(gPhy, PW, PH); gLbCtx = sizeC(gLb, LW, LH); gReelCtx = sizeC(gReel, RW, RH);
+    pTH = 7;                                               // fixed thumb px, matching the inline #trio figure (PH_TH)
+    const m = 14, iw = PW - 2 * m, ih = PH - 2 * m;        // per-axis stretch of unit-square sfdp into the portrait panel (inline margin)
+    pPx = new Array(gN); pPy = new Array(gN);
+    for (let i = 0; i < gN; i++) { pPx[i] = m + gSfdp[i][0] * iw; pPy[i] = m + gSfdp[i][1] * ih; }
+    pInitBuf(); postGrowthState();
+  }
+  function pInitBuf() {
+    pEdgeBuf = document.createElement("canvas"); pNodeBuf = document.createElement("canvas");
+    pEdgeBuf.width = pNodeBuf.width = gPhy.width; pEdgeBuf.height = pNodeBuf.height = gPhy.height;
+    pECtx = pEdgeBuf.getContext("2d"); pNCtx = pNodeBuf.getContext("2d");
+    pECtx.setTransform(dpr, 0, 0, dpr, 0, 0); pNCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    pECtx.lineCap = "round"; pBuilt = 0;
+  }
+  const pEdgeW = () => 1.3;                               // fixed lineage-edge width, matching the inline #trio figure (EDGE_W)
+  function pBake(toInt) {
+    if (toInt < pBuilt) { pECtx.clearRect(0, 0, PW, PH); pNCtx.clearRect(0, 0, PW, PH); pBuilt = 0; }
+    pECtx.lineWidth = pEdgeW();
+    for (let i = pBuilt; i < toInt; i++) {
+      const p = gParent[i];
+      if (p >= 0) { const c = gColor[i]; pECtx.strokeStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+        pECtx.beginPath(); pECtx.moveTo(pPx[p], pPy[p]); pECtx.lineTo(pPx[i], pPy[i]); pECtx.stroke(); }
+      gblit(pNCtx, i, pPx[i] - pTH / 2, pPy[i] - pTH / 2, pTH, pTH);
+    }
+    pBuilt = toInt;
+  }
+  function drawPhy(f) {
+    const fInt = Math.min(gN, Math.floor(f)), ctx = gPhyCtx;
+    pBake(fInt);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, gPhy.width, gPhy.height);
+    ctx.drawImage(pEdgeBuf, 0, 0); ctx.drawImage(pNodeBuf, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.imageSmoothingEnabled = false;
+    for (const idx of boardAt(fInt)) {                    // enlarge the CURRENT leaderboard members (matches the inline #trio figure)
+      if (idx >= fInt) continue; const cnt = gCurCount(idx, fInt);
+      const sz = pTH * (2.2 + Math.min(1, cnt / 40) * 1.6), cx = pPx[idx], cy = pPy[idx];
+      gblit(ctx, idx, cx - sz / 2, cy - sz / 2, sz, sz);
+      const c = gColor[idx]; ctx.strokeStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; ctx.lineWidth = 1.4;
+      ctx.strokeRect(cx - sz / 2, cy - sz / 2, sz, sz);
+    }
+    const SPAWN = 7; ctx.lineWidth = pEdgeW() + 0.8;       // fixed spawn-flash window, matching the inline #trio figure
+    for (let s = fInt - 1; s >= Math.max(0, fInt - SPAWN); s--) {
+      const a = 1 - (f - (s + 1)) / SPAWN; if (a <= 0) continue; const p = gParent[s]; if (p < 0) continue; const c = gColor[s];
+      ctx.globalAlpha = a; ctx.strokeStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+      ctx.beginPath(); ctx.moveTo(pPx[p], pPy[p]); ctx.lineTo(pPx[s], pPy[s]); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function roundRect(c, x, y, w, h, r) { r = Math.min(r, h / 2, w / 2); c.beginPath();
+    c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  function trunc(c, t, maxw) { if (c.measureText(t).width <= maxw) return t; while (t.length && c.measureText(t + "…").width > maxw) t = t.slice(0, -1); return t.replace(/\s+$/, "") + "…"; }
+  function drawLb(f, dt) {
+    const fInt = Math.min(gN, Math.floor(f)), ctx = gLbCtx, K = 10, margin = 12, BAR_H = 26, HEAD_H = BAR_H + 18;
+    ctx.clearRect(0, 0, LW, LH);
+    const rowH = (LH - HEAD_H - margin) / K, cell = Math.min(rowH - 8, 62);
+    // fullness bar: one overlapping tile per ~1px column (stable as it fills) + gold leading edge
+    const bx0 = margin, by0 = 8, bw = LW - 2 * margin, card = BAR_H, span = Math.max(1, bw - card);
+    ctx.fillStyle = TRACK; roundRect(ctx, bx0, by0, bw, card, 4); ctx.fill();
+    if (fInt > 0) {
+      const xl = bx0 + span * ((fInt - 1) / Math.max(1, gN - 1));
+      for (let x = bx0; x <= xl + 0.001; x += 1) { const i = Math.round(((x - bx0) / span) * (gN - 1)); if (i < 0 || i >= fInt) continue; gblit(ctx, i, x, by0, card, card); }
+      gblit(ctx, fInt - 1, xl, by0, card, card);
+      ctx.strokeStyle = GOLD; ctx.lineWidth = 2; ctx.strokeRect(xl, by0, card, card);
+    }
+    const board = boardAt(fInt), rankOf = {}; board.forEach((idx, r) => rankOf[idx] = r);
+    const k = dt ? Math.min(1, dt * 9) : 1;
+    board.forEach((idx, r) => { const ty = HEAD_H + r * rowH; if (!lbDisp[idx]) lbDisp[idx] = { y: ty, a: 0 }; lbDisp[idx].y = lerp(lbDisp[idx].y, ty, k); lbDisp[idx].a = lerp(lbDisp[idx].a, 1, k); });
+    for (const id in lbDisp) { if (!(id in rankOf)) { lbDisp[id].a = lerp(lbDisp[id].a, 0, k); if (lbDisp[id].a < 0.02) delete lbDisp[id]; } }
+    let ref = 1; for (const idx of board) ref = Math.max(ref, gCurCount(idx, fInt));
+    Object.keys(lbDisp).sort((a, b) => lbDisp[b].a - lbDisp[a].a).forEach((idStr) => {
+      const idx = +idStr, st = lbDisp[idStr]; if (st.a <= 0.02) return;
+      const rank = (idStr in rankOf) ? rankOf[idStr] : 99;
+      ctx.save(); ctx.globalAlpha = st.a;
+      ctx.fillStyle = rank === 0 ? "#fff8e8" : (rank % 2 ? ROWALT : "#fff"); ctx.fillRect(margin, st.y, LW - 2 * margin, rowH - 3);
+      ctx.fillStyle = rank === 0 ? GOLD : MUT; ctx.font = "bold 20px Georgia,serif"; ctx.textBaseline = "middle"; ctx.textAlign = "center";
+      ctx.fillText(rank + 1 < 100 ? String(rank + 1) : "", margin + 16, st.y + rowH / 2);
+      const tx = margin + 34, ty = st.y + (rowH - cell) / 2; gblit(ctx, idx, tx, ty, cell, cell);
+      ctx.strokeStyle = rank === 0 ? GOLD : "#ddd"; ctx.lineWidth = rank === 0 ? 2 : 1; ctx.strokeRect(tx, ty, cell, cell);
+      const textX = tx + cell + 12, cnt = gCurCount(idx, fInt), title = (gTitles && gTitles[idx]) || "";
+      ctx.textAlign = "left"; ctx.fillStyle = INK; ctx.font = "bold 14px Georgia,serif";
+      if (title) ctx.fillText(trunc(ctx, title, LW - margin - textX - 4), textX, ty + 11);
+      const mbw = Math.min(110, LW - margin - textX - 46), bh = 15, sy = ty + (title ? 30 : cell / 2 - bh / 2);
+      ctx.fillStyle = TRACK; roundRect(ctx, textX, sy, mbw, bh, bh / 2); ctx.fill();
+      const fw = Math.max(0, Math.min(1, cnt / ref)) * mbw; if (fw >= bh) { ctx.fillStyle = GOLD; roundRect(ctx, textX, sy, fw, bh, bh / 2); ctx.fill(); }
+      ctx.fillStyle = INK; ctx.font = "bold 14px Georgia,serif"; ctx.fillText(String(cnt), textX + mbw + 8, sy + bh / 2 + 1);
+      ctx.restore();
+    });
+  }
+
+  function drawReel(f) {
+    const ctx = gReelCtx; ctx.clearRect(0, 0, RW, RH); ctx.imageSmoothingEnabled = false;
+    const cols = 7, gap = 4, tile = (RW - (cols + 1) * gap) / cols, step = tile + gap;
+    const vrows = RH / step, revealed = f / cols, maxRow = Math.floor(revealed), fInt = Math.floor(f);
+    let first = Math.floor(revealed - vrows - 1); if (first < 0) first = 0;
+    for (let r = first; r < Math.ceil(revealed + 1); r++) {
+      if (r > maxRow) continue; const yy = (vrows - revealed + r) * step + gap; if (yy > RH || yy < -step) continue;
+      for (let c = 0; c < cols; c++) { const i = r * cols + c; if (i >= gN) break;
+        if (i >= fInt) continue;   // discrete: each tile pops in at full opacity once published (no fade)
+        gblit(ctx, i, gap + c * step, Math.round(yy), tile, tile); }
+    }
+  }
+
+  function gSetP(np, dt) {
+    gP = clamp(np, 0, 1); const f = gP * gN;
+    drawPhy(f); drawLb(f, dt); drawReel(f);
+    if (gSeek) gSeek.value = Math.round(gP * 1000);
+    if (gTime) gTime.textContent = Math.min(gN, Math.floor(f)) + " / " + gN;
+  }
+  function gSetPlaying(v) { gPlaying = v; if (gPlayBtn) gPlayBtn.textContent = gPlaying ? "❚❚" : "▶"; postGrowthState(); }
+  function growthFrame(ts) {
+    if (!growing) return;
+    if (gPlaying) { if (gLast == null) gLast = ts; const dt = (ts - gLast) / 1000; gLast = ts; let np = gP + dt * GROWTH_RATE / gN; if (np >= 1) np = 0; gSetP(np, dt); }
+    else { gLast = null; gSetP(gP, 1 / 60); }       // keep easing the leaderboard while paused
+    gRAF = requestAnimationFrame(growthFrame);
+  }
+  function gBuild() {
+    gStage = document.createElement("div"); gStage.id = "growth-stage";
+    gStage.style.cssText = "display:flex;gap:14px;justify-content:center;align-items:flex-start;flex-wrap:nowrap;";
+    const gPanel = (title) => {
+      const d = document.createElement("div"); d.style.cssText = "display:flex;flex-direction:column;";
+      const h = document.createElement("div"); h.textContent = title;
+      h.style.cssText = "font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#8c8c8c;margin:0 0 7px;";
+      d.appendChild(h); gStage.appendChild(d); return d;
+    };
+    gPhy = newCanvas(gPanel("Phylogeny growth")); gLb = newCanvas(gPanel("Most-Branched leaderboard")); gReel = newCanvas(gPanel("Publication reel"));
+    gCtl = document.createElement("div"); gCtl.id = "growth-ctl";
+    gCtl.style.cssText = "display:flex;align-items:center;gap:10px;max-width:680px;margin:10px auto 0;";
+    gPlayBtn = document.createElement("button"); gPlayBtn.type = "button"; gPlayBtn.textContent = "❚❚";
+    gPlayBtn.style.cssText = "flex:0 0 auto;width:30px;height:30px;border:1px solid #ccc;background:#fafafa;border-radius:50%;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;padding:0;line-height:1;";
+    gSeek = document.createElement("input"); gSeek.type = "range"; gSeek.min = 0; gSeek.max = 1000; gSeek.value = 0; gSeek.step = 1;
+    gSeek.style.cssText = "flex:1;accent-color:var(--accent);cursor:pointer;";
+    gTime = document.createElement("span"); gTime.style.cssText = "font-variant-numeric:tabular-nums;font-size:12px;color:#777;min-width:6.5em;text-align:right;";
+    gPlayBtn.onclick = () => gSetPlaying(!gPlaying);
+    gSeek.oninput = () => { gSetPlaying(false); gSetP(gSeek.value / 1000, 1); };
+    gCtl.append(gPlayBtn, gSeek, gTime);
+    $("stage").append(gStage, gCtl);
+  }
+  function enterGrowth() {
+    if (growing) return;
+    if (immersed || immScatter) { document.exitPointerLock && document.exitPointerLock(); }
+    growing = true; infoMode = false; currentKey = "growth"; setActiveBtn("growth"); loupe.classList.remove("on"); status(GROWTH_STATUS); updateHint();
+    cv.style.display = "none";                       // hide the single-grid canvas; the triptych takes over
+    lbDisp = {}; growthPrep(); if (gTrio) trioApply(); gBuild(); gLayout();
+    gP = (gInitP != null ? gInitP : 0);
+    gPlaying = (gInitPlaying != null ? gInitPlaying : true);
+    gInitP = gInitPlaying = null;               // one-shot: only the entry from the hand-off is seeked
+    gLast = null; gPlayBtn.textContent = gPlaying ? "❚❚" : "▶"; gSetP(gP, 1); postHeight(); postGrowthState();
+    cancelAnimationFrame(gRAF); gRAF = requestAnimationFrame(growthFrame);
+    // If the pre-baked trio data isn't in hand yet, fetch it and swap to the exact-match
+    // renderer as soon as it arrives (one reflow; the recompute frame shows meanwhile).
+    if (!gTrio) trioLoad().then(() => { if (growing && gTrio && !gAtlasImg) { trioApply(); gLayout(); gSetP(gP, 1); postHeight(); postGrowthState(); } });
+  }
+  function exitGrowth() {
+    if (!growing) return;
+    growing = false; cancelAnimationFrame(gRAF); gRAF = 0;
+    if (gStage) { gStage.remove(); gStage = null; }
+    if (gCtl) { gCtl.remove(); gCtl = null; gSeek = gPlayBtn = gTime = null; }
+    cv.style.display = ""; status(DEFAULT_STATUS); updateHint();
+  }
+  // ---- "Morph": the scrubbable phylogeny morph viewer, embedded as an iframe ----
+  // Reuses the standalone breed/sfdp-morph-demo.html (WebGL CPPN morph along the neato
+  // phylogeny + walk mode) keyed to THIS run. Offered only when the run has a prebuilt
+  // morph layout (hasMorph) — the button greys out otherwise. Mirrors the Growth pattern:
+  // hide the single-grid canvas and mount our own UI (here, one iframe) over the stage.
+  let morphMode = false, mIframe = null;
+  function enterMorph() {
+    if (morphMode) return;
+    if (growing) exitGrowth();
+    if (immersed || immScatter) { document.exitPointerLock && document.exitPointerLock(); }
+    morphMode = true; infoMode = false; currentKey = "morph"; setActiveBtn("morph"); loupe.classList.remove("on"); status(""); updateHint();
+    cv.style.display = "none";                       // the embedded morph viewer takes over the stage
+    const ab = params.get("archiveBase");
+    mIframe = document.createElement("iframe");
+    mIframe.src = "breed/sfdp-morph-demo.html?embed=1&run=" + encodeURIComponent(run) +
+                  (ab ? "&archiveBase=" + encodeURIComponent(ab) : "");
+    mIframe.setAttribute("scrolling", "no");
+    mIframe.setAttribute("allowfullscreen", "");        // let the morph viewport go fullscreen (click to expand)
+    mIframe.setAttribute("allow", "fullscreen");
+    mIframe.style.cssText = "display:block;width:100%;height:720px;border:0;border-radius:4px;";
+    $("stage").appendChild(mIframe);
+    postHeight();
+  }
+  function exitMorph() {
+    if (!morphMode) return;
+    morphMode = false;
+    if (mIframe) { mIframe.remove(); mIframe = null; }
+    cv.style.display = ""; status(DEFAULT_STATUS); updateHint();
+  }
+  // ---- "Transcripts": the per-agent newsreel, embedded as an iframe -------------
+  // Reuses the standalone transcripts/index.html (parallel agent columns of what each
+  // agent saw + said) pinned to THIS run via ?run=. Offered only when the run has a
+  // built transcript wall (hasTranscripts) — greyed out otherwise. Mirrors the Morph
+  // pattern: hide the single-grid canvas and mount one iframe over the stage.
+  let transMode = false, tIframe = null;
+  function enterTranscripts() {
+    if (transMode) return;
+    if (growing) exitGrowth();
+    if (morphMode) exitMorph();
+    if (immersed || immScatter) { document.exitPointerLock && document.exitPointerLock(); }
+    transMode = true; infoMode = false; currentKey = "transcripts"; setActiveBtn("transcripts"); loupe.classList.remove("on"); status(""); updateHint();
+    cv.style.display = "none";                       // the embedded newsreel takes over the stage
+    const ab = params.get("archiveBase");
+    tIframe = document.createElement("iframe");
+    tIframe.src = "transcripts/index.html?embed=1&run=" + encodeURIComponent(run) +
+                  (ab ? "&archiveBase=" + encodeURIComponent(ab) : "");
+    tIframe.setAttribute("allow", "fullscreen");
+    tIframe.style.cssText = "display:block;width:100%;height:760px;border:0;border-radius:4px;";
+    $("stage").appendChild(tIframe);
+    postHeight();
+  }
+  function exitTranscripts() {
+    if (!transMode) return;
+    transMode = false;
+    if (tIframe) { tIframe.remove(); tIframe = null; }
+    cv.style.display = ""; status(DEFAULT_STATUS); updateHint();
+  }
+  // jump straight to a stored ordering (used when leaving growth — there's no
+  // meaningful morph FROM the growth state, so we snap rather than tween)
+  function jumpTo(key) {
+    if (!infoEligible(key)) infoMode = false;   // info mode belongs only to the ranked grids
+    currentKey = key; setActiveBtn(key);
+    if (isScatter(key)) gridDims = null; else { gridDims = layout.layouts[key].dims; buildGridIndex(key); }
+    sizeCanvas(); edgeCache.clear(); redraw(); centerPhyScroll(); postHeight();   // canvas geometry differs grid<->tree -> resize + restroke
+    if (infoEligible(key)) maybeInfoHint(); else if (!isScatter(key)) status(DEFAULT_STATUS);
+  }
+  // unified entry from either the local toggle or the host's sticky toggle
+  function selectOrder(k) {
+    dropFocus();   // an explicit view change drops the parked focus
+    if (k === "morph") { if (growing) exitGrowth(); if (transMode) exitTranscripts(); if (!morphMode) enterMorph(); return; }
+    if (k === "transcripts") { if (growing) exitGrowth(); if (morphMode) exitMorph(); if (!transMode) enterTranscripts(); return; }
+    if (k === "growth") { if (morphMode) exitMorph(); if (transMode) exitTranscripts(); if (!growing) enterGrowth(); return; }
+    if (morphMode) { exitMorph(); jumpTo(k); return; }
+    if (transMode) { exitTranscripts(); jumpTo(k); return; }
+    if (growing) { exitGrowth(); jumpTo(k); }
+    else if (layout.layouts[k]) {
+      // A morph is mid-flight: remember only the LATEST request and apply it once the
+      // current one lands (drainPending). Without this, clicks during the 650ms tween were
+      // silently dropped even though the host toggle had already highlighted the new button.
+      if (morphing) { pendingKey = k; return; }
+      const wasInfo = infoMode;
+      if (infoMode && !infoEligible(k)) infoMode = false;   // leaving the ranked grids drops info mode
+      // grid<->tree change the canvas geometry (fit rect vs. enlarged scrolling square) -> snap; same-kind morphs animate.
+      // Any transition into/out of / within the info layout also snaps (positions + captions change, no meaningful tween).
+      if (isScatter(k) !== isScatter(currentKey) || wasInfo) jumpTo(k); else morphTo(k);
+    }
+  }
+  // apply an ordering requested while a morph was animating (keeps only the last click)
+  function drainPending() {
+    if (pendingKey === null) return;
+    const nk = pendingKey; pendingKey = null;
+    if (nk !== currentKey) selectOrder(nk);
+  }
+
+  function relayout() {
+    if (morphMode || transMode) { postHeight(); return; }   // the embedded morph/transcript iframe sizes itself; just re-report height
+    if (growing) {
+      gLayout(); gSetP(gP, 1); postHeight();
+    } else if (immScatter) {
+      sizeCanvasScatterImmersive();
+      drawScatterImmersive();
+    } else if (immersed) {
+      sizeCanvasImmersive();
+      drawImmersive();                       // wraps -> no pan clamp needed
+    } else {
+      { const st = $("stage"); st.style.width = ""; st.style.height = ""; }   // clear the scatter box so computeDC measures the FULL width, not the square we set
+      DC = computeDC(); sizeCanvas(); edgeCache.clear(); redraw(); centerPhyScroll(); postHeight();   // canvas resized -> branch rasters stale
+    }
+  }
+
+  // ---- hover loupe ----
+  function initLoupe() { loupe.width = LENS * dpr; loupe.height = LENS * dpr; loupe.style.width = loupe.style.height = LENS + "px"; }
+  function drawLoupe(mx, my) {
+    const N = SP.cell;                                  // source cells are always sampled at full native res
+    const M = DC + (N - DC) * LOUPE_FRAC;               // on-screen cell size in the loupe: 2/3 of the way grid->full
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0); lctx.imageSmoothingEnabled = false;
+    lctx.fillStyle = "#eee"; lctx.fillRect(0, 0, LENS, LENS);
+    const colf = mx / DC, rowf = my / DC, rad = Math.ceil((LENS / 2) / M) + 1;
+    const cc = Math.floor(colf), rr = Math.floor(rowf);
+    for (let row = rr - rad; row <= rr + rad; row++)
+      for (let col = cc - rad; col <= cc + rad; col++) {
+        const i = gridIndex.get(row + "," + col); if (i === undefined) continue;
+        const img = sheetImgs[Math.floor(i / SP.per_sheet)];
+        if (!img || !img.complete || !img.naturalWidth) continue;
+        const p = packPos(SP, i);
+        lctx.drawImage(img, p.sx, p.sy, N, N,
+          LENS / 2 + (col + 0.5 - colf) * M - M / 2, LENS / 2 + (row + 0.5 - rowf) * M - M / 2, M, M);
+      }
+  }
+  // loupe over the phylogeny tree: magnify the free-positioned thumbnails around
+  // the cursor (no grid index -> a direct spatial scan of the current positions).
+  function drawLoupeScatter(mx, my) {
+    const N = SP.cell, C = phyCell(), M = C + (N - C) * LOUPE_FRAC, Z = M / C;   // Z: tree px -> loupe px
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0); lctx.imageSmoothingEnabled = false;
+    lctx.fillStyle = "#eee"; lctx.fillRect(0, 0, LENS, LENS);
+    const pos = posOf(currentKey), reach = (LENS / 2) / Z + C;     // tree-space radius to include
+    if (scatterEdges) {                                             // faint branches inside the loupe too
+      lctx.globalAlpha = 0.35; lctx.strokeStyle = "#555"; lctx.lineWidth = Math.max(0.5, M * 0.04);
+      lctx.beginPath();
+      for (let k = 0; k < scatterEdges.length; k++) {
+        const a = pos[scatterEdges[k][0]], b = pos[scatterEdges[k][1]]; if (!a || !b) continue;
+        if (Math.min(a[0], b[0]) > mx + reach || Math.max(a[0], b[0]) < mx - reach ||
+            Math.min(a[1], b[1]) > my + reach || Math.max(a[1], b[1]) < my - reach) continue;
+        lctx.moveTo(LENS / 2 + (a[0] + C / 2 - mx) * Z, LENS / 2 + (a[1] + C / 2 - my) * Z);
+        lctx.lineTo(LENS / 2 + (b[0] + C / 2 - mx) * Z, LENS / 2 + (b[1] + C / 2 - my) * Z);
+      }
+      lctx.stroke(); lctx.globalAlpha = 1;
+    }
+    for (let i = pos.length - 1; i >= 0; i--) {          // newest-first -> older parent on top (match the canvas)
+      if (Math.abs(pos[i][0] - mx) > reach || Math.abs(pos[i][1] - my) > reach) continue;
+      const img = sheetImgs[Math.floor(i / SP.per_sheet)];
+      if (!img || !img.complete || !img.naturalWidth) continue;
+      const p = packPos(SP, i);
+      lctx.drawImage(img, p.sx, p.sy, N, N, LENS / 2 + (pos[i][0] - mx) * Z, LENS / 2 + (pos[i][1] - my) * Z, M, M);
+    }
+  }
+
+  // ---- programmatic focus (hero double-click) ----
+  // Park the loupe on one image, addressed by its 0-based publication index, and
+  // ask the host to scroll it to the centre of the viewport. We snap to the
+  // chronological grid first so publication index == sprite index == grid slot.
+  //
+  // No page can move the OS pointer (Pointer Lock hides it, it doesn't relocate it), so
+  // we don't try. The physical cursor stays wherever the reader left it and keeps its
+  // crosshair; the loupe simply waits on the focused image, ringed, and the hover loupe
+  // is suppressed so there is only ever one. Sweeping the cursor into the parked loupe's
+  // disc picks it up: the loupe glides the last stretch to meet the cursor, and once it
+  // has caught up the normal hover loupe takes over. Nothing is ever teleported.
+  const FOCUS_STATUS = "The loupe is parked on your image—sweep the cursor into the ring to pick it up.";
+  let focusIdx = null;              // parked image index, or null when no focus is parked
+  let focusCX = 0, focusCY = 0;     // loupe centre, canvas CSS px
+  let focusTX = 0, focusTY = 0;     // cursor, canvas CSS px — the glide target once grabbed
+  let focusCliX = 0, focusCliY = 0; // same cursor in client px, for the hand-off to the fixed hover loupe
+  let focusGrab = false;            // cursor is inside the disc; the loupe is gliding to meet it
+  let focusRAF = 0;
+  function focusCenterOf(index) {                 // [cx,cy] CSS-px centre of the chrono cell, or null
+    const L = layout.layouts.chronological; if (!L || !L.rc[index]) return null;
+    const p = L.rc[index];                        // [row, col]
+    return [p[1] * DC + DC / 2, p[0] * DC + DC / 2];
+  }
+  function placeFocusLoupe() {                     // paint + position the loupe at focusCX/CY (document coords)
+    drawLoupe(focusCX, focusCY);
+    const rect = cv.getBoundingClientRect();
+    loupe.style.left = (rect.left + window.scrollX + focusCX - LENS / 2) + "px";
+    loupe.style.top  = (rect.top  + window.scrollY + focusCY - LENS / 2) + "px";
+  }
+  function refreshFocusLoupe() {                   // redraw the parked loupe (e.g. as sheets stream in)
+    if (focusIdx === null) return;
+    // While parked, stay pinned to the focused cell, whose on-canvas centre can still
+    // shift as DC/layout settle. Once grabbed, the glide owns the position.
+    if (!focusGrab) { const c = focusCenterOf(focusIdx); if (!c) return; focusCX = c[0]; focusCY = c[1]; }
+    placeFocusLoupe();
+  }
+  function dropFocus() {                           // abandon the park entirely (view change, immersive exit)
+    if (focusIdx === null) return;
+    focusIdx = null; focusGrab = false;
+    if (focusRAF) { cancelAnimationFrame(focusRAF); focusRAF = 0; }
+    loupe.classList.remove("focus", "on");
+  }
+  function focusCaught() {                         // the loupe reached the cursor: hand it to the hover path
+    focusIdx = null; focusGrab = false; focusRAF = 0;
+    loupe.classList.remove("focus");               // back to viewport-fixed, cursor-tracking
+    drawLoupe(focusTX, focusTY);
+    loupe.style.left = (focusCliX - LENS / 2) + "px";
+    loupe.style.top  = (focusCliY - LENS / 2) + "px";
+    status(DEFAULT_STATUS);
+  }
+  function focusStep() {                           // ease the loupe toward the cursor, ~4 frames of catch-up
+    focusRAF = 0;
+    const dx = focusTX - focusCX, dy = focusTY - focusCY;
+    if (Math.hypot(dx, dy) < 1.5) { focusCaught(); return; }
+    focusCX += dx * 0.28; focusCY += dy * 0.28;
+    placeFocusLoupe();
+    focusRAF = requestAnimationFrame(focusStep);
+  }
+  function focusImage(index) {
+    if (immersed || immScatter) return;
+    if (morphMode) exitMorph();
+    if (transMode) exitTranscripts();
+    if (growing) exitGrowth();
+    if (currentKey !== "chronological" && layout.layouts.chronological) jumpTo("chronological");
+    const c = focusCenterOf(index); if (!c) return;
+    focusIdx = index; focusGrab = false;
+    focusCX = c[0]; focusCY = c[1];
+    loupe.classList.add("focus", "on");
+    status(FOCUS_STATUS);
+    refreshFocusLoupe();
+    // tell the host where (in this iframe's document) the focused cell sits, so it
+    // can scroll the parent page to bring it to the centre of the screen.
+    try { window.parent.postMessage({ pbvlmFocusY: cv.getBoundingClientRect().top + window.scrollY + c[1] }, "*"); } catch (e) {}
+  }
+
+  // ---- immersive (fullscreen + pointer-locked relative pan) ----
+  // Click enters fullscreen so the full-res pan gets a viewport-shaped frame even when
+  // the inline grid is taller than the screen, then locks the pointer (the recommended
+  // order: request the lock once fullscreen is live). Losing either tears the mode down,
+  // so one Esc returns cleanly to the inline grid.
+  const stage = $("stage");
+  let entryCtr = [0, 0];   // loupe-center point in full-res archive coords at click time
+  function sizeCanvasImmersive() {        // fill the screen in fullscreen; else fall back to the inline canvas box
+    const fs = document.fullscreenElement === stage;
+    const w = fs ? window.innerWidth : parseFloat(cv.style.width);
+    const h = fs ? window.innerHeight : parseFloat(cv.style.height);
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  function startImmersive() {             // fullscreen now live (or unavailable) -> size, center on the loupe point, lock
+    sizeCanvasImmersive();
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    panX = entryCtr[0] - w / 2;           // put the loupe-center full-res point at the viewport center
+    panY = entryCtr[1] - h / 2;
+    if (infoOn()) clampInfoPan();          // info layout is finite (no wrap) -> keep the pan inside it
+    updateHint();                          // clear the grid/info cue while the grid is fullscreen
+    pokeCrosshair();                        // show the centre crosshair on entry (fades out when the camera holds still)
+    drawImmersive();
+    cv.requestPointerLock && cv.requestPointerLock();
+  }
+  function enterImmersive(mx, my) {
+    immersed = true; gz = 1; cv.classList.add("immersed"); loupe.classList.remove("on");
+    { const st = $("stage"); st.classList.remove("phscroll"); st.style.height = ""; }   // drop the bounded viewport for fullscreen
+    const N = SP.cell;
+    entryCtr = infoOn() ? [mx / infoScale, my / infoScale]   // info layout: overview px -> native (SP.cell-unit) coords
+                        : [(mx / DC) * N, (my / DC) * N];     // loupe center -> full-res archive coords
+    cv.addEventListener("wheel", gridWheel, { passive: false });
+    const req = stage.requestFullscreen && stage.requestFullscreen();
+    if (req && req.then) req.then(() => {}).catch(startImmersive);  // success -> fullscreenchange starts it; failure -> inline
+    else if (!stage.requestFullscreen) startImmersive();           // no fullscreen API at all -> inline immersive
+  }
+  function exitImmersive() {
+    if (!immersed) return;
+    immersed = false; cv.classList.remove("immersed");
+    chShow = false; if (chTimer) { clearTimeout(chTimer); chTimer = 0; }   // drop the immersive crosshair
+    // drop any parked focus we entered from; the grid returns to normal crosshair hover.
+    dropFocus();
+    cv.removeEventListener("wheel", gridWheel);
+    if (document.pointerLockElement === cv) document.exitPointerLock && document.exitPointerLock();
+    if (document.fullscreenElement === stage) document.exitFullscreen && document.exitFullscreen();
+    sizeCanvas(); redraw(); postHeight();
+  }
+  function onLockedMove(e) {
+    pokeCrosshair();
+    if (infoOn()) { panX += e.movementX * PAN_SPEED; panY += e.movementY * PAN_SPEED; clampInfoPan(); drawImmersive(); return; }
+    const [VW, VH] = archiveExtent();          // wrap the pan so it roams the archive endlessly
+    panX = (((panX + e.movementX * PAN_SPEED) % VW) + VW) % VW;
+    panY = (((panY + e.movementY * PAN_SPEED) % VH) + VH) % VH;
+    drawImmersive();
+  }
+  // wheel/pinch zoom for the grid immersive view, toward the cursor (viewport center when
+  // pointer-locked) — mirrors the phylogeny tree's scWheel so every fullscreen mode zooms.
+  function gridWheel(e) {
+    e.preventDefault();
+    pokeCrosshair();
+    const r = cv.getBoundingClientRect();
+    const cx = (document.pointerLockElement === cv) ? r.width / 2 : e.clientX - r.left;
+    const cy = (document.pointerLockElement === cv) ? r.height / 2 : e.clientY - r.top;
+    const zn = clamp(gz * Math.exp(-e.deltaY * 0.0015), 0.1, 30), f = zn / gz;
+    panX = (panX + cx) * f - cx;                // keep the point under the cursor fixed across the zoom
+    panY = (panY + cy) * f - cy;
+    gz = zn;
+    if (infoOn()) { clampInfoPan(); drawImmersive(); return; }   // finite info layout: clamp instead of wrap
+    const [VW, VH] = archiveExtent();           // re-wrap into the (now rescaled) archive period
+    panX = ((panX % VW) + VW) % VW; panY = ((panY % VH) + VH) % VH;
+    drawImmersive();
+  }
+  document.addEventListener("pointerlockchange", () => {
+    if (document.pointerLockElement === cv) {
+      document.addEventListener("mousemove", immScatter ? scLockedMove : onLockedMove);
+    } else {
+      document.removeEventListener("mousemove", onLockedMove);
+      document.removeEventListener("mousemove", scLockedMove);
+      if (immersed) exitImmersive();
+      else if (immScatter) exitScatterImmersive();      // losing the lock (Esc) exits the tree pan too
+    }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    if (document.fullscreenElement === stage) {
+      if (immersed) startImmersive(); else if (immScatter) startScatterImmersive();
+    } else if (immersed) exitImmersive();
+    else if (immScatter) exitScatterImmersive();
+  });
+
+  // Esc closes the whole archive viewer pane up in the host. Our own fullscreen /
+  // immersive / pointer-lock modes own the *first* Esc (the browser exits them, which
+  // here usually doesn't even surface a keydown), so only forward once none are active —
+  // focus is inside this iframe after exiting fullscreen, so the host's own Esc listener
+  // wouldn't otherwise see the keypress until you click back into the parent page.
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    if (immersed || immScatter) return;        // immersive pan still up — let it exit first
+    if (document.fullscreenElement) return;    // browser is mid fullscreen-exit
+    if (document.pointerLockElement) return;   // pointer lock still owns Esc
+    try { window.parent.postMessage({ pbvlmClose: true }, "*"); } catch (e) {}
+  });
+
+  // Growth-mode transport: space toggles play/pause, arrows scrub one publication while paused.
+  document.addEventListener("keydown", function (e) {
+    if (!growing) return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;   // let the slider use its own arrows
+    if (e.key === " " || e.key === "Spacebar" || e.code === "Space") {
+      if (tag === "BUTTON") return;            // native click already toggles
+      e.preventDefault(); gSetPlaying(!gPlaying);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault(); gSetPlaying(false); gSetP(gP - 1 / gN, 1);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault(); gSetPlaying(false); gSetP(gP + 1 / gN, 1);
+    }
+  });
+
+  // "i" toggles the Info layout on any grid: spread the thumbnails apart and caption each
+  // with its title (plus the ordering metric on the ranked grids). No-op elsewhere.
+  // Driven by BOTH the local keydown (standalone page / after a click into the grid) and the
+  // host page (pbvlmInfo message) — so the key also works while the blog, not the iframe,
+  // holds focus and the reader never has to click into the grid first.
+  function toggleInfo() {
+    if (immScatter || morphing || growing || morphMode || transMode) return;
+    if (!infoEligible(currentKey)) return;      // grids only (no phylogeny/morph/growth)
+    if (immersed) return toggleInfoImmersed();  // zoomed in: switch layout in place, pinning the centred image
+    infoMode = !infoMode; loupe.classList.remove("on");
+    if (infoMode) { ensureInfoMeta(); ensureCaptionFont(); }
+    { const st = $("stage"); st.style.width = ""; st.style.height = ""; }   // clear any scatter box so the info width measures the full column
+    sizeCanvas(); redraw(); postHeight(); maybeInfoHint();
+  }
+  // Which image sits under the viewport centre right now (immersive camera). Thumbnails are
+  // N*gz px on screen in BOTH layouts, so a toggle can keep this one fixed and just spread
+  // (or re-pack) its neighbours around it. Returns a publication index, or -1 if the centre
+  // lands on empty space (info gaps / an unfilled grid slot).
+  function centerImageImmersed() {
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height), N = SP.cell;
+    if (infoOn()) {                                   // finite info layout: reverse the box packing
+      const nx = (panX + w / 2) / gz, ny = (panY + h / 2) / gz;
+      const g = IN_GAP() / 2, col = Math.floor((nx - g) / IN_BW()), row = Math.floor((ny - g) / IN_BH());
+      const i = gridIndex.get(row + "," + col); return i === undefined ? -1 : i;
+    }
+    const cell = N * gz, R = gridDims[0], C = gridDims[1];   // wrapping full-res grid
+    const col = (((Math.floor((panX + w / 2) / cell) % C) + C) % C);
+    const row = (((Math.floor((panY + h / 2) / cell) % R) + R) % R);
+    const i = gridIndex.get(row + "," + col); return i === undefined ? -1 : i;
+  }
+  // Flip the info labels while fullscreen. The captions only become legible zoomed in, so this
+  // is where the toggle earns its keep. Re-centre on whatever image held the middle so the
+  // switch reads as the neighbours spreading/collapsing rather than the camera jumping.
+  function toggleInfoImmersed() {
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height), N = SP.cell;
+    const ic = centerImageImmersed();
+    infoMode = !infoMode; loupe.classList.remove("on");
+    if (infoMode) { ensureInfoMeta(); ensureCaptionFont(); }
+    if (ic >= 0) {
+      if (infoOn()) {                                 // -> info: pin the image centre to the viewport centre
+        const p = infoPos()[ic];
+        panX = (p[0] + N / 2) * gz - w / 2; panY = (p[1] + N / 2) * gz - h / 2;
+      } else {                                        // -> wrapping grid
+        const rc = layout.layouts[currentKey].rc[ic], cell = N * gz;
+        panX = (rc[1] + 0.5) * cell - w / 2; panY = (rc[0] + 0.5) * cell - h / 2;
+      }
+    }
+    if (infoOn()) clampInfoPan();
+    else { const [VW, VH] = archiveExtent(); panX = ((panX % VW) + VW) % VW; panY = ((panY % VH) + VH) % VH; }
+    updateHint(); pokeCrosshair(); drawImmersive();
+  }
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "i" && e.key !== "I") return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    e.preventDefault(); toggleInfo();
+  });
+
+  // Phylogeny fullscreen: space cycles the stacking of the thumbnails piled under the
+  // centre crosshair — one shuffle per tap, or continuously while the key is held.
+  document.addEventListener("keydown", function (e) {
+    if (!immScatter) return;
+    if (e.key !== " " && e.key !== "Spacebar" && e.code !== "Space") return;
+    e.preventDefault();
+    if (e.repeat) return;       // ignore OS auto-repeat; our own interval drives the hold
+    startShuffle();
+  });
+  document.addEventListener("keyup", function (e) {
+    if (e.key === " " || e.key === "Spacebar" || e.code === "Space") stopShuffle();
+  });
+
+  // ---- full-res pan + zoom over the phylogeny tree (no wrap; a tree isn't periodic) ----
+  // Click enters fullscreen and fits the tree; drag pans, wheel zooms toward the cursor,
+  // thumbnails are drawn from the native sprite cell so zooming in reveals full detail.
+  let scTW = 0.02, scClickPt = [0.5, 0.5];
+  // Phylogeny fullscreen is pointer-locked, so the OS cursor is hidden and the
+  // focal point is the viewport centre. We draw our own crosshair there while the
+  // camera is moving (it fades out when the user holds still), and let space "shuffle"
+  // the z-order of the overlapping thumbnails stacked under that crosshair.
+  let chShow = false, chTimer = 0;     // crosshair visible flag + idle-hide timer
+  let scPaint = null;                  // explicit paint order (first painted = back-most)
+  function scResetPaint() {            // default order matches the old loop: low index ends on top
+    const n = scatterXY(layout.layouts[currentKey]).length;
+    scPaint = []; for (let j = n - 1; j >= 0; j--) scPaint.push(j);
+  }
+  function pokeCrosshair() {           // show the crosshair now, hide it after a short idle
+    chShow = true;
+    if (chTimer) clearTimeout(chTimer);
+    chTimer = setTimeout(() => { chShow = false; if (immScatter) drawScatterImmersive(); else if (immersed) drawImmersive(); }, 1100);
+  }
+  function drawCrosshair(cx, cy) {     // a haloed plus so it reads on any background (ctx already in CSS px)
+    const r = 12, gap = 3;
+    ctx.lineCap = "round";
+    for (const [col, lw] of [["rgba(255,255,255,.85)", 3.5], ["rgba(20,20,20,.85)", 1.5]]) {
+      ctx.strokeStyle = col; ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy); ctx.lineTo(cx - gap, cy);
+      ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + r, cy);
+      ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy - gap);
+      ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + r);
+      ctx.stroke();
+    }
+  }
+  // Thumbnails stacked under the centre crosshair, nearest-centre first — i.e. the one
+  // the cursor is actually pointing at leads, then the images piled behind it.
+  function hitsAtCrosshair() {
+    const xy = scatterXY(layout.layouts[currentKey]);
+    if (!scPaint || scPaint.length !== xy.length) scResetPaint();
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    const cxu = (w / 2 - iox) / iz, cyu = (h / 2 - ioy) / iz, half = scTW / 2;   // crosshair point in unit-square coords
+    const hits = [];
+    for (let j = 0; j < xy.length; j++) {
+      const p = xy[j]; if (!p) continue;
+      const dx = p[0] - cxu, dy = p[1] - cyu;
+      if (Math.abs(dx) <= half && Math.abs(dy) <= half) hits.push([j, dx * dx + dy * dy]);
+    }
+    hits.sort((a, b) => a[1] - b[1]);                          // nearest centre first
+    return hits.map((x) => x[0]);
+  }
+  // Sprite index of the image under the centre crosshair in whichever immersive mode is
+  // live -> its breed detail page on right-click. Grid (wrapping): the cell at the viewport
+  // centre. Info (ranked, finite): the block at the centre. Phylogeny: nearest thumbnail.
+  function immersedFocusIndex() {
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    if (immersed && infoOn()) {
+      const nx = (w / 2 + panX) / gz, ny = (h / 2 + panY) / gz;   // viewport centre -> native coords
+      const i = gridIndex.get(Math.floor(ny / IN_BH()) + "," + Math.floor(nx / IN_BW()));
+      return i === undefined ? null : i;
+    }
+    if (immersed) {
+      const cell = SP.cell * gz, R = gridDims[0], C = gridDims[1];
+      const col = Math.floor((panX + w / 2) / cell), row = Math.floor((panY + h / 2) / cell);
+      const i = gridIndex.get((((row % R) + R) % R) + "," + (((col % C) + C) % C));
+      return i === undefined ? null : i;
+    }
+    if (immScatter) { const hits = hitsAtCrosshair(); return hits.length ? hits[0] : null; }
+    return null;
+  }
+  // Space "shuffles" that pile by bringing one image to the very fore at a time: the
+  // first press raises the image under the cursor, each further press raises the next
+  // one underneath (the previously raised image settles right behind it). Re-pointing at
+  // a different pile restarts the cycle.
+  let shufTimer = 0, shufHits = null, shufPos = 0, shufKey = "";
+  function shuffleStack() {
+    if (!immScatter) return;
+    pokeCrosshair();
+    const hits = hitsAtCrosshair(), key = hits.join(",");
+    if (key !== shufKey) { shufKey = key; shufHits = hits; shufPos = 0; }   // new pile under the cursor -> restart
+    if (!shufHits.length) { drawScatterImmersive(); return; }
+    const j = shufHits[shufPos % shufHits.length]; shufPos++;
+    const at = scPaint.indexOf(j);
+    if (at !== -1) { scPaint.splice(at, 1); scPaint.push(j); }   // move to the global fore (drawn last = on top)
+    drawScatterImmersive();
+  }
+  function startShuffle() { if (!immScatter) return; shuffleStack(); if (!shufTimer) shufTimer = setInterval(() => immScatter ? shuffleStack() : stopShuffle(), 170); }
+  function stopShuffle() { if (shufTimer) { clearInterval(shufTimer); shufTimer = 0; } }
+  function sizeCanvasScatterImmersive() {
+    const fs = document.fullscreenElement === stage;
+    const w = fs ? window.innerWidth : parseFloat(cv.style.width);
+    const h = fs ? window.innerHeight : parseFloat(cv.style.height);
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  function startScatterImmersive() {
+    sizeCanvasScatterImmersive();
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height);
+    // Preserve the inline view's thumbnail-to-tree-span ratio, then zoom in until
+    // each thumbnail renders at full native res (SP.cell px, 1:1) — matching the
+    // grid's immersive mode, which enters at full res and pans rather than fitting
+    // the whole tree (which would just blur every thumbnail into a blob).
+    const cellp = phyCell(), S = Math.max(1, phySide() - cellp);
+    scTW = Math.max(0.006, cellp / S);               // inline thumb fraction of the unit square
+    iz = SP.cell / scTW;                             // -> thumbnails at full native res
+    iox = w / 2 - scClickPt[0] * iz;                 // center the clicked point at full res
+    ioy = h / 2 - scClickPt[1] * iz;
+    scResetPaint(); shufHits = null; shufPos = 0; shufKey = ""; pokeCrosshair();
+    updateHint();                                    // "spacebar to flip" cue for the stacked-thumbnail shuffle
+    drawScatterImmersive();
+    cv.requestPointerLock && cv.requestPointerLock();   // lock -> raw mouse movement pans (matches the grid)
+  }
+  function drawScatterImmersive() {
+    const xy = scatterXY(layout.layouts[currentKey]);
+    const w = parseFloat(cv.style.width), h = parseFloat(cv.style.height), N = SP.cell, ts = scTW * iz;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+    if (scatterEdges) {                              // branches first, thumbnails over them
+      ctx.globalAlpha = 0.4; ctx.strokeStyle = "#888"; ctx.lineWidth = Math.max(0.5, ts * 0.04);
+      ctx.beginPath();
+      for (let k = 0; k < scatterEdges.length; k++) {
+        const a = xy[scatterEdges[k][0]], b = xy[scatterEdges[k][1]]; if (!a || !b) continue;
+        ctx.moveTo(a[0] * iz + iox, a[1] * iz + ioy); ctx.lineTo(b[0] * iz + iox, b[1] * iz + ioy);
+      }
+      ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    if (!scPaint || scPaint.length !== xy.length) scResetPaint();
+    for (let oi = 0; oi < scPaint.length; oi++) {       // scPaint order: first painted = back, last = on top
+      const j = scPaint[oi];
+      const sx = xy[j][0] * iz + iox - ts / 2, sy = xy[j][1] * iz + ioy - ts / 2;
+      if (sx > w || sy > h || sx + ts < 0 || sy + ts < 0) continue;   // cull offscreen
+      const img = sheetImgs[Math.floor(j / SP.per_sheet)];
+      if (!img || !img.complete || !img.naturalWidth) continue;
+      const p = packPos(SP, j);
+      ctx.drawImage(img, p.sx, p.sy, N, N, sx, sy, ts, ts);
+    }
+    if (chShow) drawCrosshair(w / 2, h / 2);            // focal point of the pointer-locked pan/zoom
+  }
+  // Navigation matches the grid's immersive mode: pointer-lock + raw mouse
+  // movement pans the viewport (no click-drag); the wheel zooms toward the
+  // cursor. Pointer lock hides the cursor and reports movementX/Y, so the camera
+  // glides with the mouse exactly like the grid view.
+  function enterScatterImmersive(mx, my) {
+    immScatter = true; cv.classList.add("immersed"); loupe.classList.remove("on");
+    { const st = $("stage"); st.classList.remove("phscroll"); st.style.height = ""; }   // drop the bounded viewport for fullscreen
+    const S = Math.max(1, phySide() - phyCell()), b = phyBounds(layout.layouts[currentKey]);   // recover the click's unit-square point (canvas is cropped to the bbox -> add its origin back)
+    scClickPt = [clamp(mx / S + b.x0, 0, 1), clamp(my / S + b.y0, 0, 1)];
+    cv.addEventListener("wheel", scWheel, { passive: false });
+    const req = stage.requestFullscreen && stage.requestFullscreen();
+    if (req && req.then) req.then(() => {}).catch(startScatterImmersive);
+    else if (!stage.requestFullscreen) startScatterImmersive();
+  }
+  function exitScatterImmersive() {
+    if (!immScatter) return;
+    immScatter = false; cv.classList.remove("immersed");
+    stopShuffle(); chShow = false; if (chTimer) { clearTimeout(chTimer); chTimer = 0; }
+    cv.removeEventListener("wheel", scWheel);
+    if (document.pointerLockElement === cv) document.exitPointerLock && document.exitPointerLock();
+    if (document.fullscreenElement === stage) document.exitFullscreen && document.exitFullscreen();
+    sizeCanvas(); redraw(); centerPhyScroll(); postHeight();
+  }
+  function scLockedMove(e) {                            // mouse moves the VIEWPORT: moving right reveals what's to the
+    iox -= e.movementX * PAN_SPEED; ioy -= e.movementY * PAN_SPEED;   // right (camera pans), so content shifts opposite
+    pokeCrosshair();
+    drawScatterImmersive();
+  }
+  function scWheel(e) {
+    e.preventDefault();
+    pokeCrosshair();
+    const r = cv.getBoundingClientRect();              // when pointer-locked the cursor is centered; zoom about viewport center
+    const cx = (document.pointerLockElement === cv) ? r.width / 2 : e.clientX - r.left;
+    const cy = (document.pointerLockElement === cv) ? r.height / 2 : e.clientY - r.top;
+    const zn = clamp(iz * Math.exp(-e.deltaY * 0.0015), 40, SP.cell * 600);
+    iox = cx - (cx - iox) * (zn / iz); ioy = cy - (cy - ioy) * (zn / iz); iz = zn;
+    drawScatterImmersive();
+  }
+
+  async function fetchIndex() {
+    try {
+      const r = await fetch(ARCHIVE_BASE + "/index.json", { mode: "cors" });
+      if (r.ok) return await r.json();
+    } catch (e) { /* offline / missing -> no seed/model toggles */ }
+    return null;
+  }
+  // Selectable runs for an arc = those flagged canonical (the standard config),
+  // falling back to all if none are flagged (older index, or a single-run arc like
+  // human). Ablation variants that share an arc key stay reachable only by exact run.
+  const ok = (e) => e.has && e.has.sprite;
+  function arcPool(idx, arc) {
+    const all = idx.runs.filter((e) => e.arc === arc && ok(e));
+    const canon = all.filter((e) => e.canonical === true);
+    return canon.length ? canon : all;
+  }
+  // models present for an arc, then seeds present for that arc+model, both in a
+  // stable display order. Drives the host's seed + model sub-toggles.
+  const modelSort = (a, b) => (MODEL_PREF.indexOf(a) + 1 || 99) - (MODEL_PREF.indexOf(b) + 1 || 99) || (a < b ? -1 : a > b ? 1 : 0);
+  function computeAvail(idx, arc, model) {
+    const pool = arcPool(idx, arc);
+    availModels = [...new Set(pool.map(modelOf))].sort(modelSort);
+    availSeeds = pool.filter((e) => modelOf(e) === model).map((e) => e.seed)
+      .filter((s) => s != null).sort((a, b) => a - b).filter((s, i, a) => i === 0 || s !== a[i - 1]);
+  }
+  // Every model present across the whole archive, plus which arcs each was run in.
+  // The host renders ALL of these on the Model sub-toggle (not just the current arc's),
+  // so a run like Memory=10 still offers every model; clicking one the current arc lacks
+  // snaps the run knobs to an arc that has it (see buildModelToggle in archive-gallery.js).
+  function computeGlobalModels(idx) {
+    const arcs = [...new Set(idx.runs.filter(ok).map((e) => e.arc).filter((a) => a != null && a !== "human"))];
+    const seen = {};
+    arcs.forEach((arc) => arcPool(idx, arc).forEach((e) => {
+      const m = modelOf(e); (seen[m] || (seen[m] = new Set())).add(arc);
+    }));
+    allModels = Object.keys(seen).sort(modelSort);
+    modelArcs = {}; allModels.forEach((m) => { modelArcs[m] = [...seen[m]]; });
+  }
+  async function resolveRun() {
+    const idx = await fetchIndex();
+    if (idx) computeGlobalModels(idx);        // full model list + model->arcs map for the host's Model sub-toggle
+    if (run) {                                // exact run requested (e.g. a hero double-click)
+      const me = idx && idx.runs.find((e) => e.run === run);
+      if (me) { resolvedSeed = me.seed; resolvedModel = modelOf(me); runBase = me.base || ARCHIVE_BASE;
+                resolvedArc = me.arc; computeAvail(idx, me.arc, resolvedModel); }
+      else resolvedArc = wantArc || null;
+      return run;
+    }
+    if (wantArc) {
+      resolvedArc = wantArc;
+      if (!idx) throw new Error("index.json unavailable");
+      const forArc = arcPool(idx, wantArc);
+      if (!forArc.length) throw new Error("no sprite archive yet for arc “" + wantArc + "”");
+      // pick the model first (requested, else the canonical gemini-2.5-pro, else any present)
+      const models = [...new Set(forArc.map(modelOf))];
+      const model = (wantModel && models.includes(wantModel)) ? wantModel
+                  : (models.includes(DEFAULT_MODEL) ? DEFAULT_MODEL : models[0]);
+      computeAvail(idx, wantArc, model);
+      const forSel = forArc.filter((e) => modelOf(e) === model);
+      const want = wantSeed != null ? wantSeed : DEFAULT_SEED;
+      const m = forSel.find((e) => String(e.seed) === String(want))   // requested (or default s4) seed
+             || forSel.find((e) => e.seed != null) || forSel[0]       // else any real seed for this model
+             || forArc[0];                                            // last resort: any run for the arc
+      resolvedSeed = m.seed; resolvedModel = modelOf(m);
+      runBase = m.base || ARCHIVE_BASE;   // a run can live on a different host (e.g. license-restricted human archive on gh-pages)
+      return m.run;
+    }
+    resolvedArc = resolvedArc || "default";
+    return "default_s4_demo";
+  }
+
+  (async function () {
+    try {
+      run = await resolveRun();
+      base = runBase + "/site/" + run + "/sprite";
+      const [sp, lay] = await Promise.all([getJSON("/sprites.json"), getJSON("/layout.json")]);
+      SP = sp; layout = lay; currentKey = "chronological"; gridDims = lay.layouts[currentKey].dims;
+      for (const k in lay.layouts) {
+        const L = lay.layouts[k];
+        if (L.edges) scatterEdges = L.edges;
+        if (L.kind === "scatter") {
+          // compute the breed-style radial from the edges and lead the variant row with it
+          if (L.edges && L.variants && !L.variants.tidy) {
+            const M = (L.variants.sfdp || L.variants.radial || []).length || sp.n;
+            L.variants.tidy = computeTidyRadial(M, L.edges);
+            L.variant_order = ["tidy", "twopi", "sfdp"].filter((v) => v === "tidy" || L.variants[v]);   // tidy supersedes graphviz "radial"
+          }
+          if (!activeVariant)
+            activeVariant = (L.variants && L.variants.tidy ? "tidy" : null) || (L.variants && L.variants.radial ? "radial" : null)
+              || L.default || (L.variant_order && L.variant_order[0]) || (L.variants && Object.keys(L.variants)[0]) || null;
+        }
+      }
+      // which runs carry a prebuilt scrubbable-morph layout (breed/data/morph/<run>/) — gates the Morph meta
+      try { const mr = await fetch("breed/data/morph/manifest.json").then((r) => r.ok ? r.json() : null);
+            if (mr && mr.runs) morphRuns = new Set(mr.runs.map((x) => x.run)); } catch (e) {}
+      // which runs carry a built transcript wall (assets/transcripts/<run>/) — gates the Transcripts meta
+      try { const tr = await fetch("assets/transcripts/manifest.json").then((r) => r.ok ? r.json() : null);
+            if (tr && tr.runs) transcriptRuns = new Set(tr.runs.filter((x) => !x.disabled).map((x) => x.run)); } catch (e) {}
+      // Not in the committed manifest? Probe HF for a wall built & pushed since it was baked, so
+      // new transcript walls light up on demand without a blog redeploy. (Human never has one.)
+      if (!transcriptRuns.has(run) && resolvedArc !== "human") {
+        try { const r = await fetch(ARCHIVE_BASE + "/transcripts/" + run + "/index.json", { mode: "cors" });
+              if (r.ok) hfWallRuns.add(run); } catch (e) {}
+      }
+      // Initial view mode requested by the host (so the same mode persists across arc/seed
+      // swaps). meta = grid|phylogeny|morph|growth; sub = grid sort or phylogeny variant. Resolve
+      // BEFORE the first render so we load straight into that mode — no default-then-morph flash.
+      let startGrowth = false, startMorph = false, startTranscripts = false;
+      const wantMeta = params.get("meta"), wantSub = params.get("sub");
+      if (wantMeta === "grid") {
+        currentKey = ((wantSub && isGridKey(wantSub)) ? wantSub : firstAvailGrid()) || currentKey;
+      } else if (wantMeta === "phylogeny" && hasScatter()) {
+        currentKey = scatterKey();
+        const PV = lay.layouts[currentKey].variants;
+        if (wantSub && PV && PV[wantSub]) activeVariant = wantSub;
+      } else if (wantMeta === "morph" && hasMorph()) {
+        startMorph = true;    // mount the morph iframe after the normal first render
+      } else if (wantMeta === "transcripts" && hasTranscripts()) {
+        startTranscripts = true;   // mount the transcript iframe after the normal first render
+      } else if (wantMeta === "growth" && hasScatter()) {
+        startGrowth = true;   // growth needs special setup; enter after the normal first render
+        const gp = parseFloat(params.get("grow"));       // 0..1 frame to open on (seamless hand-off from the blog trio)
+        if (!isNaN(gp)) gInitP = clamp(gp, 0, 1);
+        if (params.get("growplay") === "0") gInitPlaying = false;
+        trioLoad();   // preload the pre-baked trio assets so the hand-off opens straight into the exact-match renderer
+      }
+      gridDims = isScatter(currentKey) ? null : lay.layouts[currentKey].dims;
+      initLoupe();
+      let loaded = 0;
+      for (let s = 0; s < sp.n_sheets; s++) {
+        const im = new Image();
+        im.onload = () => { if (morphMode || transMode) return; if (growing) { pInitBuf(); gSetP(gP, 1); } else if (++loaded && !immersed && !morphing) { redraw(); refreshFocusLoupe(); } };
+        im.src = base + "/" + sheetFile(sp, s); sheetImgs.push(im);
+      }
+      $("stage").appendChild(cv);
+      DC = computeDC(); sizeCanvas(); if (!isScatter(currentKey)) buildGridIndex(currentKey); redraw(); centerPhyScroll(); postHeight();
+      // prebuild the (expensive) branch raster at idle so the FIRST morph into the tree
+      // animates instantly instead of stalling ~150ms while it strokes ~1500 edges.
+      const scKey = orderKeys().find(isScatter);
+      if (scKey) (window.requestIdleCallback || ((f) => setTimeout(f, 300)))(
+        () => { if (!morphing && !immersed && !immScatter) edgeLayer(activeVariant, posOf(scKey)); });
+      // embed: re-report height whenever the document actually changes size (status line wrap,
+      // font load, etc.) so the host iframe always fits — no inner scrollbar.
+      if (params.has("embed") && window.ResizeObserver) {
+        new ResizeObserver(() => { if (!immersed) postHeight(); }).observe(document.documentElement);
+      }
+
+      cv.addEventListener("mousemove", (e) => {
+        if (immersed || immScatter || morphing || growing) return;   // immersive/growth modes drive their own paint
+        const r = cv.getBoundingClientRect();
+        if (focusIdx !== null) {
+          // Parked focus loupe (banner/thumbnail jump). The cursor keeps its crosshair and
+          // the hover loupe stays suppressed until the cursor reaches the parked disc; from
+          // then on the loupe glides to meet it (focusStep) and hands over when it arrives.
+          focusTX = e.clientX - r.left; focusTY = e.clientY - r.top;
+          focusCliX = e.clientX; focusCliY = e.clientY;
+          if (!focusGrab) {
+            if (Math.hypot(focusTX - focusCX, focusTY - focusCY) > LENS / 2) return;   // still outside the ring
+            focusGrab = true; focusStep();
+          }
+          return;   // the glide owns the loupe until it catches up
+        }
+        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        if (isScatter(currentKey)) drawLoupeScatter(mx, my); else if (infoOn()) drawLoupeInfo(mx, my); else drawLoupe(mx, my);
+        loupe.style.left = (e.clientX - LENS / 2) + "px";
+        loupe.style.top = (e.clientY - LENS / 2) + "px";
+        loupe.classList.add("on");
+      });
+      cv.addEventListener("mouseleave", () => {
+        if (immersed) return;
+        // A parked focus loupe outlives the cursor wandering off the canvas — it marks the
+        // image, it doesn't follow the pointer. If the cursor left mid-glide, re-park it.
+        if (focusIdx !== null) {
+          if (focusGrab) {
+            focusGrab = false;
+            if (focusRAF) { cancelAnimationFrame(focusRAF); focusRAF = 0; }
+            refreshFocusLoupe();
+          }
+          return;
+        }
+        loupe.classList.remove("on");
+      });
+      cv.addEventListener("click", (e) => {
+        if (growing) return;                              // growth mode owns the canvas (scrub via its bar)
+        // In either immersive mode a click releases the pointer lock; the
+        // pointerlockchange handler then tears the mode down (matches the grid).
+        if (immersed || immScatter) { document.exitPointerLock && document.exitPointerLock(); return; }
+        // Mid-glide, the loupe is the active point — pan from what the reader can see, not
+        // from the cursor it hasn't caught yet. A click made while the loupe is still parked
+        // across the canvas abandons it and acts at the cursor, like any other click.
+        if (focusIdx !== null) {
+          const grabbed = focusGrab, gx = focusCX, gy = focusCY;
+          dropFocus(); status(DEFAULT_STATUS);
+          if (grabbed && !isScatter(currentKey)) { enterImmersive(gx, gy); return; }
+        }
+        const r = cv.getBoundingClientRect();
+        if (isScatter(currentKey)) enterScatterImmersive(e.clientX - r.left, e.clientY - r.top);
+        else enterImmersive(e.clientX - r.left, e.clientY - r.top);
+      });
+      // Right-click while zoomed in -> go to the focused image's breed detail page. The pointer
+      // is locked (cursor parked at the viewport centre), so "focused" = the image under the
+      // centre crosshair. The gesture rides on mousedown (contextmenu can be suppressed under
+      // pointer lock); the contextmenu listener only cancels the OS menu.
+      cv.addEventListener("contextmenu", (e) => { if (immersed || immScatter) e.preventDefault(); });
+      cv.addEventListener("mousedown", (e) => {
+        if (e.button !== 2 || (!immersed && !immScatter)) return;
+        e.preventDefault();
+        const i = immersedFocusIndex();
+        if (i == null || !run) return;
+        const gid = "img_" + String(i + 1).padStart(6, "0");   // sprite index -> genome id (matches breed/detail.html)
+        const url = new URL("breed/detail.html?run=" + encodeURIComponent(run) + "&id=" + gid, location.href).href;
+        // Navigate the current tab. Embedded, we're an iframe filling the fullscreen stage, so
+        // point the top window at the detail page rather than stranding it inside the frame.
+        // (Cross-origin embedding would throw on window.top.location — fall back to our own.)
+        try { (window.top || window).location.href = url; }
+        catch (err) { window.location.href = url; }
+      });
+      let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(relayout, 120); });
+
+      buildBar();
+      // tell the host (if embedded) which meta-categories exist + which is active, so it can build
+      // its sticky toggle. Each meta with sub-options advertises them for a nested sub-row:
+      //   grid -> the four grid sorts (each a real ordering); phylogeny -> its position variants.
+      if (params.has("embed") && window.parent !== window) {
+        const subs = {}, subAvail = {}, subIsOrder = {}, metaRep = {}, subCurrent = {};
+        if (orderKeys().some(isGridKey)) {          // grid sorts collapse under the "Grid" meta-button
+          subs.grid = gridSubKeys();
+          subs.grid.forEach((k) => subAvail[k] = isGridKey(k));   // grey grid sorts this run lacks (e.g. Top Rated on the human archive)
+          subIsOrder.grid = true;                                 // grid subs are full orderings, not in-layout variants
+          metaRep.grid = firstAvailGrid();                        // representative ordering to load when "Grid" is clicked
+          subCurrent.grid = currentMeta() === "grid" ? currentKey : firstAvailGrid();
+        }
+        const sk = scatterKey();
+        if (sk) {                                   // phylogeny meta carries its radial/twopi/sfdp variants
+          const L = layout.layouts[sk];
+          if (L.variants) { subs.phylogeny = phyloVariants(L); subs.phylogeny.forEach((v) => subAvail[v] = true); }
+          metaRep.phylogeny = sk;                   // selecting the meta loads the scatter layout itself
+          subCurrent.phylogeny = activeVariant;
+        }
+        metaRep.morph = "morph";   // morph has no sub-row; selecting the meta mounts the embedded viewer
+        metaRep.transcripts = "transcripts";   // transcripts likewise has no sub-row
+        metaRep.growth = "growth";
+        // "Why greyed" tooltips for the host to hang on its disabled buttons.
+        const metaReasons = {}; META_PREF.forEach((m) => { if (!metaPresent(m)) metaReasons[m] = metaReason(m); });
+        const subReasons = {}; Object.keys(subAvail).forEach((s) => { if (!subAvail[s]) subReasons[s] = subReason(s); });
+        try { window.parent.postMessage({ pbvlmReady: true,
+          orderings: META_PREF.filter(metaPresent), allOrderings: META_PREF,
+          current: startMorph ? "morph" : startTranscripts ? "transcripts" : startGrowth ? "growth" : currentMeta(), labels: META_LABELS,
+          subOrderings: subs, subLabels: Object.assign({}, ORDER_LABELS, SUB_LABELS),
+          subAvailable: subAvail, subIsOrder: subIsOrder, metaRep: metaRep, subCurrent: subCurrent,
+          metaReasons: metaReasons, subReasons: subReasons,
+          seeds: availSeeds, currentSeed: resolvedSeed,
+          models: availModels, currentModel: resolvedModel,
+          allModels: allModels, modelArcs: modelArcs }, "*"); } catch (e) {}
+      }
+      $("info").innerHTML = sp.n + " images";
+      if (startMorph) selectOrder("morph");           // host asked to resume Morph mode
+      else if (startTranscripts) selectOrder("transcripts");   // host asked to resume Transcripts mode
+      else if (startGrowth) selectOrder("growth");    // host asked to resume Growth mode (needs setup after first render)
+      status(currentKey === "growth" ? GROWTH_STATUS : DEFAULT_STATUS);
+      postHeight();
+    } catch (e) {
+      status("Couldn't load sprites (" + e.message + ")." +
+        (ARCHIVE_BASE === HF_BASE ? " The dataset isn't public yet—try ?archiveBase=. against a local mirror." : ""), true);
+    }
+  })();
+
+  // highlight the active meta-button + (re)build its sub-row, highlighting the active sub.
+  // Callers pass the target ordering key (during a morph currentKey may still be the old one).
+  function setActiveBtn(key) {
+    const m = metaOf(key), sub = m === "grid" ? key : m === "phylogeny" ? activeVariant : null;
+    [...$("seg").children].forEach((b) => b.classList.toggle("on", b.dataset.meta === m));
+    buildSubBar(m, sub);
+  }
+  function buildSubBar(meta, sub) {        // the nested sub-row for the active meta (grid sorts / phylogeny variants)
+    const ss = $("subseg"); ss.innerHTML = "";
+    let items = [], isOrder = false;
+    if (meta === "grid") { items = gridSubKeys(); isOrder = true; }
+    else if (meta === "phylogeny") { const L = layout.layouts[scatterKey()]; if (L && L.variants) items = phyloVariants(L); }
+    items.forEach((s) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.dataset.sub = s;
+      b.textContent = isOrder ? orderLabel(s) : (SUB_LABELS[s] || s);
+      if (isOrder && !isGridKey(s)) { b.disabled = true; b.title = subReason(s); ss.appendChild(b); return; }   // grey grid sorts this run lacks (hover = why)
+      b.classList.toggle("on", s === sub);
+      b.onclick = () => { if (immersed || immScatter) return; if (isOrder) selectOrder(s); else morphVariant(s); };
+      ss.appendChild(b);
+    });
+    ss.style.display = items.length ? "" : "none";
+  }
+  function buildBar() {                    // meta toggle: Grid / Phylogeny / Growth, greying metas this run lacks
+    const seg = $("seg"); seg.innerHTML = "";
+    META_PREF.forEach((m) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.dataset.meta = m; b.textContent = META_LABELS[m];
+      if (!metaPresent(m)) { b.disabled = true; b.title = metaReason(m); seg.appendChild(b); return; }   // hover = why greyed
+      b.classList.toggle("on", m === currentMeta());
+      b.onclick = () => { if (immersed || immScatter) return; selectMeta(m); };
+      seg.appendChild(b);
+    });
+    buildSubBar(currentMeta(), currentSub());
+  }
+  // pick a meta-category: load its representative ordering (the sub-row then refines within it)
+  function selectMeta(m) {
+    if (m === currentMeta()) return;
+    selectOrder(m === "growth" ? "growth" : m === "morph" ? "morph" : m === "transcripts" ? "transcripts"
+              : m === "phylogeny" ? scatterKey() : firstAvailGrid());
+  }
+  // host's sticky toggle drives the ordering via postMessage
+  window.addEventListener("message", (e) => {
+    const d = e.data; if (!d || immersed || immScatter) return;
+    if (d.pbvlmInfo) { toggleInfo(); return; }   // host forwarded the "i" info-layout toggle
+    if (typeof d.pbvlmFocus === "number" && layout) { focusImage(d.pbvlmFocus); return; }
+    if (d.pbvlmOrder === "growth" || d.pbvlmOrder === "morph" || d.pbvlmOrder === "transcripts" || (d.pbvlmOrder && layout && layout.layouts[d.pbvlmOrder])) selectOrder(d.pbvlmOrder);
+    else if (d.pbvlmSubOrder) {
+      if (layout && layout.layouts[d.pbvlmSubOrder]) selectOrder(d.pbvlmSubOrder);   // a grid sort = a real ordering
+      else if (!growing) morphVariant(d.pbvlmSubOrder);                              // a phylogeny position variant
+    }
+  });
+})();
+</script>
+</body>
+</html>

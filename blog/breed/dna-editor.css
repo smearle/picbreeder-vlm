@@ -1,0 +1,134 @@
+/* ===================================================================
+ * "Analyze Image DNA" editor widget — shared styles.
+ * A faithful, in-browser re-creation of the original picbreeder.org
+ * dnaanalysis.php page / Java AnalysisApplet (Fig. 5 of Secretan et
+ * al. 2011). Used by both dna.html (full page) and the lazily-loaded
+ * DNA panel on play.html, via the PB.DnaEditor factory in
+ * dna-editor.js. Keep this file the single source of truth for the
+ * editor's look — do not duplicate these rules per page.
+ *   • the LEFT panel illustrates the CPPN's structure as a node-link
+ *     graph, with a small render of each node's intermediate pattern
+ *     drawn at the node itself;
+ *   • the RIGHT panel renders the output of an individual node (the
+ *     selected one) plus the final composite image;
+ *   • selecting a node reveals a ring of circular control buttons that
+ *     change its activation function and links.
+ * =================================================================== */
+.dna-wrap { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; margin:8px 0; }
+
+/* LEFT: the CPPN structure graph (pannable / zoomable) */
+.graphbox { flex:1 1 470px; min-width:340px; position:relative; }
+.graphtools { display:flex; align-items:center; gap:5px; margin:0 0 5px; }
+.graphtools .pbbtn { font-size:.92em; padding:1px 7px; }
+.graphtools .hint { color:#888; font-size:.85em; margin-left:4px; }
+.graphframe { border:1px solid #7186a3; background:#fbfcfe; overflow:hidden; position:relative; height:560px;
+              background-image:radial-gradient(#e7edf6 1px, transparent 1px); background-size:20px 20px; }
+.graphframe svg { display:block; width:100%; height:100%; cursor:grab; touch-action:none; }
+.graphframe svg.grabbing { cursor:grabbing; }
+
+/* floating readout of a link's weight while it's being scrolled/dragged */
+.wtip { position:absolute; left:0; top:0; pointer-events:none; z-index:6;
+        background:#222d; color:#fff; font:bold 11px/1.1 Tahoma, arial, sans-serif;
+        padding:3px 7px; border-radius:4px; white-space:nowrap;
+        transform:translate(-50%, -150%); opacity:0; transition:opacity .1s; }
+.wtip.on { opacity:1; }
+/* vertical "thermometer" scale shown while a link's weight is being dragged */
+.wscale { position:absolute; left:0; top:0; pointer-events:none; z-index:6;
+          display:flex; flex-direction:column; align-items:center; gap:3px;
+          transform:translate(0, -50%); opacity:0; transition:opacity .12s; }
+.wscale.on { opacity:1; }
+.wscale-lbl { font:bold 10px/1 Tahoma, arial, sans-serif; color:#5a6b86; }
+.wscale-track { position:relative; width:7px; height:132px; border-radius:4px;
+                background:#dfe6f1; border:1px solid #aebdd3; box-shadow:0 1px 3px #0003; }
+.wscale-zero { position:absolute; left:-3px; right:-3px; height:1px; background:#9aa8bf; }
+.wscale-fill { position:absolute; left:0; right:0; border-radius:4px; }
+.wscale-knob { position:absolute; left:50%; top:50%; width:15px; height:15px; border-radius:50%;
+               background:#fff; border:2px solid #3a59bc; box-shadow:0 1px 3px #0005;
+               transform:translate(-50%, -50%); transition:border-color .1s, background .1s; }
+/* knob + track flash amber when the value pins against its min/max stop */
+.wscale.lim .wscale-knob { border-color:#e08a1a; background:#ffe9c7; }
+.wscale.lim .wscale-track { border-color:#e08a1a; }
+/* zoom slider lives in the toolbar (graphtools) */
+.zoomctl { display:inline-flex; align-items:center; gap:5px; }
+.zoomctl .zlbl { color:#3a59bc; font:bold 13px/1 Tahoma, arial, sans-serif; opacity:.7; }
+.zoomrange { width:118px; accent-color:#3a59bc; cursor:pointer; vertical-align:middle; }
+
+.graph-conn { stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+.graph-hit  { stroke:transparent; stroke-width:18; cursor:ns-resize; }
+.connwrap:hover .graph-conn { stroke:#30a030; stroke-width:9; }
+/* nodes are square tiles showing the node's own intermediate pattern */
+.graph-node .tilebg { fill:#fff; cursor:grab; }
+.graph-node .frame  { fill:none; }
+.graph-node .hit    { fill:transparent; cursor:grab; }
+.graph-node text.cap { font:bold 11px arial, sans-serif; text-anchor:middle; fill:#333; pointer-events:none;
+                       paint-order:stroke; stroke:#fbfcfecc; stroke-width:3px; }
+.frame-input  { stroke:#555;    stroke-width:2; }
+.frame-grey   { stroke:#8a8a8a; stroke-width:2.5; }
+.frame-color  { stroke:#2d68d4; stroke-width:2.5; }
+.frame-output { stroke:#cc8a1a; stroke-width:3; }
+.node-sel .frame { stroke:#1d7a1d !important; stroke-width:4 !important; }
+.node-lit .frame { stroke:#cd6137 !important; stroke-width:4 !important; }
+.graphframe svg.grabbing .graph-node .tilebg,
+.graphframe svg.grabbing .graph-node .hit { cursor:grabbing; }
+
+/* the ⊕ link handle on a node's border: drag it onto another node to wire a link.
+   Only the hovered node shows one — it is a thing to grab, so it appears exactly where the
+   pointer already is, and never clutters the selected node (whose ring is open) or the
+   drop targets during a link drag (svg.linking), which are hit by overlap, not by handle. */
+.linkhandle { opacity:0; pointer-events:none; transition:opacity .12s ease; }
+.graph-node:hover .linkhandle { opacity:1; pointer-events:auto; }
+svg.linking .graph-node .linkhandle { opacity:0 !important; pointer-events:none; }   /* beats :hover */
+.linkhandle .lh-hit  { fill:transparent; cursor:crosshair; }
+.linkhandle .lh-dot  { fill:#fbfcfe; stroke:#2d68d4; stroke-width:1.5; cursor:crosshair; }
+.linkhandle:hover .lh-dot { fill:#2d68d4; }
+.linkhandle:hover .lh-plus { fill:#fff; }
+/* no font-size here: it comes from the element's attribute, scaled to the node tile size */
+.linkhandle .lh-plus { font-family:arial, sans-serif; font-weight:bold; text-anchor:middle;
+                       dominant-baseline:central; fill:#2d68d4; pointer-events:none; }
+
+/* radial control buttons revealed around a selected node */
+.ctrlbtn { cursor:pointer; }
+.ctrlbtn circle { fill:#f4f2ea; stroke:#7a7a72; stroke-width:1; }
+.ctrlbtn:hover circle { fill:#3a59bc; }
+.ctrlbtn:hover text { fill:#fff; }
+.ctrlbtn text { font:bold 9px Tahoma, arial, sans-serif; text-anchor:middle; dominant-baseline:central; fill:#222; pointer-events:none; }
+.ctrlbtn.cur circle { fill:#30a030; stroke:#1d7a1d; }
+.ctrlbtn.cur text { fill:#fff; }
+.ctrlbtn.danger:hover circle { fill:#c0392b; }
+/* rubber-band line while dragging a new link from one node to another */
+.linkdrag { stroke:#2d68d4; stroke-width:2.5; stroke-dasharray:6 4; pointer-events:none; }
+
+/* RIGHT: render panel (output of individual nodes + final image) */
+.rpanel { flex:0 0 224px; }
+.rpanel .card { border:1px solid #7186a3; background:#fff; margin:0 0 12px; }
+.rpanel .card h4 { margin:0; padding:4px 8px; background:#eaeff6; color:#3a59bc; font-size:.95em; border-bottom:1px solid #cdd9ec; }
+.rpanel .card .body { padding:8px; text-align:center; }
+.rpanel canvas { width:200px; height:200px; border:1px solid #777; background:#000; image-rendering:auto; }
+.rpanel .meta { font-size:.85em; color:#444; margin-top:5px; line-height:1.4; text-align:left; }
+.rpanel .meta b { color:#33332b; }
+.rpanel .row { margin-top:6px; }
+.rpanel .placeholder { color:#999; font-size:.88em; padding:30px 6px; }
+
+.linkmode-banner { background:#fff7e0; border:1px solid #e0c870; color:#7a5a10; padding:5px 9px; margin:0 0 8px; display:none; }
+.linkmode-banner.on { display:block; }
+
+.legend { font-size:.85em; color:#666; margin:6px 0 0; }
+.legend .sw { display:inline-block; width:22px; height:0; border-top-width:3px; border-top-style:solid; vertical-align:middle; margin:0 3px; }
+.legend .dot { display:inline-block; width:11px; height:11px; border-radius:50%; vertical-align:middle; margin:0 2px; }
+
+/* node "Edt" editor panel */
+.editpanel { border:1px solid #7186a3; background:#fff; padding:8px 10px; margin:10px 0; font-size:.92em; display:none; }
+.editpanel.on { display:block; }
+.editpanel h4 { margin:0 0 6px; }
+.editpanel table { border-collapse:collapse; }
+.editpanel td, .editpanel th { padding:2px 8px; text-align:left; border-bottom:1px solid #eee; font-size:.95em; }
+.editpanel input[type=number] { width:64px; }
+
+/* transient status line (e.g. cycle warnings) */
+.dna-status { margin:6px 0; }
+
+.dna-actions { margin:10px 0; }
+.dna-actions .pbbtn { font-size:1.02em; padding:3px 10px; }
+.dna-actions .pbbtn .ic { color:#1d7a1d; }
+.instr { font-size:.9em; color:#444; line-height:1.5; }
+.instr code { background:#eef2f8; padding:0 3px; }

@@ -1,0 +1,353 @@
+/* Animated re-creation of paper/system_fig/system_overview.tex.
+   Geometry is driven off a single panel-width var --P and the figure's real cm
+   ratios, so the layout matches the compiled TikZ figure:
+     top panels  7.7 x 7.7 cm (square)      bottom panels 7.7 x 7.0 cm
+     h-gap 2.3 cm   v-gap 0.8 cm   frame inner sep 10pt (~0.353 cm)
+   Colors are the LaTeX/xcolor mixes converted to hex; font is Latin Modern. */
+:root {
+  --frame:   #8c8c8c;   /* black!45  -- panel frames + image borders */
+  --pipe:    #404040;   /* black!75  -- VLM-selection→mutation→grid pipes */
+  --vlm-fill:#f2f2ff;   /* blue!5    */
+  --vlm-draw:#00008c;   /* blue!55!black  -- VLM boxes + ×20 loop */
+  --mut-fill:#f6f0fb;   /* pale lilac -- recolored off the active-highlight green */
+  --mut-draw:#7a2a90;   /* violet -- mutation box (was green, clashed with the green glow) */
+  --feed:    #bf6000;   /* orange!75!black -- sample / publish edges */
+  --rate:    #0f8a8a;   /* teal -- rating edge (was green, clashed with the green glow) */
+  --gold:    #daa520;   /* ratingGold */
+  --star-off:#c7c7c7;   /* ratingGray (gray 0.78) */
+  --fg:      #1a1a1a;
+
+  /* one knob: top panel = --P square; everything else is a cm-ratio of it. */
+  --P: 412px;
+  --colgap: calc(var(--P) * 0.29870);   /* 2.3 / 7.7  */
+  --rowgap: calc(var(--P) * 0.10390);   /* 0.8 / 7.7  */
+  --rowH1:  calc(var(--P) * 0.55190);   /* 4.25 / 7.7 -- short top row (Archive/Sampling),
+                                           matching the static TikZ: the Archive shows 5 rows
+                                           x 10 cols = 50 and the evolution sample 5x5 = 25,
+                                           both at the same 0.7cm cell scale */
+  --rowH2:  calc(var(--P) * 0.90909);   /* 7.0 / 7.7  */
+  --gutter: calc(var(--P) * 0.13000);   /* ~1 cm left margin for publish/rate arrows */
+  --inset:  calc(var(--P) * 0.04582);   /* frame inner sep 10pt = 0.353 cm */
+  --node:   #f3f3f1;   /* light grey node fill (default) */
+  --node-active: #ecf6ec;   /* soft green node fill (while the cycle visits it) */
+  --sheet:  7px;       /* Sampling stacked-sheet offset (mirrors `sheet` in player.js) */
+}
+
+/* Latin Modern Roman = Computer Modern, matching the compiled TikZ figure.
+   Defined as the first family in --cm so titles (700), labels (400), and the
+   italic rated titles all resolve to the real LM Roman OTFs. */
+@font-face {
+  font-family:"Latin Modern Roman"; font-style:normal; font-weight:400; font-display:swap;
+  src:url("fonts/lmroman10-regular.otf") format("opentype"),
+      url("../assets/fonts/lmroman10-regular.otf") format("opentype");
+}
+@font-face {
+  font-family:"Latin Modern Roman"; font-style:normal; font-weight:700; font-display:swap;
+  src:url("fonts/lmroman10-bold.otf") format("opentype"),
+      url("../assets/fonts/lmroman10-bold.otf") format("opentype");
+}
+@font-face {
+  font-family:"Latin Modern Roman"; font-style:italic; font-weight:400; font-display:swap;
+  src:url("fonts/lmroman10-italic.otf") format("opentype"),
+      url("../assets/fonts/lmroman10-italic.otf") format("opentype");
+}
+:root { --cm: "Latin Modern Roman", "CMU Serif", "Computer Modern", "Times New Roman", Times, serif; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #fff; color: var(--fg); font-family: var(--cm); }
+#app { max-width: 1060px; margin: 0 auto; padding: 2.4em 1.2em 1.4em; }
+
+/* ---------------- the figure: 2×2 of framed panels ---------------- */
+.fig {
+  position: relative;
+  display: grid;
+  grid-template-areas: "arch samp" "evo eval";
+  grid-template-columns: var(--P) var(--P);
+  grid-template-rows: var(--rowH1) var(--rowH2);
+  column-gap: var(--colgap);
+  row-gap: var(--rowgap);
+  padding-left: var(--gutter);
+  width: fit-content;
+  margin: 0 auto;
+}
+.arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; overflow: visible; }
+
+.panel {
+  position: relative;
+  border: 1px solid var(--frame);
+  border-radius: 5px;
+  background: var(--node);
+  padding: var(--inset);
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  transition: background .35s ease, box-shadow .35s ease, border-color .35s ease;
+}
+/* Title: TikZ \colTitle is anchored south-west at the frame's north-west corner,
+   so it sits ABOVE the top edge (the frame line runs unbroken just below it). */
+.ptitle {
+  position: absolute; left: 4px; top: 0;
+  transform: translateY(calc(-100% - var(--P) * 0.013));   /* sit fully ABOVE the frame line, with a gap */
+  line-height: 1; background: #fff; padding: 0 4px;
+  font-weight: 700; font-size: calc(var(--P) * 0.0365); letter-spacing: .2px;
+  /* above the deck cards (z up to 5): otherwise the front Sampling card would sit over
+     the "Sampling" title and wash it out to a faded grey. */
+  z-index: 6;
+  /* headers alternate soft <-> full with their node's active state: dim while idle,
+     solid black while the cycle is visiting that node. */
+  color: #1a1a1a; opacity: .4; transition: opacity .35s ease;
+}
+.panel.active > .ptitle,
+#p-sampling:has(.samp-card.samp-active) > .ptitle { opacity: 1; }
+.pbody { flex: 1; min-height: 0; position: relative; display: flex; }
+.cover   { width: 100%; height: 100%; object-fit: contain; }
+.contain { width: 100%; height: 100%; object-fit: contain; }
+.framed  { border: 1px solid var(--frame); }
+
+/* ---- Archive: single clean frame, image fills the inset interior ---- */
+.arch-body { align-items: center; justify-content: center; position: relative; }
+/* hug the archive mosaic's true bounds (like the strip images) so the element box IS
+   the image -- the glide derives fly-cell sizes from it, and a letterboxed element box
+   would make those cells non-square. Thumbs stay square. */
+/* The sheets are opaque and offset by only a few px, so the pile reads as a tight solid
+   stack of paper. The hairline up-left shadow is what separates one sheet from the one
+   buried behind it; the soft shadow is the pile's own cast shadow on the node. */
+.arch-body .cover { position: relative; z-index: 2;
+  width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain;
+  filter: drop-shadow(-1px -1px 0 rgba(0,0,0,.34)) drop-shadow(0 2px 7px rgba(0,0,0,.16)); }
+/* #arch-back is the tight stack of buried checkpoints behind the top layer; #arch-front holds
+   the outgoing top layer while it cross-fades away over the incoming one. */
+.arch-layers { position: absolute; inset: 0; pointer-events: none; }
+#arch-back  { z-index: 1; }
+#arch-front { z-index: 3; }
+.arch-sheet { position: absolute; object-fit: contain;
+  filter: drop-shadow(-1px -1px 0 rgba(0,0,0,.34)) drop-shadow(0 2px 7px rgba(0,0,0,.16));
+  will-change: transform; }
+.fly-pub {
+  position: absolute; z-index: 5; width: 0; height: 0; opacity: 0;
+  border: 2px solid var(--feed); border-radius: 2px; object-fit: cover;
+  pointer-events: none;
+}
+
+/* ---- Sampling: a DECK of stacked draw-cards. The front card is the active sample
+   (each is [row-labels | strip] at the static figure's thumbnail scale); the card
+   behind it is the next draw in waiting. The deck shuffles: front slides out, the
+   card behind comes to the front, a new one fades in behind. Mirrors the two stacked
+   strip frames in system_overview.tex ("two independent draws"). ---- */
+/* Drop the outer grey panel frame entirely — the two draw-cards ARE the node. Keep the
+   top/left inset (+1px absorbs the removed border) so the cards' top-left stays put, but
+   zero the right/bottom padding and border so the cards extend out to exactly where the
+   old frame's right/bottom edges were. */
+#p-sampling { border: 0; background: transparent;
+  padding: calc(var(--inset) + 1px) 0 0 calc(var(--inset) + 1px); }
+.samp-body { align-items: stretch; justify-content: stretch; padding: 0; }
+.samp-deck { position: relative; width: 100%; height: 100%; }
+.samp-card {
+  position: absolute; inset: 0;
+  /* labels + strip travel as one centred group, so the shelf labels sit almost flush with
+     the leftmost sample image instead of the strip floating away in a flex:1 box. */
+  display: flex; gap: 3px; align-items: center; justify-content: center;
+  background: #fff; border: 1px solid var(--frame); border-radius: 4px;
+  padding: 0 var(--inset);   /* HORIZONTAL inset only: gives the row labels room off the left
+                   edge and margin around the strip, WITHOUT the vertical double-inset (atop the
+                   node's own inset) that would shrink the strip below the static's 0.7cm cell. */
+  box-shadow: 0 3px 12px rgba(0,0,0,.16);
+  transition: transform .46s cubic-bezier(.4,0,.2,1), opacity .46s ease,
+              box-shadow .35s ease, border-color .35s ease, background .35s ease;
+  will-change: transform, opacity;
+}
+/* The FRONT card is the true "active node": it glows green only while the Sampling node
+   is actually working — the draw gliding in, branching a parent, or the rating draw
+   emptying. The outer #p-sampling panel no longer lights up (only this card does). */
+.samp-card.samp-active { background: var(--node-active); border-color: #7bb37b;
+  box-shadow: 0 0 18px 1px rgba(0,140,0,.24), 0 3px 12px rgba(0,0,0,.16); }
+.samp-card.pos-front { transform: translate(0,0); opacity: 1; z-index: 4; }
+.samp-card.pos-back  { transform: translate(calc(-2.4 * var(--sheet)), calc(-2.4 * var(--sheet))); opacity: .5; z-index: 3; }
+.samp-card.pos-deep  { transform: translate(calc(-4.8 * var(--sheet)), calc(-4.8 * var(--sheet))); opacity: 0; z-index: 2; }
+.samp-card.pos-out   { transform: translate(calc(3 * var(--sheet)), calc(3.4 * var(--sheet))); opacity: 0; z-index: 5; }
+/* Shelf labels stay hidden until the draw's thumbnails have actually landed (glideCard adds
+   .dealt), then fade in -- they shouldn't caption an empty strip. */
+.row-labels {
+  list-style: none; margin: 0; padding: 0; flex: none;
+  display: flex; flex-direction: column; justify-content: space-around;
+  text-align: right; font-size: 12px; color: #1a1a1a; align-self: center;
+  height: calc(var(--P) * 0.4515);   /* == evo strip height (5 rows) -> labels sit at row centers */
+  opacity: 0; transition: opacity .32s ease;
+}
+.samp-card.dealt .row-labels { opacity: 1; }
+.strip-frames { flex: none; min-width: 0; height: 100%;
+  display: flex; align-items: center; justify-content: center; }
+/* Size the strip by WIDTH so its cells match the Archive's 0.7cm cell exactly: both draws
+   are 5 cols, so 5 * 0.0903*P. Evo (5x5) is then square; the wider eval (4x5) is shorter
+   but shares the same cell. max-height guards the tight top-row height. */
+.strip-frames img { width: calc(var(--P) * 0.4515); height: auto;
+  max-width: 100%; max-height: 100%; background: #fff; }
+/* the 4x5 evaluation draw is 4 rows tall -> its label column is shorter (2 shelves,
+   space-around puts "least-rated"/"random" at the two shelf centers) */
+.samp-card.k-eval .row-labels { height: calc(var(--P) * 0.3612); }
+
+/* node contents cast soft shadows onto the grey fill */
+
+/* ---- Evaluation reveal: rated samples PILE UP in the middle of the node — the pile runs
+   top-left (first) to bottom-right (last), tightly offset, so first and last sit equidistant
+   from the node's centre. Only the TOP card keeps its title + stars; earlier ones drop theirs. ---- */
+/* The frame's only in-flow child is the image, so it is the image that sits on the pile's
+   centre anchor. Title + stars hang off it absolutely -- dropping them off a buried card
+   therefore never nudges that card's thumbnail. */
+.eval-reveal { position: absolute; z-index: 7; transform: translate(-50%,-50%);
+  pointer-events: none; }
+.er-img { display: block; background-repeat: no-repeat; background-color: #fff;
+  border: 1px solid var(--frame); box-shadow: 0 2px 10px rgba(0,0,0,.2); }
+.er-meta { position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center;
+  width: max-content; max-width: calc(var(--P) * 0.5); }
+.er-title { font-family: var(--cm); font-style: italic; font-weight: 600; color: #222;
+  font-size: calc(var(--P) * 0.040); text-align: center; margin-top: 6px;
+  line-height: 1.12; }
+.er-stars { font-size: calc(var(--P) * 0.050); letter-spacing: -.5px; margin-top: 3px;
+  white-space: nowrap; }
+
+/* node contents cast soft shadows onto the grey fill */
+
+/* ---- Evolution: VLM selection → Mutation/crossover → grid (centered) ---- */
+/* content sits in the UPPER part of the panel (mut fixed near y=-10.93 in the .tex,
+   leaving more empty space below) -- not vertically centered. */
+.evo-body { position: relative;
+  flex-direction: column; align-items: center; justify-content: flex-start;
+  gap: calc(var(--P) * 0.052); padding-top: calc(var(--P) * 0.105); }
+.ebox {
+  border-radius: 3px; border: 1px solid; padding: 4px 9px;
+  font-size: 13px; text-align: center; background: #fff; white-space: nowrap;
+  box-shadow: 0 1px 5px rgba(0,0,0,.13);
+}
+.vlmbox { background: var(--vlm-fill); border-color: var(--vlm-draw); color: #14143a; }
+.mutbox { background: var(--mut-fill); border-color: var(--mut-draw); color: #3a143a; }
+/* fixed grey frame stays put while the grid contents animate inside it */
+/* outlined grid frame (like the .tex), but NOT filled white -- the empty region shows
+   the node's grey through the outline; the grid image fills it once candidates spawn. */
+.gen-wrap { position: relative; width: calc(var(--P) * 0.584); aspect-ratio: var(--grid-ar, 760/460);
+  border: 1px solid var(--frame); }
+.gen-wrap img { width: 100%; height: 100%; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.13); }
+/* VLM selection outlines, overlaid on the candidate grid on the "select" beat */
+.sel-overlay { position: absolute; inset: 0; pointer-events: none; }
+.sel-cell { position: absolute; box-sizing: border-box;
+  border: 2.5px solid #e00000; border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.6);
+  animation: selpop .2s ease both; }
+@keyframes selpop { from { opacity: 0; transform: scale(1.08); } to { opacity: 1; transform: scale(1); } }
+/* publication-selection animation: the chosen individual (gold), showcased then
+   ridden along the publish arrow into the archive */
+#pub-clone { position: absolute; display: none; box-sizing: border-box; object-fit: contain;
+  background: #fff; border: 3px solid var(--gold); border-radius: 2px; z-index: 5;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.7), 0 3px 12px rgba(0,0,0,.2); }
+#pub-title { position: absolute; left: 0; right: 0; display: none; text-align: center;
+  font-family: var(--cm); font-style: italic; font-weight: 600; color: #222;
+  font-size: calc(var(--P) * 0.032); opacity: 0; z-index: 5; }
+#pub-rider { position: absolute; left: 0; top: 0; display: none; box-sizing: border-box;
+  object-fit: contain; background: #fff; border: 2px solid var(--gold); border-radius: 2px;
+  z-index: 6; box-shadow: 0 2px 9px rgba(0,0,0,.28); }
+/* sampling glide: thumbnail copies travelling Archive -> Sampling */
+#samp-fly { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.samp-fly-cell { position: absolute; left: 0; top: 0; background-repeat: no-repeat;
+  box-shadow: 0 1px 5px rgba(0,0,0,.2); }
+/* The recent publications. Only the featured one travels the publish edge (#pub-rider); the rest
+   flip into place as it lands — they came from Evolution nodes we never see, so there is no
+   journey to draw. Once landed they STAY on the Archive's top layer, gold-ringed, until the next
+   publication turns that layer over; the next epoch's draws lift half their images off these. */
+#arch-fly { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.arch-fly-cell { position: absolute; left: 0; top: 0; background-repeat: no-repeat;
+  background-color: #fff; will-change: transform, opacity; }
+.arch-fly-cell.fresh { box-shadow: 0 0 0 1px var(--gold); }
+/* branched parent travelling from the Sampling centre into the generation grid */
+#branch-clone { position: absolute; left: 0; top: 0; display: none; box-sizing: border-box;
+  background-repeat: no-repeat; background-color: #fff; z-index: 6;
+  border: 3px solid #c01818; border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.7), 0 3px 12px rgba(0,0,0,.22); }
+#branch-title { position: absolute; left: 0; top: 0; display: none; text-align: center;
+  font-family: var(--cm); font-style: italic; font-weight: 600; color: #222;
+  font-size: calc(var(--P) * 0.044); opacity: 0; z-index: 6; transform: translate(-50%, 0); }
+/* per-generation evolution: selected parents converge to centre, candidates spawn out */
+#evo-fly { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.evo-cell { position: absolute; left: 0; top: 0; box-sizing: border-box;
+  background-repeat: no-repeat; background-color: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.22); }
+.evo-cell.sel { border: 2.5px solid #e00000; border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.6), 0 1px 6px rgba(0,0,0,.25); }
+
+/* ---- parallel rating track (concurrent with evolution) ----
+   #rating-wall fills the Sampling node with the ~100-image sample; #rate-fly /
+   #rate-stack carry thumbnails streaming down + cycling/stacking in the Evaluation
+   node; #rate-stars are the score glyphs riding the rate edge into the Archive. */
+#rating-wall { position: absolute; left: 0; top: 0; opacity: 0; pointer-events: none; z-index: 4; }
+#rating-wall .rw-img { width: 100%; height: 100%; object-fit: contain;
+  border: 1px solid var(--frame); background: #fff; }
+#rate-fly, #rate-stack, #rate-stars { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+/* rating-sample members: glide in from the archive and form the filled shelf wall */
+.rate-fly-cell { position: absolute; left: 0; top: 0; background-repeat: no-repeat;
+  background-color: #fff; border: 1px solid var(--frame); box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  will-change: transform, width, height, opacity; }
+.rate-conv { position: absolute; left: 0; top: 0; display: flex; flex-direction: column;
+  align-items: center; will-change: transform, opacity; }
+.rate-conv .rc-img { background-repeat: no-repeat; background-color: #fff;
+  border: 1px solid var(--frame); box-shadow: 0 1px 5px rgba(0,0,0,.22); }
+.rate-star { position: absolute; left: 0; top: 0; color: var(--gold); font-size: 13px;
+  line-height: 1; text-shadow: 0 1px 2px rgba(0,0,0,.25); will-change: transform; }
+
+/* ---- Evaluation: VLM rating box → 3×2 rated thumbnails ---- */
+.eval-body { flex-direction: column; align-items: center; gap: calc(var(--P) * 0.052); padding-top: 2px; }
+/* The static 6-example grid is no longer drawn (the rater's one-by-one reveal
+   replaces it); .rated is kept only as an invisible geometry anchor that the reveal
+   frame centres itself within. */
+.rated { display: grid; grid-template-columns: repeat(3, calc(var(--P) * 0.188));
+  column-gap: calc(var(--P) * 0.108); row-gap: calc(var(--P) * 0.055);
+  visibility: hidden; }
+.rated-cell { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.rated-cell img { width: 100%; aspect-ratio: 1/1; object-fit: contain;
+  border: 1px solid var(--frame); background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.15); }
+/* rt-title / rt-stars also used by the rating-conveyor cells (not just .rated-cell),
+   so the selectors are ancestor-independent. */
+.rt-title {
+  font-family: var(--cm); font-style: italic; font-size: 9px; line-height: 1.12;
+  color: #222; margin-top: 2px; max-height: 2.3em; overflow: hidden; text-align: center;
+}
+.rt-stars { font-size: 9px; letter-spacing: -.5px; margin-top: 1px; }
+.rt-stars .on { color: var(--gold); }
+.rt-stars .off { color: var(--star-off); }
+
+/* gold star glyphs: ONE fat star rides the Evaluation→Archive edge once a rating batch
+   completes, then bursts into a scatter of baby stars across the Archive. */
+.fly-star {
+  position: absolute; left: 0; top: 0; z-index: 9; color: var(--gold);
+  font-size: calc(var(--P) * 0.055); line-height: 1; pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0,0,0,.3); will-change: transform, opacity;
+}
+.fly-star.big  { font-size: calc(var(--P) * 0.085);
+  text-shadow: 0 0 14px rgba(212,160,23,.55), 0 1px 3px rgba(0,0,0,.35); }
+.fly-star.baby { font-size: calc(var(--P) * 0.036); }
+
+/* active highlight as the cycle visits each stage -- the node fill warms to a soft
+   green and the frame glows (green), while its contents keep their cast shadows. */
+.panel.active { background: var(--node-active); border-color: #7bb37b;
+  box-shadow: 0 0 18px 1px rgba(0,140,0,.22); }
+.panel.active.grow { box-shadow: 0 0 26px 3px rgba(0,140,0,.36); }
+.ebox.hot { box-shadow: 0 0 10px 1px rgba(0,0,140,.2), 0 1px 5px rgba(0,0,0,.13); }
+.mutbox.hot { box-shadow: 0 0 10px 1px rgba(122,42,144,.25), 0 1px 5px rgba(0,0,0,.13); }
+.vlmbox.hot { box-shadow: 0 0 10px 1px rgba(0,0,140,.2), 0 1px 5px rgba(0,0,0,.13); }
+
+/* ---------------- controls ---------------- */
+.controls { margin-top: 26px; display: flex; align-items: center; gap: 12px;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+.controls button { border: 1px solid var(--frame); background: #fff; border-radius: 4px;
+  padding: 3px 10px; cursor: pointer; }
+.controls button:hover { border-color: var(--feed); }
+.ctl-group { display: flex; align-items: center; gap: 5px; font-size: 13px; color: #555; }
+.controls select { border: 1px solid var(--frame); border-radius: 4px; padding: 2px 4px; }
+.controls #scrub { flex: 1; accent-color: var(--feed); }
+.progress { font-size: 13px; color: #555; white-space: nowrap; min-width: 9em; text-align: right; }
+
+@media (max-width: 1080px) {
+  :root { --P: calc((100vw - 90px) / 2.43); }   /* scale the whole figure down to fit */
+}
+@media (max-width: 680px) {
+  :root { --P: calc(100vw - 60px); }
+  .fig { grid-template-columns: var(--P); grid-template-rows: none;
+    grid-template-areas: "arch" "samp" "evo" "eval"; padding-left: 0; row-gap: 30px; }
+  .arrows { display: none; }
+}

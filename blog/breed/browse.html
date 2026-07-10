@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browse — Picbreeder · VLM</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; <span id="crumb">Browse</span></div>
+    <h1 style="font-size:2em;" id="heading">Browse</h1>
+    <p class="note" id="subhead"></p>
+    <div class="gallery" id="gallery"></div>
+    <div class="pager" id="pager"></div>
+    <p class="note" id="empty" style="display:none;">No images here yet.</p>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="pbsite.js"></script>
+<script src="community.js"></script>
+<script>
+(function () {
+  const _qp = new URLSearchParams(location.search);
+  PB.chrome(_qp.get('run') === 'human' ? 'human' : (_qp.get('type') || ''));
+  const p = new URLSearchParams(location.search);
+  const PER_PAGE = 50;
+  const TYPES = {
+    EDITORS:   ["Editor's Picks", "The images from our paper's banner—each the published end-point of a long VLM lineage.", 'editors'],
+    RANK:      ['Highest Rated',  'Highest-rated overall—the VLM raters and the community’s star-ratings, confidence-weighted.', 'highest_rated'],
+    UPANDCOME: ['Best New Images','Recently published—including community uploads—and already well-liked.',          'best_new'],
+    MB:        ['Most Branched',  'The images other agents chose to branch from most often.',           'most_branched'],
+    CREATED:   ['Newest',         'The most recently published images, including ones uploaded by the community.',         'newest'],
+    RANDOM:    ['Random',         'A random sample of the archive.',                                     'random'],
+  };
+
+  // A run's whole archive is also browseable as a family tree, but only the runs in
+  // tree.html's manifest have one built — tree.html silently falls back to the canon
+  // run for anything else, so check membership before offering the link.
+  function treeLink(run) {
+    fetch('data/tree/manifest.json').then((r) => r.json()).then(function (mf) {
+      if (!(mf.runs || []).some((m) => m.run === run)) return;
+      const u = new URLSearchParams(); u.set('run', run);
+      const ab = p.get('archiveBase'); if (ab) u.set('archiveBase', ab);
+      const a = document.createElement('a');
+      a.href = 'tree.html?' + u.toString();
+      a.textContent = 'See the whole run as a family tree »';
+      const sh = document.getElementById('subhead');
+      sh.appendChild(document.createTextNode(' '));
+      sh.appendChild(a);
+    }).catch(() => null);
+  }
+
+  function show(heading, crumb, sub, keys, opts) {
+    document.getElementById('heading').textContent = heading;
+    document.getElementById('crumb').textContent = crumb;
+    document.getElementById('subhead').textContent = sub;
+    if (!keys.length) { document.getElementById('empty').style.display = 'block'; return; }
+    const npages = Math.max(1, Math.ceil(keys.length / PER_PAGE));
+    let page = parseInt(p.get('page') || '1', 10);
+    if (!(page >= 1)) page = 1;
+    if (page > npages) page = npages;
+    const slice = keys.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+    PB.fillGallery(document.getElementById('gallery'), slice, opts);
+    if (npages > 1) {
+      const base = new URLSearchParams(location.search);
+      const link = (pg, label, cur) => cur
+        ? '<span class="cur">' + label + '</span>'
+        : (base.set('page', pg), '<a href="?' + base.toString() + '">' + label + '</a>');
+      let html = '';
+      if (page > 1) html += link(page - 1, '« Prev', false) + ' ';
+      for (let i = 1; i <= npages; i++) html += link(i, String(i), i === page) + ' ';
+      if (page < npages) html += link(page + 1, 'Next »', false);
+      const pager = document.getElementById('pager');
+      pager.innerHTML = html;
+      pager.insertAdjacentHTML('beforebegin',
+        '<p class="note pagecount">Showing ' + ((page - 1) * PER_PAGE + 1) + '–' +
+        Math.min(page * PER_PAGE, keys.length) + ' of ' + keys.length + '.</p>');
+    }
+  }
+
+  const run = p.get('run');
+  if (run) {
+    // Whole-run gallery. Thumbnails come from the run's HF sprite sheet and the
+    // archive metadata (titles/ratings); no genome is fetched until the visitor
+    // opens Evolve / DNA on a specific image. Runs without a sprite sheet fall
+    // back to rendering genomes client-side (fillGallery).
+    document.getElementById('heading').textContent = 'Loading…';
+    document.getElementById('subhead').textContent = 'Fetching this experiment’s gallery…';
+    PB.loadIndex().catch(() => null).then(function (idx) {
+      const entry = idx && (idx.runs || []).find((r) => r.run === run);
+      return Promise.all([PB.loadRunCards(run, entry), PB.loadSprite(run)]).then(function (res) {
+        const rd = res[0], man = res[1];
+        const lbl = PB.humanizeRun(entry) || run;
+        const human = run === 'human' || (entry && entry.arc === 'human');
+        const heading = human ? lbl : 'Experiment: ' + lbl;
+        const sub = human
+          ? rd.n + ' images bred by people on the original Picbreeder, in publication order.'
+          : rd.n + ' published images from this experiment, highest-rated first.';
+        const sprites = {};
+        if (man) sprites[run] = man;
+        show(heading, lbl, sub, rd.keys, { items: rd.items, sprites: sprites });
+        treeLink(run);
+      });
+    }).catch(function (e) {
+      document.getElementById('heading').textContent = 'Experiment unavailable';
+      document.getElementById('subhead').textContent =
+        'Could not load this run from the archive (' + e.message + '). It may not be uploaded yet.';
+    });
+    return;
+  }
+
+  const user = p.get('user');
+  if (user) {
+    // One personality's whole gallery. Thumbnails come from the runs' HF sprite
+    // sheets and the slim bundled card file (title/rating/agent); no genome is
+    // fetched until the visitor opens Evolve / DNA on a specific image. Runs that
+    // don't have a sprite set yet fall back to rendering the genome (fillGallery).
+    document.getElementById('heading').textContent = 'Loading…';
+    document.getElementById('subhead').textContent = 'Fetching this personality’s gallery…';
+    Promise.all([PB.load(), PB.loadUserCards()]).then(function (res) {
+      const d = res[0], uc = res[1];
+      const a = (d.all_artists || d.artists || []).find((x) => x.user === user);
+      const cards = (uc.users || {})[user] || [];
+      const sub = a
+        ? '“' + a.trait + '”—' + a.nimg + ' published images (mean rating ' +
+          a.rating.toFixed(2) + '/5, branched ' + a.branched + ' times).'
+        : 'Publications by ' + user + '.';
+      if (!cards.length) { show('By ' + user, user, sub, []); return; }
+      // card = [runIdx, idNum, title, rating, nrat, agent, color(0/1), children]
+      const items = {}, keys = [];
+      cards.forEach(function (c) {
+        const run = uc.runs[c[0]];
+        const id = 'img_' + String(c[1]).padStart(6, '0');
+        const key = run + '::' + id;
+        items[key] = { title: c[2] || id, model: PB.modelOfRun(run),
+          agent: String(c[5] || ''), color: c[6] !== 0, rating: c[3] == null ? null : c[3],
+          nrat: c[4] || 0, children: c[7] || 0, run: run, id: id, user: user };
+        keys.push(key);
+      });
+      const runs = Array.from(new Set(keys.map((k) => items[k].run)));
+      Promise.all(runs.map((r) => PB.loadSprite(r).then((m) => [r, m]))).then(function (pairs) {
+        const sprites = {};
+        pairs.forEach(function (pr) { if (pr[1]) sprites[pr[0]] = pr[1]; });
+        show('By ' + user, user, sub, keys, { items: items, sprites: sprites });
+      });
+    });
+    return;
+  }
+
+  // Everything one VLM published, across every one of its runs. The bundled archive
+  // holds only the canonical run (all gemini-2.5-pro) plus the banner picks, so this
+  // reads the slim per-model card file instead — thumbnails from each run's HF sprite
+  // sheet, genome fetched lazily on Evolve / DNA, exactly like the ?user= gallery.
+  const model = p.get('model');
+  if (model) {
+    document.getElementById('heading').textContent = 'Loading…';
+    document.getElementById('subhead').textContent = 'Fetching this model’s gallery…';
+    PB.loadModelCards().then(function (mc) {
+      const m = (mc.models || {})[model];
+      if (!m || !m.cards.length) {   // unknown model / offline mirror → bundled items
+        PB.load().then(function (d) {
+          show('By ' + model, model, 'Images published by ' + model + '.',
+            Object.keys(d.items).filter((k) => (d.items[k].model || '') === model));
+        });
+        return;
+      }
+      const items = {}, keys = [];
+      m.cards.forEach(function (c) {   // [runIdx, idNum, title, rating, nrat, agent, color, children]
+        const run = mc.runs[c[0]];
+        const id = 'img_' + String(c[1]).padStart(6, '0');
+        const key = run + '::' + id;
+        items[key] = { title: c[2] || id, model: model,
+          agent: String(c[5] || ''), color: c[6] !== 0, rating: c[3] == null ? null : c[3],
+          nrat: c[4] || 0, children: c[7] || 0, run: run, id: id };
+        keys.push(key);
+      });
+      // Cards are best-rated first — except for a model whose runs never went through a
+      // community-rating pass (qwen3-vl-30b), where the order is publication order and
+      // every cell shows an empty star bar. Say which, rather than claiming a ranking.
+      const shown = keys.length < m.n_images
+        ? (m.n_rated ? 'The ' + keys.length + ' best-rated of ' : keys.length + ' of ') +
+          m.n_images.toLocaleString()
+        : 'All ' + keys.length;
+      const sub = shown + ' images published by ' + model + ' across ' + m.n_runs +
+        ' experiment' + (m.n_runs === 1 ? '' : 's') + '.' +
+        (m.n_rated ? '' : ' None of its runs were community-rated.');
+      const runs = Array.from(new Set(keys.map((k) => items[k].run)));
+      Promise.all(runs.map((r) => PB.loadSprite(r).then((s) => [r, s]))).then(function (pairs) {
+        const sprites = {};
+        pairs.forEach(function (pr) { if (pr[1]) sprites[pr[0]] = pr[1]; });
+        show('By ' + model, model, sub, keys, { items: items, sprites: sprites });
+      });
+    });
+    return;
+  }
+
+  const tag = p.get('tag');
+  if (tag) {
+    // Unified tag gallery: VLM caption tags AND community upload tags are treated
+    // as one namespace, so a photo a visitor publishes with "face" lands in the same
+    // "face" category as the VLM-captioned faces.
+    //   * Archive side — the homepage "Top Categories" cloud is a bag-of-words over
+    //     the WHOLE browseable archive (~117k captions across ~60 runs). We lazy-load
+    //     the multi-run caption index and render each match straight from its run's HF
+    //     sprite sheet (spriteCell needs only the small per-run sprite manifest — no
+    //     genome/8 MB metadata until Evolve / DNA). Index shape:
+    //       { runs:[name...], counts:{tag:trueCount},
+    //         tags:{ tag:[[runIdx, idNum, title, rating*100|-1, nrat], ...] } }  (capped, best-first)
+    //   * Community side — live uploads (run === 'community') carry a user-entered
+    //     `tags` array and a baked genome, so they render without a sprite sheet.
+    // VLM tags are lowercased + naive-singularised by caption_tags(); we normalise the
+    // free-text community tags the same way so "Faces"/"face" collide. A cold/absent
+    // community API or full index degrades gracefully to whatever side did resolve,
+    // and finally to the bundled tag_index (offline `?archiveBase=.` mirror).
+    const tl = tag.toLowerCase();
+    const Tag = tl.charAt(0).toUpperCase() + tl.slice(1);
+    const _sing = (w) => {
+      if (w.length <= 3) return w;
+      if (w.endsWith('ies')) return w.slice(0, -3) + 'y';
+      if (/(?:ches|shes|sses|xes)$/.test(w)) return w.slice(0, -2);
+      if (w.endsWith('ses')) return w.slice(0, -2);
+      if (w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
+      return w;
+    };
+    const norm = (t) => _sing(String(t).toLowerCase());
+    const want = norm(tl);
+    document.getElementById('heading').textContent = 'Loading…';
+    document.getElementById('subhead').textContent = 'Finding images tagged “' + tl + '”…';
+
+    // Community uploads tagged the same word (rendered from baked genomes).
+    const commP = PB.loadRun('community').then(function (cd) {
+      const keys = cd.keys.filter((k) => (cd.items[k].tags || []).some((t) => norm(t) === want));
+      return { items: cd.items, keys: keys };
+    }).catch(function () { return { items: {}, keys: [] }; });
+
+    // Archive (VLM-captioned) matches from the multi-run index.
+    const arcP = PB.fetchGz('data/tag_index_full.json.gz').then(function (fi) {
+      const runs = fi.runs || (fi.run ? [fi.run] : []);
+      const recs = (fi.tags && (fi.tags[want] || fi.tags[tl])) || [];
+      if (!recs.length) return { items: {}, keys: [], sprites: {}, total: 0, nRuns: 0 };
+      const total = (fi.counts && (fi.counts[want] || fi.counts[tl])) || recs.length;
+      const items = {}, keys = [], used = {};
+      recs.forEach(function (r) {
+        const run = runs[r[0]]; if (!run) return;
+        const id = 'img_' + String(r[1]).padStart(6, '0');
+        const key = run + '::' + id;
+        items[key] = { title: r[2] || id, model: PB.modelOfRun(run),
+          rating: (r[3] == null || r[3] < 0) ? null : r[3] / 100, nrat: r[4] || 0,
+          run: run, id: id };
+        keys.push(key); used[run] = 1;
+      });
+      const usedRuns = Object.keys(used);
+      return Promise.all(usedRuns.map((r) => PB.loadSprite(r).then((m) => [r, m]))).then(function (pairs) {
+        const sprites = {};
+        pairs.forEach(function (pr) { if (pr[1]) sprites[pr[0]] = pr[1]; });
+        return { items: items, keys: keys, sprites: sprites, total: total, nRuns: usedRuns.length };
+      });
+    }).catch(function () { return null; });
+
+    Promise.all([commP, arcP]).then(function (res) {
+      const comm = res[0], arc = res[1];
+      if (!arc && !comm.keys.length) {   // both sides unreachable → bundled offline fallback
+        PB.load().then(function (d) {
+          const keys = (d.tag_index && (d.tag_index[want] || d.tag_index[tl])) ||
+            Object.keys(d.items).filter((k) => (d.items[k].tags || []).some((t) => norm(t) === want));
+          show('Category: “' + Tag + '”', Tag, 'Images tagged “' + tl + '”.', keys);
+        });
+        return;
+      }
+      const items = Object.assign({}, (arc && arc.items) || {}, comm.items);
+      const sprites = (arc && arc.sprites) || {};
+      // Community uploads first (freshest, usually few), then archive best-rated.
+      const keys = comm.keys.concat(arc ? arc.keys : []);
+      const parts = [];
+      if (comm.keys.length) parts.push(comm.keys.length + ' community upload' + (comm.keys.length === 1 ? '' : 's'));
+      if (arc && arc.keys.length) {
+        parts.push((arc.keys.length < arc.total
+          ? 'the ' + arc.keys.length + ' best-rated of ' + arc.total.toLocaleString()
+          : arc.keys.length) + ' archive image' + (arc.total === 1 ? '' : 's') +
+          ' across ' + arc.nRuns + ' experiment' + (arc.nRuns === 1 ? '' : 's'));
+      }
+      const sub = (parts.join(' + ') || 'No images') + ' tagged “' + tl + '”.';
+      show('Category: “' + Tag + '”', Tag, sub, keys, { items: items, sprites: sprites });
+    });
+    return;
+  }
+
+  PB.load().then(function (d) {
+    let keys = [], heading = 'Browse', sub = '', crumb = 'Browse';
+    const type = p.get('type'), q = p.get('q');
+
+    if (q) {
+      heading = 'Search: “' + q + '”'; crumb = 'Search'; sub = 'Archive images whose title matches “' + q + '”.';
+      const ql = q.toLowerCase();
+      keys = Object.keys(d.items).filter((k) => (d.items[k].title || '').toLowerCase().includes(ql));
+    } else if (type && TYPES[type]) {
+      const t = TYPES[type]; heading = t[0]; sub = t[1]; crumb = t[0];
+      // The rating/recency/branch categories adapt to live human votes +
+      // community publishes; only random stays on the bundled ranking.
+      if (['highest_rated', 'best_new', 'newest', 'most_branched'].includes(t[2])) {
+        PB.liveLists(d).then(function (live) {
+          show(heading, crumb, sub, live.lists[t[2]] || [], { items: live.items });
+        });
+        return;
+      }
+      keys = d.lists[t[2]] || [];
+    } else {
+      const t = TYPES.RANDOM; heading = t[0]; sub = t[1]; crumb = t[0]; keys = d.lists.random || [];
+    }
+    show(heading, crumb, sub, keys);
+  });
+})();
+</script>
+</body>
+</html>

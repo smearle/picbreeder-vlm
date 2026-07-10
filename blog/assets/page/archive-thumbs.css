@@ -1,0 +1,26 @@
+/* Two archive thumbnails (human vs. AI) under the old-site figure. Click one to open
+   the standalone archive viewer (archive.html) on that source; clicking a particular
+   cell of the flip-book parks the viewer's loupe on that very image. */
+/* Two equal columns spanning the text-column width (this figure is .l-page, which at
+   desktop widths is the same 70% width as the .l-body text column); each thumb is
+   centered within its own half, as if at the center of a two-column layout. */
+.intro-arc-thumbs { display:grid; grid-template-columns:1fr 1fr; column-gap:54px; align-items:flex-start; justify-items:center; margin:0 auto; }
+/* Fill the l-page text column, but cap each thumb so the pair + column-gap never
+   exceeds the CPPN figures' l-page-outset width (1080px): (1080 - 54) / 2 = 513px. */
+.intro-arc-thumbs figure { margin:0; cursor:pointer; width:100%; max-width:513px; text-align:center; }
+.intro-arc-thumbs .thumb { position:relative; display:block; }
+.intro-arc-thumbs img { position:relative; z-index:4; width:100%; aspect-ratio:1/1; object-fit:cover; display:block;
+  border-radius:5px; background:#f2f2f2; }
+/* live "flip-book" of real archive individuals, lazy-loaded from the HF sprite sheets,
+   fading in over the static still once the first sheet arrives (see flipper script below) */
+.intro-arc-thumbs canvas.flip { position:absolute; inset:0; z-index:5; width:100%; height:100%;
+  border-radius:5px; display:block;
+  opacity:0; transition:opacity .35s ease; pointer-events:none; }
+.intro-arc-thumbs canvas.flip.on { opacity:1; }
+.intro-arc-thumbs figure:hover img, .intro-arc-thumbs figure:focus-visible img,
+.intro-arc-thumbs figure:hover canvas.flip, .intro-arc-thumbs figure:focus-visible canvas.flip {
+  outline:none; }
+.intro-arc-thumbs figcaption { margin-top:.55em; font-size:13px; color:rgba(0,0,0,.6); line-height:1.45; text-align:center; }
+.intro-arc-thumbs figcaption b { display:block; color:#000; font-weight:600; font-size:14px; }
+
+@media (max-width:680px){ .intro-arc-thumbs { grid-template-columns:1fr; row-gap:32px; } .intro-arc-thumbs figure { width:88vw; max-width:360px; } }

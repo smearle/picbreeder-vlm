@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Community — Picbreeder · VLM</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+<style>
+  #admin-bar { margin:8px 0; font-size:.85em; color:#555; }
+  #admin-bar .on { color:#3a6b1e; font-weight:bold; }
+  .gcell .del { background:#fff0f0; border:1px solid #e0a0a0; color:#a02020; cursor:pointer;
+    font-size:11px; border-radius:3px; padding:1px 6px; margin-top:3px; }
+  .gcell.gone { opacity:.35; pointer-events:none; }
+</style>
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; <span id="crumb">Community</span></div>
+    <h1 style="font-size:2em;" id="heading">Community Gallery</h1>
+    <p class="note" id="subhead">A gallery of visitor-bred images.</p>
+    <div id="admin-bar"></div>
+    <div class="gallery" id="gallery"></div>
+    <p class="note" id="empty" style="display:none;">Nothing to show yet.</p>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="pbsite.js"></script>
+<script src="community.js"></script>
+<script>
+(function () {
+  PB.chrome('');
+
+  // Publishing / the shared community archive is disabled for now. Show a plain
+  // notice instead of loading the live gallery (which would hit the community Space).
+  if (!PB.COMMUNITY_ENABLED) {
+    document.getElementById('subhead').textContent = 'Community publishing is not available yet.';
+    document.getElementById('gallery').style.display = 'none';
+    return;
+  }
+
+  // ---- admin bar -----------------------------------------------------------
+  const bar = document.getElementById('admin-bar');
+  function renderAdminBar() {
+    if (PBC.isAdmin()) {
+      bar.innerHTML = '<span class="on">Admin mode on</span>—delete buttons enabled. ' +
+        '<a href="#" id="admin-off">turn off</a>';
+      document.getElementById('admin-off').onclick = (e) => {
+        e.preventDefault(); PBC.setAdminKey(''); location.reload();
+      };
+    } else {
+      bar.innerHTML = '<a href="#" id="admin-on">admin</a>';
+      document.getElementById('admin-on').onclick = (e) => {
+        e.preventDefault();
+        const k = (prompt('Admin key:', '') || '').trim();
+        if (k) { PBC.setAdminKey(k); location.reload(); }
+      };
+    }
+  }
+  renderAdminBar();
+
+  // ---- gallery -------------------------------------------------------------
+  const gallery = document.getElementById('gallery');
+  const tagFilter = new URLSearchParams(location.search).get('tag');
+  document.getElementById('heading').textContent = tagFilter ? 'Community — “' + tagFilter + '”' : 'Community Gallery';
+
+  // tag cloud (mirrors the original Picbreeder tagcloud), sized by use
+  PBC.tags().then(function (counts) {
+    const tagsArr = Object.keys(counts);
+    if (!tagsArr.length) return;
+    const max = Math.max.apply(null, tagsArr.map(function (t) { return counts[t]; }));
+    const cloud = document.createElement('div'); cloud.id = 'tagcloud';
+    cloud.innerHTML = '<span class="pbc-rlabel" style="color:#888">Tags:</span> ' +
+      tagsArr.map(function (t) {
+        const sz = 11 + Math.round(7 * counts[t] / max);
+        const on = t === tagFilter ? ' style="font-weight:bold;font-size:' + sz + 'px" ' : ' style="font-size:' + sz + 'px" ';
+        return '<a href="community.html?tag=' + encodeURIComponent(t) + '"' + on + '>' + PB.esc(t) + '</a> <span style="color:#bbb">' + counts[t] + '</span>';
+      }).join(' &nbsp; ') + (tagFilter ? ' &nbsp; <a href="community.html">✕ clear</a>' : '');
+    gallery.parentNode.insertBefore(cloud, gallery);
+  }).catch(function () {});
+
+  PB.loadRun('community').then(function (rd) {
+    let keys = rd.keys;
+    if (tagFilter) keys = keys.filter(function (k) { return (rd.items[k].tags || []).indexOf(tagFilter) > -1; });
+    if (!keys.length) { document.getElementById('empty').style.display = 'block'; return; }
+    PB.fillGallery(gallery, keys, { items: rd.items });
+    if (PBC.isAdmin()) addDeleteButtons(keys, rd.items);
+  }).catch(function (e) {
+    document.getElementById('subhead').textContent =
+      'Could not reach the community API (' + e.message + '). It may still be waking up—try again shortly.';
+  });
+
+  // fillGallery renders cells in `keys` order; walk them in lock-step to attach delete.
+  function addDeleteButtons(keys, items) {
+    const cells = gallery.querySelectorAll('.gcell');
+    keys.forEach(function (key, i) {
+      const cell = cells[i]; if (!cell) return;
+      const id = items[key].id;
+      const btns = cell.querySelector('.btns');
+      const b = document.createElement('button');
+      b.className = 'del'; b.textContent = 'Delete';
+      b.title = 'Admin: permanently delete this publication';
+      b.onclick = function () {
+        if (!confirm('Delete "' + (items[key].title || id) + '" permanently?')) return;
+        b.disabled = true; b.textContent = 'Deleting…';
+        PBC.remove(id).then(function () { cell.classList.add('gone'); })
+          .catch(function (err) { b.disabled = false; b.textContent = 'Delete'; alert('Delete failed: ' + err.message); });
+      };
+      (btns || cell).appendChild(document.createElement('br'));
+      (btns || cell).appendChild(b);
+    });
+  }
+})();
+</script>
+</body>
+</html>

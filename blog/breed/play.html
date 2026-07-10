@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breeding Console — Picbreeder · VLM</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+<link rel="stylesheet" href="dna-editor.css">
+<style>
+  /* ===================================================================
+   * Breeding console — a faithful re-skin of the original Picbreeder
+   * Java applet (WebNEAT client, UCF EPlex 2006-07). Layout, control set,
+   * and the green-on-blue selection frames are taken straight from the
+   * applet source: client/gui/{EvolutionController,PopulationPanel,
+   * ImagePanel,ExplorationSlider}.java + config/default.xml (display:
+   * 3x5, selected #30A030, unselected #202080, 128px tiles, 5px border).
+   * The chrome around it stays picbreeder.org; this panel is "the applet".
+   * =================================================================== */
+  .console-intro { color:#444; line-height:1.5; margin:.3em 0 .8em; }
+  .branchhead { background:#f4f8ee; border:0.5px solid #b9d39a; padding:6px 9px; margin:0 0 8px; }
+  .branchhead b { color:#3a6b1e; }
+
+  /* the embedded "applet": classic Java Metal/Ocean look-and-feel */
+  .applet {
+    font-family: Tahoma, "DejaVu Sans", Verdana, Arial, sans-serif;
+    font-size: 11px; color:#222; line-height:1.3;
+    background:#ece9de; border:2px outset #d4d0c8; margin:10px 0 6px;
+    -webkit-user-select:none; user-select:none;
+  }
+
+  /* menu bar (System / Render) */
+  .menubar { display:flex; background:#ece9de; border-bottom:1px solid #b5b5ac; }
+  .menu { position:relative; }
+  .menu > .mlabel { padding:3px 11px; cursor:default; }
+  .menu.open > .mlabel, .menu:hover > .mlabel { background:#3a59bc; color:#fff; }
+  .menu .mdrop { display:none; position:absolute; left:0; top:100%; z-index:30; min-width:150px;
+                 background:#f4f2ea; border:1px solid #8a8a82; box-shadow:2px 2px 4px rgba(0,0,0,.25); }
+  .menu.open .mdrop { display:block; }
+  .menu .mitem { padding:4px 16px; cursor:default; white-space:nowrap; }
+  .menu .mitem:hover { background:#3a59bc; color:#fff; }
+  .menu .mitem.check::before { content:"\2713\00a0"; visibility:hidden; }
+  .menu .mitem.check.on::before { visibility:visible; }
+  .menu .msep { border-top:1px solid #cfcdc4; margin:2px 0; }
+
+  .appbody { padding:8px; }
+
+  /* Swing TitledBorder group boxes */
+  .gbox { border:2px groove #d7d4c8; margin:0 0 8px; padding:7px 9px 9px; }
+  .gbox > legend { font-weight:bold; color:#33332b; padding:0 4px; }
+
+  /* Basic/Advanced + Color toggle row */
+  .toggle-row { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:0 2px 7px; }
+  .toggle-row label { display:inline-flex; align-items:center; gap:4px; }
+  .toggle-row .sep { width:1px; align-self:stretch; background:#c4c1b4; }
+
+  /* Metal toolbar buttons: icon stacked over label */
+  .btnrow { display:flex; flex-wrap:wrap; gap:7px; }
+  .mbtn { font:inherit; display:inline-flex; flex-direction:column; align-items:center; gap:2px;
+          min-width:56px; padding:4px 9px 3px; cursor:pointer; color:#1a1a1a;
+          background:linear-gradient(#fdfdfb,#dcdccf); border:1px solid #8a8a82; border-radius:2px;
+          box-shadow:inset 0 1px 0 #fff; }
+  .mbtn:hover:not(:disabled) { background:linear-gradient(#ffffff,#e8e8dc); }
+  .mbtn:active:not(:disabled) { background:linear-gradient(#cfcfc2,#e2e2d5); box-shadow:inset 0 1px 2px rgba(0,0,0,.3); }
+  .mbtn:disabled { color:#a4a49a; background:#e6e3d8; box-shadow:none; cursor:default; }
+  .mbtn .ic { font-size:15px; line-height:1; }
+  .mbtn .ic.go { color:#1d7a1d; }      /* Evolve = the green Play16 triangle */
+  .mbtn.adv { display:none; }
+  .applet.advanced .mbtn.adv { display:inline-flex; }
+
+  /* Display: resolution + population size */
+  .display-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:0 2px; }
+  .display-row .sep { width:1px; align-self:stretch; background:#c4c1b4; margin:0 8px; }
+
+  /* Guidance: Focus dropdown + exploration slider */
+  .focus-row { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+  .focus-row select:disabled { color:#999; }
+  .slider-row { display:flex; align-items:center; gap:10px; justify-content:center; }
+  .slider-row input[type=range] { width:260px; accent-color:#5a6f9e; }
+  .slider-row .endlbl { color:#444; }
+
+  /* Population grid, GridLayout(1,1) gaps, framed tiles. Columns auto-fill to the
+     --tile display size (set from the chosen resolution), so bigger images get
+     bigger boxes and the grid simply wraps to fewer columns / more rows. */
+  .bgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(var(--tile,120px),1fr)); gap:1px; background:#8f8f87; border:1px solid #8f8f87; }
+  .bcell { position:relative; background:#202080; padding:5px; line-height:0; cursor:pointer; }
+  .bcell:hover { background:#3a3aa6; }
+  .bcell.sel { background:#30a030; }
+  .bcell.sel:hover { background:#3cbb3c; }
+  /* the tile currently loaded in the DNA editor below — orange to match the editor accent */
+  .bcell.dna { outline:3px solid #cc8a1a; outline-offset:-3px; z-index:1; }
+  .bcell canvas { width:100%; aspect-ratio:1/1; display:block; background:#000; }
+
+  /* status bar */
+  .statusbar { display:flex; justify-content:space-between; align-items:center;
+               padding:3px 9px; border-top:1px solid #b5b5ac; background:#e4e1d6;
+               font-size:10px; color:#555; }
+  .statusbar .msg { color:#b23a1a; }
+
+  /* the embedded DNA editor pane: it's its own self-contained widget (dna-editor.css),
+     so opt back out of the applet's no-select chrome for normal text interaction. */
+  #dna-pane > .note { color:#444; line-height:1.45; }
+  #dna-host { -webkit-user-select:text; user-select:text; }
+  /* the pane is collapsed by default — click the legend to open it */
+  #dna-pane > legend { cursor:pointer; user-select:none; }
+  #dna-pane > legend .caret { display:inline-block; width:1em; font-size:.85em; color:#888; }
+  #dna-pane.collapsed > .note, #dna-pane.collapsed > #dna-host { display:none; }
+</style>
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; Breeding Console</div>
+    <h1 style="font-size:2em;">Breeding Console</h1>
+
+    <div id="branchhead" class="branchhead" style="display:none;"></div>
+
+    <p class="console-intro">
+      Pick the image(s) you like by <b>clicking</b> them&mdash;a selected tile turns
+      <b style="color:#1d7a1d;">green</b>&mdash;then press <b>Evolve</b>. Your picks carry over unchanged and
+      the rest of the grid is re-bred from them by mutation and crossover.
+      Press <b>Space</b> or <b>Enter</b> to evolve
+      selected&mdash;<b>u</b> or <b>z</b> to undo, <b>r</b> to restart, <b>x</b> to roll again.
+    </p>
+
+    <!-- ====================== the embedded "applet" ====================== -->
+    <div class="applet" id="applet">
+      <!-- menu bar -->
+      <div class="menubar">
+        <div class="menu" id="menu-system">
+          <div class="mlabel">System</div>
+          <div class="mdrop">
+            <div class="mitem" data-act="restart">Restart</div>
+            <div class="msep"></div>
+            <div class="mitem" data-act="quit">Quit</div>
+          </div>
+        </div>
+        <div class="menu" id="menu-render">
+          <div class="mlabel">Render</div>
+          <div class="mdrop">
+            <div class="mitem check on" data-act="hq">High Quality Rendering</div>
+            <div class="msep"></div>
+            <div class="mitem" data-act="refresh">Refresh</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="appbody">
+        <!-- Controls -->
+        <fieldset class="gbox">
+          <legend>Controls</legend>
+          <div class="toggle-row">
+            <label><input type="radio" name="mode" id="mode-basic" checked> Basic</label>
+            <label><input type="radio" name="mode" id="mode-adv"> Advanced</label>
+            <span class="sep"></span>
+            <label><input type="checkbox" id="colorchk" checked> Color</label>
+          </div>
+          <div class="btnrow">
+            <button class="mbtn" id="btn-quit"    title="Aborts evolution and brings you back to the website."><span class="ic">&#9632;</span>Quit</button>
+            <button class="mbtn adv" id="btn-back"    title="Go back one generation (if possible)"><span class="ic">&#9664;</span>Back</button>
+            <button class="mbtn adv" id="btn-forward" title="Go forward one generation (if possible)"><span class="ic">&#9654;</span>Forward</button>
+            <button class="mbtn adv" id="btn-redo"    title="Respawns this generation with the last pictures picked"><span class="ic">&#8635;</span>Redo</button>
+            <button class="mbtn" id="btn-evolve"  title="Creates new images by evolving the images you have currently selected."><span class="ic go">&#9654;</span>Evolve</button>
+            <button class="mbtn adv" id="btn-save"    title="Remembers your current stage of evolution so that you may resume from here later."><span class="ic">&#128190;</span>Save</button>
+            <button class="mbtn" id="btn-publish" disabled title="Publishing not implemented."><span class="ic">&#127760;</span>Publish</button>
+          </div>
+        </fieldset>
+
+        <!-- Guidance -->
+        <fieldset class="gbox">
+          <legend>Guidance</legend>
+          <div class="focus-row">
+            <label for="focus">Focus:</label>
+            <select id="focus" disabled title="Hints to the applet which part of the image to evolve.">
+              <option value="whole">Whole Image</option>
+              <option value="color">Color</option>
+              <option value="structure">Structure</option>
+            </select>
+          </div>
+          <div class="slider-row" title="Guides the system by setting what kinds of changes you expect to see.">
+            <span class="endlbl">Small Changes</span>
+            <input id="slider" type="range" min="0" max="100" step="1" value="50">
+            <span class="endlbl">Big Changes</span>
+          </div>
+        </fieldset>
+
+        <!-- Display -->
+        <fieldset class="gbox">
+          <legend>Display</legend>
+          <div class="display-row">
+            <label for="res">Resolution:</label>
+            <select id="res" title="Pixel resolution each image is rendered at. Higher is sharper but slower to breed.">
+              <option value="96">96 px</option>
+              <option value="128">128 px</option>
+              <option value="160" selected>160 px</option>
+              <option value="224">224 px</option>
+              <option value="256">256 px</option>
+              <option value="384">384 px</option>
+              <option value="512">512 px</option>
+              <option value="768">768 px (slow)</option>
+            </select>
+            <span class="sep"></span>
+            <label for="popsize">Population:</label>
+            <select id="popsize" title="How many images make up each generation.">
+              <option value="10">10</option>
+              <option value="15" selected>15</option>
+              <option value="20">20</option>
+              <option value="25">25</option>
+              <option value="30">30</option>
+            </select>
+          </div>
+        </fieldset>
+
+        <!-- Population -->
+        <fieldset class="gbox">
+          <legend>Population</legend>
+          <div class="bgrid" id="grid"></div>
+        </fieldset>
+
+        <!-- DNA — the dna.html editor (PB.DnaEditor) embedded as a pane, in the
+             same TitledBorder style as Population. Edits the most-recently-selected
+             tile and writes straight back into the grid. -->
+        <fieldset class="gbox collapsed" id="dna-pane">
+          <legend id="dna-legend"><span class="caret">&#9656;</span> DNA</legend>
+          <p class="note" style="margin:0 0 8px;">
+            Inspect and tweak the CPPN of the <b>most-recently-selected</b> tile (outlined
+            <b style="color:#cc8a1a;">orange</b> above). Edits change that image <b>in the grid right
+            away</b>; <b>Reset to original</b> reverts. <span id="dna-which"></span>
+          </p>
+          <div id="dna-host"></div>
+        </fieldset>
+      </div>
+
+      <div class="statusbar">
+        <span id="genlbl">Generation 0</span>
+        <span class="msg" id="status">&nbsp;</span>
+        <span id="sellbl">0 selected</span>
+      </div>
+    </div>
+    <!-- =================================================================== -->
+
+    <p class="note" style="margin-top:14px;">
+      Each tile is painted by a CPPN: for every pixel the network reads <i>(x, y, r, bias)</i>&mdash;where <i>r</i> is distance from
+      center&mdash;and outputs a color. Selection edits the network's weights, connections, and activation functions. Everything
+      runs in your browser. <a href="index.html">&laquo; Back to the gallery</a> &middot; <a href="../">About the project</a>
+    </p>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="cppn-gl.js"></script>
+<script src="pbsite.js"></script>
+<script src="community.js"></script>
+<script src="weight-cmap.js"></script>
+<script src="dna-editor.js"></script>
+<script>
+(function () {
+  PB.chrome('play');
+  // POP_TARGET is what the Population menu asks for; POP_SIZE is that rounded to a
+  // whole number of grid rows (see fitPop) so the last row is never ragged.
+  let RES = 160, POP_TARGET = 15, POP_SIZE = 15;
+  const gridEl = document.getElementById('grid');
+  const genEl = document.getElementById('genlbl');
+  const selEl = document.getElementById('sellbl');
+  const statusEl = document.getElementById('status');
+  const applet = document.getElementById('applet');
+  const colorChk = document.getElementById('colorchk');
+  const focusSel = document.getElementById('focus');
+
+  let pop, generation = 0, strength = 0.5, colorMode = true;
+  let selected = new Set();
+  let founderJSON = null;                 // for "Restart" when branched
+  let parentKey = null;                   // provenance: what this session branched from (for Publish)
+  const cells = [];
+
+  // ---- DNA editor pane (collapsed by default; built on first open, edits the most-recently-selected tile) ----
+  let dnaEditor = null, dnaIdx = null, dnaOpen = false;
+
+  // ---- generation history (powers Back / Forward / Redo) --------------------
+  let hist = [], hpos = -1;
+  const cloneGenomes = () => pop.genomes.map(genomeToJSON);
+  function recordHead() {                 // push current pop as a new head, dropping any "forward"
+    hist = hist.slice(0, hpos + 1);
+    hist.push({ genomes: cloneGenomes(), ctr: pop.ctr, gen: generation, picks: [], t: Date.now() });
+    hpos = hist.length - 1;
+    updateNav();
+  }
+  function restore(i) {
+    const e = hist[i];
+    pop = new Population(); pop.ctr = e.ctr;
+    pop.genomes = e.genomes.map(genomeFromJSON);
+    generation = e.gen; hpos = i;
+    clearSelection(); setGen(); renderAll(); updateNav(); syncDna();
+  }
+  function updateNav() {
+    document.getElementById('btn-back').disabled = hpos <= 0;
+    document.getElementById('btn-forward').disabled = hpos >= hist.length - 1;
+    document.getElementById('btn-redo').disabled = !(hpos > 0 && hist[hpos - 1].picks.length);
+  }
+
+  function setStatus(m) { statusEl.innerHTML = m || '&nbsp;'; }
+  function setGen() { genEl.textContent = 'Generation ' + generation; }
+
+  function popFromFounder(founder) {
+    const p = new Population();
+    let mx = 2; founder.nodes.forEach((_, k) => { if (k > mx) mx = k; });
+    p.ctr = Math.max(3, mx + 1);
+    p.genomes = reproduce([founder], p, POP_SIZE, strength);   // founder + 14 mutated children
+    return p;
+  }
+
+  // The grid is CSS auto-fill, so its column count depends on the applet's width and on
+  // the tile size (which grows with resolution). auto-fill keeps empty tracks, so the
+  // computed template lists one length per column even before any cells exist.
+  function gridCols() {
+    const tpl = (getComputedStyle(gridEl).gridTemplateColumns || '').trim();
+    if (!tpl || tpl === 'none') return 1;
+    return Math.max(1, tpl.split(/\s+/).length);
+  }
+  // Round POP_SIZE to a whole number of rows nearest POP_TARGET. Returns whether it moved.
+  function fitPop() {
+    const cols = gridCols();
+    const next = cols * Math.max(1, Math.round(POP_TARGET / cols));
+    if (next === POP_SIZE) return false;
+    POP_SIZE = next; return true;
+  }
+  // Re-fit the live generation to a changed POP_SIZE: trim, or breed the extra children.
+  // reproduce() carries the parents over unchanged and only fills the new slots, so the
+  // images already on screen survive. History entries hold genome sets of the old size,
+  // so reset it — otherwise Back/Forward could restore a population that mismatches the grid.
+  function refitGrid() {
+    if (pop) {
+      const cur = pop.genomes;
+      pop.genomes = POP_SIZE <= cur.length ? cur.slice(0, POP_SIZE) : reproduce(cur, pop, POP_SIZE, strength);
+      hist = []; hpos = -1; recordHead();
+    }
+    buildGrid(); clearSelection();
+    if (pop) { renderAll(); syncDna(); }
+  }
+
+  function buildGrid() {
+    gridEl.innerHTML = ''; cells.length = 0;
+    for (let i = 0; i < POP_SIZE; i++) {
+      const cell = document.createElement('div'); cell.className = 'bcell';
+      const canvas = document.createElement('canvas'); canvas.width = RES; canvas.height = RES;
+      cell.appendChild(canvas); gridEl.appendChild(cell);
+      cell.addEventListener('click', () => toggleSelect(i));
+      cells.push({ cell, ctx: canvas.getContext('2d') });
+    }
+  }
+
+  function toggleSelect(i) {
+    if (selected.has(i)) { selected.delete(i); cells[i].cell.classList.remove('sel'); }
+    else { selected.add(i); cells[i].cell.classList.add('sel'); dnaIdx = i; syncDna(); }   // newest pick → DNA panel
+    selEl.textContent = selected.size + ' selected'; setStatus('');
+  }
+  function clearSelection() {
+    selected.clear(); cells.forEach((c) => c.cell.classList.remove('sel'));
+    selEl.textContent = '0 selected';
+  }
+
+  let token = 0;
+  function renderAll() {
+    const my = ++token; let i = 0;
+    (function step() {
+      if (my !== token) return;
+      const t0 = performance.now();
+      while (i < POP_SIZE && performance.now() - t0 < 12) {
+        cells[i].ctx.putImageData(renderGenome(pop.genomes[i], RES, colorMode), 0, 0); i++;
+      }
+      if (i < POP_SIZE) requestAnimationFrame(step);
+    })();
+  }
+  function renderOne(i) {
+    if (cells[i] && pop && pop.genomes[i]) cells[i].ctx.putImageData(renderGenome(pop.genomes[i], RES, colorMode), 0, 0);
+  }
+
+  // ---- DNA panel: build on first open, then mirror the most-recently-selected tile ----
+  function highlightDnaCell(i) {
+    cells.forEach((c, j) => c.cell.classList.toggle('dna', j === i));
+  }
+  // Called after every edit in the panel — the editor mutates the genome in place, so
+  // pop.genomes[dnaIdx] already reflects it; we just clear its net cache, repaint that
+  // tile, and keep the current history head in sync (so Back/Forward stay consistent).
+  // NOTE: the editor ALSO fires onChange on load/reset (setGenome→rerender→notifyChange),
+  // so we diff against the head's stored JSON and only log a hand-edit when the genome
+  // truly changed — otherwise merely selecting a tile would mark it "edited".
+  function onDnaChange(g) {
+    if (dnaIdx == null || !pop) return;
+    const head = (hpos >= 0 && hist[hpos] && hist[hpos].genomes) ? hist[hpos] : null;
+    const before = head ? head.genomes[dnaIdx] : null;
+    const after = genomeToJSON(g);
+    pop.genomes[dnaIdx] = g;                 // reset() swaps in a fresh object; re-link it
+    g._net = null;
+    renderOne(dnaIdx);
+    if (head) {
+      const changed = before && JSON.stringify(before) !== JSON.stringify(after);
+      head.genomes[dnaIdx] = after;
+      if (changed) recordEdit(head, dnaIdx, before, after);
+    }
+  }
+  // Explicit, replayable record of every hand DNA-edit in a generation. Without it the
+  // edited genome is indistinguishable from a normal mutation output when reading the
+  // saved lineage back — so this is what lets a consumer (HF, the resume file) tell that
+  // a tile was hand-edited at this point. Keyed by tile index; keeps the pre-edit genome
+  // (`orig`, captured before the FIRST edit) so the change is fully reconstructable, plus
+  // an edit count + timestamp. A tile reverted exactly back to `orig` drops its marker.
+  function recordEdit(head, idx, before, after) {
+    if (!head.edits) head.edits = {};
+    if (!head.edits[idx]) head.edits[idx] = { idx: idx, orig: before, t: Date.now(), count: 0 };
+    head.edits[idx].count++;
+    head.edits[idx].t = Date.now();
+    if (JSON.stringify(head.edits[idx].orig) === JSON.stringify(after)) delete head.edits[idx];
+  }
+  function ensureDnaEditor() {
+    if (dnaEditor) return dnaEditor;
+    dnaEditor = PB.DnaEditor(document.getElementById('dna-host'), {
+      actions: ['reset', 'download', 'png'],   // no "Breed" — we're already in the breeder
+      instructions: false,
+      onChange: onDnaChange,
+      onColor: setColorMode,                    // editor's Color toggle ↔ the applet's Color
+    });
+    return dnaEditor;
+  }
+  // Point the panel at the current most-recently-selected tile (clamped); re-snapshots
+  // the editor's "original" to that tile's present genome, so Reset reverts panel edits.
+  function syncDna() {
+    if (!pop || !dnaOpen) return;            // pane closed → nothing to mirror
+    ensureDnaEditor();
+    let i = (dnaIdx != null && dnaIdx < POP_SIZE) ? dnaIdx : (selected.size ? [...selected].pop() : 0);
+    i = Math.max(0, Math.min(i, POP_SIZE - 1));
+    dnaIdx = i;
+    highlightDnaCell(i);
+    document.getElementById('dna-which').textContent = 'Currently editing grid image #' + (i + 1) + '.';
+    dnaEditor.setGenome(pop.genomes[i], { color: colorMode, title: 'Grid image #' + (i + 1) });
+  }
+
+  function evolve(idxs) {
+    hist[hpos].picks = idxs.slice();        // remember what produced the next generation
+    pop.genomes = reproduce(idxs.map((i) => pop.genomes[i]), pop, POP_SIZE, strength);
+    generation++; clearSelection(); setGen(); recordHead(); renderAll(); syncDna();
+  }
+  function breedSelected() {
+    if (selected.size === 0) { setStatus('Pick at least one image first (click it), then Evolve.'); return; }
+    evolve([...selected]);
+  }
+
+  function startScratch() {
+    founderJSON = null;
+    document.getElementById('branchhead').style.display = 'none';
+    pop = newPopulation(POP_SIZE); generation = 0; clearSelection(); setGen();
+    hist = []; hpos = -1; recordHead(); renderAll(); syncDna();
+  }
+
+  // ---- Save / Publish (client-side stand-ins for the original server ops) ---
+  function blobDownload(blob, name) {
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function publish() {                      // original requires one "representative"
+    // Publishing to the shared community archive is disabled for now (no title
+    // prompt, no write to the HF Space). Kept behind PB.COMMUNITY_ENABLED so the
+    // flow below can be restored by flipping that single flag in pbsite.js.
+    if (!(window.PB && PB.COMMUNITY_ENABLED)) return;
+    if (selected.size !== 1) { setStatus('Select exactly one image as your representative, then Publish.'); return; }
+    const i = [...selected][0], HI = 512;
+    const genome = genomeToJSON(pop.genomes[i]);
+    const c = document.createElement('canvas'); c.width = HI; c.height = HI;
+    c.getContext('2d').putImageData(renderGenome(pop.genomes[i], HI, colorMode), 0, 0);
+    const png = c.toDataURL('image/png');
+
+    // If the community API is wired in, publish for the world to see/branch.
+    if (window.PBC) { publishToCommunity(); return; }
+
+    async function publishToCommunity() {
+      const titleRaw = prompt('Name your creation for the gallery:', '');
+      if (titleRaw === null) return;        // user cancelled
+      const title = titleRaw.trim();
+      const author = (function () {
+        try { let a = localStorage.getItem('pb_author');
+          if (!a) { a = (prompt('Your name or handle (shown as the artist):', 'anon') || 'anon').trim() || 'anon';
+            localStorage.setItem('pb_author', a); } return a; } catch (e) { return 'anon'; }
+      })();
+      // Tags — creator-entered at publish, like the original Picbreeder. Suggest the
+      // most-used existing tags as the user types (here: shown inline to nudge reuse).
+      let popular = [];
+      try { popular = Object.keys(await PBC.tags()).slice(0, 12); } catch (e) {}
+      const hint = popular.length ? '\n(popular: ' + popular.join(', ') + ')' : '';
+      const tagsRaw = prompt('Tags, comma-separated—help others find it:' + hint, '');
+      const tags = (tagsRaw || '').split(',').map((s) => s.trim()).filter(Boolean);
+      // full session trajectory — founder + every generation's population & picks up to
+      // the published genome (a superset of the original Picbreeder's selected chain).
+      const rep_edited = !!(hist[hpos] && hist[hpos].edits && hist[hpos].edits[i]);
+      const lineage = { founder: founderJSON, color: colorMode, strength: strength,
+                        rep_gen: hpos, rep_idx: i, rep_edited: rep_edited,
+                        history: hist.slice(0, hpos + 1) };
+      setStatus('Publishing&hellip;');
+      PBC.publish({ genome, title: title || 'Untitled', author, tags, color: colorMode,
+                    parent: parentKey, gen: generation, png, lineage })
+        .then((res) => {
+          setStatus('Published! <a href="community.html">See it in the community gallery</a>&mdash;or <a href="play.html?run=community&id=' +
+            encodeURIComponent(res.id) + '">branch it</a>.');
+        })
+        .catch((err) => { setStatus('Publish failed (' + err.message + '). Downloading locally instead&hellip;'); publishLocal(); });
+    }
+    // community.js didn't load (cached old page? hard-refresh) — say so, don't fail silently.
+    setStatus('Community publishing isn’t loaded (community.js missing—try a hard refresh). ' +
+              'Downloaded a local copy instead.');
+    publishLocal();
+
+    function publishLocal() {
+      c.toBlob((b) => blobDownload(b, `picbreeder_gen${generation}.png`));
+      blobDownload(new Blob([JSON.stringify(genome, null, 2)], { type: 'application/json' }),
+        `picbreeder_gen${generation}.json`);
+    }
+  }
+  function saveSeries() {                    // resume file: the whole lineage
+    const series = { generation, color: colorMode, strength, founder: founderJSON, history: hist };
+    blobDownload(new Blob([JSON.stringify(series)], { type: 'application/json' }), `picbreeder_series.json`);
+    setStatus('Series saved&mdash;resume file downloaded.');
+  }
+
+  // ---- controls -------------------------------------------------------------
+  document.getElementById('btn-evolve').addEventListener('click', breedSelected);
+  document.getElementById('btn-back').addEventListener('click', () => { if (hpos > 0) restore(hpos - 1); });
+  document.getElementById('btn-forward').addEventListener('click', () => { if (hpos < hist.length - 1) restore(hpos + 1); });
+  document.getElementById('btn-redo').addEventListener('click', () => {
+    if (hpos > 0 && hist[hpos - 1].picks.length) { const picks = hist[hpos - 1].picks.slice(); restore(hpos - 1); evolve(picks); }
+  });
+  document.getElementById('btn-save').addEventListener('click', saveSeries);
+  // Publish stays greyed/unclickable unless publishing is re-enabled site-wide.
+  if (window.PB && PB.COMMUNITY_ENABLED) {
+    const pub = document.getElementById('btn-publish');
+    pub.disabled = false;
+    pub.title = 'Stop evolving and download the selected image for the world to see.';
+    pub.addEventListener('click', publish);
+  }
+  document.getElementById('btn-quit').addEventListener('click', () => {
+    if (generation > 0 && !confirm('Quitting will discard this evolution session. Are you sure?')) return;
+    location.href = 'index.html';
+  });
+
+  // Basic / Advanced toggle (shows Back / Forward / Redo / Save)
+  document.getElementById('mode-basic').addEventListener('change', () => applet.classList.remove('advanced'));
+  document.getElementById('mode-adv').addEventListener('change', () => applet.classList.add('advanced'));
+
+  // Color checkbox — gates the Focus dropdown, exactly like the applet. The DNA panel's
+  // own Color toggle is kept in sync with this one (both drive the single colorMode).
+  function setColorMode(c) {
+    colorMode = c !== false;
+    colorChk.checked = colorMode; focusSel.disabled = !colorMode;
+    renderAll();
+    if (dnaEditor) dnaEditor.setColor(colorMode);
+  }
+  colorChk.addEventListener('change', () => setColorMode(colorChk.checked));
+  function syncColorUI() { colorChk.checked = colorMode; focusSel.disabled = !colorMode; }
+
+  // DNA pane: collapsed by default — clicking the legend opens it and (on first open) builds
+  // the editor and points it at the most-recently-selected tile.
+  const dnaPane = document.getElementById('dna-pane');
+  const dnaCaret = document.querySelector('#dna-legend .caret');
+  document.getElementById('dna-legend').addEventListener('click', () => {
+    dnaOpen = !dnaOpen;
+    dnaPane.classList.toggle('collapsed', !dnaOpen);
+    dnaCaret.innerHTML = dnaOpen ? '&#9662;' : '&#9656;';   // ▾ open / ▸ closed
+    if (dnaOpen) syncDna();
+    else highlightDnaCell(-1);                              // clear the orange "editing" outline
+  });
+
+  // exploration slider: 0..100 -> 0..1 mutation strength
+  document.getElementById('slider').addEventListener('input', (e) => { strength = e.target.value / 100; });
+
+  // Display tile size grows with resolution so bigger images get bigger boxes; the
+  // grid auto-fills, dropping to fewer columns as tiles grow (5-across at the default).
+  function applyTileSize() {
+    gridEl.style.setProperty('--tile', Math.max(110, Math.round(RES * 0.75)) + 'px');
+  }
+
+  // Display: resolution — bigger tiles mean fewer columns, so re-fit before repainting;
+  // otherwise just resize the existing canvases in place.
+  document.getElementById('res').addEventListener('change', (e) => {
+    RES = +e.target.value;
+    applyTileSize();
+    if (fitPop()) { refitGrid(); return; }
+    cells.forEach((c) => { const cv = c.ctx.canvas; cv.width = RES; cv.height = RES; });
+    renderAll();
+  });
+
+  // Display: population size — grow (breed extra children) or shrink the current grid,
+  // snapped to whole rows. Two nearby targets can land on the same row count (at six
+  // columns both 10 and 15 fit to 12), in which case there's nothing to rebuild.
+  document.getElementById('popsize').addEventListener('change', (e) => {
+    POP_TARGET = +e.target.value;
+    if (fitPop()) refitGrid();
+  });
+
+  // Keep the grid rectangular across viewport changes. Debounced so a drag-resize
+  // doesn't thrash the population.
+  let resizeT = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeT);
+    resizeT = setTimeout(() => { if (fitPop()) refitGrid(); }, 150);
+  });
+
+  // ---- keyboard shortcuts ---------------------------------------------------
+  // Space/Enter = evolve selected · u or z = undo (back one gen) · r = restart · x = roll again
+  document.addEventListener('keydown', (e) => {
+    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('#dna-host')) return;   // DNA editor handles its own keys
+    const onControl = t && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(t.tagName);
+    const k = e.key;
+    if (k === 'Enter' || k === ' ' || k === 'Spacebar') {
+      if (k !== 'Enter' && onControl) return;       // don't hijack space on a focused control
+      e.preventDefault(); breedSelected();
+    } else if (onControl) {
+      return;                                        // let letters type into focused controls
+    } else if (k === 'u' || k === 'U' || k === 'z' || k === 'Z') {  // undo — step back one generation
+      if (hpos > 0) { e.preventDefault(); restore(hpos - 1); }
+    } else if (k === 'r' || k === 'R') {             // restart — back to where this session began
+      e.preventDefault(); restart();
+    } else if (k === 'x' || k === 'X') {             // roll again — a fresh random grid
+      e.preventDefault(); startScratch();
+    }
+  });
+
+  // ---- menu bar -------------------------------------------------------------
+  document.querySelectorAll('.menu .mlabel').forEach((lbl) => {
+    lbl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const m = lbl.parentElement, wasOpen = m.classList.contains('open');
+      document.querySelectorAll('.menu.open').forEach((x) => x.classList.remove('open'));
+      if (!wasOpen) m.classList.add('open');
+    });
+  });
+  document.addEventListener('click', () => document.querySelectorAll('.menu.open').forEach((m) => m.classList.remove('open')));
+  document.querySelectorAll('.menu .mitem').forEach((it) => {
+    it.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const act = it.dataset.act;
+      if (act === 'restart') restart();
+      else if (act === 'quit') document.getElementById('btn-quit').click();
+      else if (act === 'refresh') renderAll();
+      else if (act === 'hq') it.classList.toggle('on');   // cosmetic (renderer is already full-quality)
+      it.closest('.menu').classList.remove('open');
+    });
+  });
+  function restart() {     // "Start over from the picture you branched off of" (or from scratch)
+    if (founderJSON) { generation = 0; clearSelection(); setGen(); pop = popFromFounder(genomeFromJSON(founderJSON)); hist = []; hpos = -1; recordHead(); renderAll(); syncDna(); }
+    else startScratch();
+  }
+
+  // ---- branching from a published genome ------------------------------------
+  function startFromFounder(item) {
+    founderJSON = item.g;
+    colorMode = item.color !== false; syncColorUI();
+    const head = document.getElementById('branchhead');
+    head.innerHTML = 'Branching from <b>&ldquo;' + PB.esc(item.title || 'Untitled') + '&rdquo;</b>&mdash;published by ' +
+      PB.artistLabel(item) + '. The top-left tile is the original; the rest are its mutations. Keep what you like and Evolve.';
+    head.style.display = 'block';
+    pop = popFromFounder(genomeFromJSON(item.g));
+    generation = 0; setGen(); hist = []; hpos = -1; recordHead(); renderAll(); syncDna();
+  }
+
+  // gz fetch (raw .gz inflated client-side) — for branching a Family Tree node
+  async function fetchGz(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + url);
+    const stream = r.body.pipeThrough(new DecompressionStream('gzip'));
+    return JSON.parse(await new Response(stream).text());
+  }
+
+  // ---- boot -----------------------------------------------------------------
+  applyTileSize(); fitPop(); buildGrid();   // --tile drives the column count, so set it first
+  const params = new URLSearchParams(location.search);
+  const gkey = params.get('g');
+  const seedKey = params.get('seed');
+  const treeId = params.get('tree');
+  const runParam = params.get('run'), idParam = params.get('id');
+  // remember what this session was branched from, so Publish records provenance
+  parentKey = (runParam && idParam) ? (runParam + '::' + idParam)
+            : treeId ? ('c_' + treeId)
+            : gkey ? gkey : null;
+  if (params.get('dna') === '1' && sessionStorage.getItem('pb_dna_genome')) {
+    // branch from a genome hand-edited in the DNA editor (handed over via sessionStorage)
+    try {
+      const g = JSON.parse(sessionStorage.getItem('pb_dna_genome'));
+      const m = JSON.parse(sessionStorage.getItem('pb_dna_meta') || '{}');
+      startFromFounder({ g: g, title: (m.title ? m.title + ' (edited DNA)' : 'Your edited DNA'),
+        color: m.color !== false, model: m.model, agent: m.agent });
+    } catch (e) { setStatus('Couldn’t read the edited DNA—starting fresh instead.'); startScratch(); }
+  } else if (treeId) {
+    // branch a node straight from the Family Tree (its genome lives in the
+    // bundled tree shard, not archive.json)
+    setStatus('Fetching this image’s genome from the family tree…');
+    Promise.all([fetchGz('data/tree_genomes.json.gz'), fetchGz('data/tree.json.gz')]).then(([gen, tree]) => {
+      const g = gen[treeId], nd = tree.nodes[treeId];
+      if (g) { setStatus(''); startFromFounder({ g: g, title: (nd && nd.t) || treeId, color: !nd || nd.col !== false, model: tree.model, agent: nd && nd.a }); }
+      else { setStatus('That image isn’t in the family tree—starting fresh instead.'); startScratch(); }
+    }).catch(() => { setStatus('Could not load the family tree—starting fresh instead.'); startScratch(); });
+  } else if (seedKey === 'apple') {
+    // the blog's inline breeding console starts here: an ancestor of the apple, at
+    // generation 140 of Picbreeder series 5736 (final = 320). Same genome file, so
+    // "See the full version" picks up exactly where the console begins.
+    setStatus('Fetching the apple’s ancestor…');
+    fetch('data/apple_ancestor.json').then((r) => r.json()).then((g) => {
+      setStatus('');
+      startFromFounder({ g: g, title: 'Apple (ancestor)', color: true, user: 'a human Picbreeder user' });
+    }).catch(() => { setStatus('Couldn’t load the apple’s ancestor—starting fresh instead.'); startScratch(); });
+  } else if (gkey) {
+    PB.load().then((d) => {
+      const it = d.items[gkey];
+      if (it && it.g) startFromFounder(it);
+      else { setStatus('That image has no bundled genome—starting fresh instead.'); startScratch(); }
+    }).catch(() => startScratch());
+  } else if (runParam && idParam) {
+    // branch a genome from the wider Hugging Face archive (fetched on demand)
+    setStatus('Fetching this image’s genome from the archive…');
+    PB.loadRun(runParam).then((rd) => {
+      const it = rd.items[runParam + '::' + idParam];
+      if (it && it.g) { setStatus(''); startFromFounder(it); }
+      else { setStatus('That image isn’t in the archive—starting fresh instead.'); startScratch(); }
+    }).catch(() => { setStatus('Could not reach the archive—starting fresh instead.'); startScratch(); });
+  } else {
+    pop = newPopulation(POP_SIZE); hist = []; hpos = -1; recordHead(); renderAll(); syncDna();
+  }
+})();
+</script>
+</body>
+</html>

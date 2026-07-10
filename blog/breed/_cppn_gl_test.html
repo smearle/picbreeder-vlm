@@ -1,0 +1,82 @@
+<!doctype html>
+<!-- Scratch parity check for cppn-gl.js (GPU) vs cppn.js (CPU). Not linked from
+     anywhere; open it on the local preview server (e.g. :8090/breed/_cppn_gl_test.html).
+     Confirms the GPU phenotype matches renderGenome, times a scrub, and sanity-checks
+     a node-field readback. Safe to delete. -->
+<meta charset="utf-8">
+<title>cppn-gl parity</title>
+<style>
+  body{font:14px/1.5 system-ui,sans-serif;margin:20px;color:#222}
+  canvas{border:1px solid #ccc;image-rendering:pixelated;width:256px;height:256px}
+  .row{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+  .cell{text-align:center} pre{background:#f6f6f6;padding:10px;border-radius:6px}
+  b.ok{color:#1a7f37} b.bad{color:#c4221a}
+</style>
+<h2>cppn-gl.js parity / perf check</h2>
+<div class="row">
+  <div class="cell"><div>CPU (renderGenome)</div><canvas id="cpu" width="256" height="256"></canvas></div>
+  <div class="cell"><div>GPU (renderPheno)</div><canvas id="gpu" width="256" height="256"></canvas></div>
+  <div class="cell"><div>|diff| ×8</div><canvas id="dif" width="256" height="256"></canvas></div>
+  <div class="cell"><div>node field (GPU, res 150)</div><canvas id="fld" width="150" height="150" style="width:150px;height:150px"></canvas></div>
+</div>
+<pre id="out">running…</pre>
+<script src="cppn.js"></script>
+<script src="cppn-gl.js"></script>
+<script>
+(async () => {
+  const out = document.getElementById('out');
+  const log = (m) => out.innerHTML += m + '\n';
+  out.innerHTML = '';
+  const E = window.PB && window.PB.CppnGL;
+  if (!E || !E.available()) { log('WebGL/CppnGL NOT available → editor will use the CPU path.'); return; }
+  log('CppnGL available: ' + E.available());
+
+  let j;
+  try { j = await (await fetch('data/apple_ancestor.json')).json(); }
+  catch (e) { log('could not fetch data/apple_ancestor.json (' + e + ')—serve over http.'); return; }
+  const g = genomeFromJSON(j);
+  log('genome: ' + g.nodes.size + ' nodes, ' + [...g.conns.values()].filter(c => c.enabled).length + ' active links');
+
+  for (const color of [true, false]) {
+    const cpu = document.getElementById('cpu').getContext('2d');
+    cpu.putImageData(renderGenome(g, 256, color), 0, 0);
+    const ok = E.renderPheno(g, color, document.getElementById('gpu').getContext('2d'), 256);
+    log('renderPheno(' + (color ? 'color' : 'grey') + ') -> ' + ok);
+
+    const a = cpu.getImageData(0, 0, 256, 256).data;
+    const b = document.getElementById('gpu').getContext('2d').getImageData(0, 0, 256, 256).data;
+    const dctx = document.getElementById('dif').getContext('2d');
+    const di = dctx.createImageData(256, 256);
+    let max = 0, sum = 0, n = 0;
+    for (let i = 0; i < a.length; i += 4) {
+      for (let k = 0; k < 3; k++) { const e = Math.abs(a[i + k] - b[i + k]); if (e > max) max = e; sum += e; n++; di.data[i + k] = Math.min(255, e * 8); }
+      di.data[i + 3] = 255;
+    }
+    if (color) dctx.putImageData(di, 0, 0);
+    const mean = (sum / n).toFixed(3);
+    const verdict = max <= 4 ? '<b class="ok">PASS</b>' : '<b class="bad">CHECK</b>';
+    log('  ' + (color ? 'color' : 'grey ') + ' diff: max=' + max + ' mean=' + mean + '  ' + verdict + ' (±2–3 = HSV rounding)');
+  }
+
+  // node-field readback sanity
+  const k = [...g.nodes.keys()].find(x => x >= 0 && !OUTPUT_KEYS.includes(x));
+  const f = E.renderField(g, k, 150);
+  if (f) {
+    let mn = Infinity, mx = -Infinity, bad = 0;
+    for (const v of f) { if (v < mn) mn = v; if (v > mx) mx = v; if (!isFinite(v)) bad++; }
+    const fc = document.getElementById('fld').getContext('2d'), im = fc.createImageData(150, 150), rng = mx - mn;
+    for (let i = 0; i < f.length; i++) { const t = rng > 1e-6 ? (f[i] - mn) / rng : .5, gg = t * 255 | 0; im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = gg; im.data[i * 4 + 3] = 255; }
+    fc.putImageData(im, 0, 0);
+    log('renderField(node ' + k + '): range [' + mn.toFixed(3) + ', ' + mx.toFixed(3) + '], nonfinite=' + bad);
+  } else log('renderField returned null');
+
+  // perf: 60 scrub-like pheno renders
+  const t0 = performance.now();
+  for (let i = 0; i < 60; i++) { for (const c of g.conns.values()) c.weight += 1e-6; E.renderPheno(g, true, document.getElementById('gpu').getContext('2d'), 256); }
+  const gpuMs = (performance.now() - t0) / 60;
+  const t1 = performance.now();
+  for (let i = 0; i < 10; i++) renderGenome(g, 256, true);
+  const cpuMs = (performance.now() - t1) / 10;
+  log('per 256² render—GPU: ' + gpuMs.toFixed(2) + 'ms  CPU: ' + cpuMs.toFixed(2) + 'ms  (' + (cpuMs / gpuMs).toFixed(1) + '× faster)');
+})();
+</script>

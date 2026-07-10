@@ -1,0 +1,424 @@
+<!doctype html>
+<!-- ============================================================================
+  morph-demo.html — feasibility probe for client-side CPPN morph scrubbing.
+
+  Loads a REAL lineage from the canonical run (tree.json.gz + tree_genomes.json.gz),
+  builds the superset interpolation between each parent->child edge (port of
+  render_lineage_animation.py:build_superset / assign_interpolated_values), and lets
+  you scrub a single slider across the whole lineage while two renderers compete:
+
+    - "JS (cppn.js)"  : the existing scalar per-pixel engine (renderGenome).
+    - "WebGL"         : the CPPN compiled to a GLSL fragment shader; weights/activation
+                        blends are uniforms, so we compile once per edge and scrub at 60fps.
+
+  This is a throwaway probe — delete when done. Serve over the local :8090 server so
+  the relative data/ + cppn.js fetches resolve.
+============================================================================ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CPPN morph scrubbing — feasibility demo</title>
+<style>
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; background:#15171c; color:#e7e9ee; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 24px 18px 80px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color:#9aa2b1; margin: 0 0 20px; }
+  .panels { display:flex; gap:24px; flex-wrap:wrap; justify-content:center; }
+  .panel { text-align:center; }
+  canvas { image-rendering: pixelated; width: 360px; height: 360px; background:#000; border-radius:8px; display:block; }
+  .plabel { margin-top:8px; font-weight:600; }
+  .stat { font-variant-numeric: tabular-nums; color:#9aa2b1; font-size:13px; min-height:18px; }
+  .fps-good { color:#5fd38a; } .fps-mid { color:#e7c14b; } .fps-bad { color:#e76f6f; }
+  .controls { background:#1d2027; border:1px solid #2a2e38; border-radius:10px; padding:16px 18px; margin:22px 0; }
+  .row { display:flex; align-items:center; gap:12px; margin:10px 0; flex-wrap:wrap; }
+  .row label { color:#9aa2b1; min-width:78px; }
+  input[type=range] { flex:1; min-width:200px; }
+  button { background:#2a2e38; color:#e7e9ee; border:1px solid #3a3f4b; border-radius:6px; padding:6px 12px; cursor:pointer; }
+  button:hover { background:#333845; }
+  button.on { background:#30A030; border-color:#30A030; color:#fff; }
+  select { background:#2a2e38; color:#e7e9ee; border:1px solid #3a3f4b; border-radius:6px; padding:5px 8px; }
+  .edgeinfo { color:#9aa2b1; font-size:13px; }
+  .note { color:#7a8290; font-size:12.5px; margin-top:18px; }
+  code { background:#23262e; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CPPN morph scrubbing—does it run fast enough in the browser?</h1>
+  <p class="sub">Real lineage from the canonical run. Drag the slider to morph across every parent&rarr;child edge. Both renderers draw the same interpolated genome so you can compare quality and speed.</p>
+
+  <div class="panels">
+    <div class="panel">
+      <canvas id="cvJS" width="160" height="160"></canvas>
+      <div class="plabel">JS—cppn.js scalar engine</div>
+      <div class="stat" id="statJS">—</div>
+    </div>
+    <div class="panel">
+      <canvas id="cvGL" width="160" height="160"></canvas>
+      <div class="plabel">WebGL—CPPN compiled to GLSL</div>
+      <div class="stat" id="statGL">—</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="row">
+      <label>Lineage</label>
+      <select id="selLineage"></select>
+      <span class="edgeinfo" id="edgeInfo"></span>
+    </div>
+    <div class="row">
+      <label>Morph</label>
+      <input type="range" id="scrub" min="0" max="1000" value="0">
+    </div>
+    <div class="row">
+      <label>Render</label>
+      <button id="btnJS" class="on">JS on</button>
+      <button id="btnGL" class="on">WebGL on</button>
+      <button id="btnPlay">▶ Play loop</button>
+      <button id="btnBench">Benchmark</button>
+    </div>
+    <div class="row">
+      <label>Resolution</label>
+      <span id="resBtns"></span>
+      <label style="min-width:auto; margin-left:12px;">
+        <input type="checkbox" id="dragLow" checked> drop to 96px while dragging
+      </label>
+    </div>
+  </div>
+
+  <div class="note" id="benchOut"></div>
+  <p class="note">
+    The JS engine is the same <code>renderGenome()</code> the breeder uses. WebGL compiles the genome's
+    feed-forward graph into a fragment shader once per edge; scrubbing only updates weight + activation-blend
+    uniforms, so the GPU redraws every pixel in parallel. Interpolation logic is a direct port of
+    <code>render_lineage_animation.py</code> (superset of parent&cup;child genes, lerp weights, fade
+    appearing/disappearing connections, blend activations).
+  </p>
+</div>
+
+<script src="cppn.js"></script>
+<script>
+// ---------- data load (same decompress path as the rest of the site) ----------
+async function fetchGz(url) {
+  const r = await fetch(url);
+  const stream = r.body.pipeThrough(new DecompressionStream('gzip'));
+  return new Response(stream).json();
+}
+
+// ---------- superset interpolation (port of build_superset + assign_interpolated_values) ----------
+function buildSuperset(parentJ, childJ) {
+  const parent = genomeFromJSON(parentJ);
+  const child  = genomeFromJSON(childJ);
+  const sup = cloneGenome(child);              // start from child structure
+  const nodePairs = {};                        // key -> [startAct, endAct]
+  for (const [k, n] of child.nodes) {
+    const pn = parent.nodes.get(k);
+    nodePairs[k] = [pn ? pn.activation : n.activation, n.activation];
+  }
+  for (const [k, n] of parent.nodes) {         // parent-only nodes
+    if (!sup.nodes.has(k)) {
+      sup.nodes.set(k, { activation: n.activation, affinity: n.affinity, input: n.input });
+      nodePairs[k] = [n.activation, n.activation];
+    }
+  }
+  const connStats = {};                         // "i,o" -> {sw,ew,se,ee,i,o}
+  const keys = new Set([...sup.conns.keys(), ...parent.conns.keys()]);
+  for (const key of keys) {
+    const pc = parent.conns.get(key), cc = child.conns.get(key);
+    const sw = pc ? pc.weight : 0,  se = pc ? pc.enabled : false;
+    const ew = cc ? cc.weight : sw, ee = cc ? cc.enabled : se;
+    const ref = cc || pc;
+    connStats[key] = { sw, ew, se, ee, i: ref.i, o: ref.o };
+    if (!sup.conns.has(key)) sup.conns.set(key, { i: ref.i, o: ref.o, weight: sw, enabled: se });
+  }
+  return { sup, nodePairs, connStats };
+}
+
+// Set the superset genome's weights/activations to fraction t (mutates sup). For the JS path.
+const _actBlendCache = {};
+function applyFraction(sup, nodePairs, connStats, t) {
+  for (const key in connStats) {
+    const s = connStats[key], c = sup.conns.get(key);
+    if (s.se === s.ee)        { c.enabled = s.se;   c.weight = (1 - t) * s.sw + t * s.ew; }
+    else if (s.se && !s.ee)   { c.enabled = true;   c.weight = s.sw * (1 - t); }
+    else                      { c.enabled = true;   c.weight = s.ew * t; }
+  }
+  for (const k in nodePairs) {
+    const [sa, ea] = nodePairs[k];
+    const node = sup.nodes.get(+k);
+    if (sa === ea) { node.activation = sa; continue; }
+    const tq = Math.round(t * 50), name = `b_${sa}_${ea}_${tq}`;
+    if (!ACT[name]) {
+      const fa = ACT[sa] || ACT.identity, fb = ACT[ea] || ACT.identity, tt = tq / 50;
+      ACT[name] = (z) => (1 - tt) * fa(z) + tt * fb(z);
+    }
+    node.activation = name;
+  }
+  sup._net = null;
+}
+
+// ============================================================================
+//  WebGL CPPN compiler
+// ============================================================================
+const GLSL_ACT = {
+  identity: (s) => s,
+  sin:      (s) => `sin(clamp(${s},-60.0,60.0))`,
+  cos:      (s) => `cos(clamp(${s},-60.0,60.0))`,
+  sigmoid:  (s) => `(2.0/(1.0+exp(-clamp(${s},-60.0,60.0)))-1.0)`,
+  gaussian: (s) => { const z = `clamp(${s},-60.0,60.0)`; return `(2.0*exp(-(${z})*(${z}))-1.0)`; },
+};
+function glslActName(name) {
+  // blended activations registered in ACT carry name "b_<a>_<b>_<tq>"; the shader instead
+  // mixes the two base activations via a per-node uniform, so we only need base names here.
+  return GLSL_ACT[name] ? name : 'identity';
+}
+
+// Compile a superset (with its nodePairs giving start/end activation per node) into a program.
+// Weights and per-node activation-blend are uniforms updated each frame -> compile once per edge.
+function buildGLProgram(gl, sup, nodePairs) {
+  const conns = [...sup.conns.values()];               // index = uniform W slot
+  const connIndex = new Map(conns.map((c, i) => [c.i + ',' + c.o, i]));
+  const layers = feedForwardLayers(INPUT_KEYS, OUTPUT_KEYS,
+    conns.filter(c => c.enabled).map(c => [c.i, c.o]));
+  // include ALL conns (even momentarily-disabled) so the shader is stable across the scrub;
+  // disabled ones just carry weight 0 via the uniform.
+  const allLayers = feedForwardLayers(INPUT_KEYS, OUTPUT_KEYS, conns.map(c => [c.i, c.o]));
+  const nodeList = [];                                   // ordered hidden+output nodes
+  for (const layer of allLayers) for (const n of layer) nodeList.push(n);
+  const declared = new Set(nodeList);
+  for (const k of OUTPUT_KEYS) if (!declared.has(k)) { nodeList.push(k); declared.add(k); } // outputs always present, computed last
+  const blendIndex = new Map(nodeList.map((k, i) => [k, i]));
+
+  const varName = (k) => k < 0
+    ? ({ '-1': 'IN_X', '-2': 'IN_Y', '-3': 'IN_D', '-4': '1.0' })[String(k)]
+    : `n_${k}`;
+
+  let body = '';
+  for (const node of nodeList) {
+    // only sum links whose source is an input or a node we actually compute (drop dangling)
+    const links = conns.filter(c => c.o === node && (c.i < 0 || declared.has(c.i)));
+    const sum = links.length
+      ? links.map(c => `W[${connIndex.get(c.i + ',' + c.o)}]*${varName(c.i)}`).join('+')
+      : '0.0';
+    const [sa, ea] = nodePairs[node] || ['identity', 'identity'];
+    const fa = GLSL_ACT[glslActName(sa)](`S`), fb = GLSL_ACT[glslActName(ea)](`S`);
+    const bi = blendIndex.get(node);
+    body += `  { float S=(${sum}); n_${node}=mix(${fa},${fb},BL[${bi}]); }\n`;
+  }
+
+  const frag = `precision highp float;
+varying vec2 vUV;
+uniform float W[${Math.max(conns.length, 1)}];
+uniform float BL[${Math.max(nodeList.length, 1)}];
+uniform float uColor;
+vec3 hsv2rgb(vec3 c){
+  vec4 K=vec4(1.,2./3.,1./3.,3.);
+  vec3 p=abs(fract(c.xxx+K.xyz)*6.-K.www);
+  return c.z*mix(K.xxx,clamp(p-K.xxx,0.,1.),c.y);
+}
+void main(){
+  float IN_X=(vUV.x*2.0-1.0);
+  float IN_Y=(vUV.y*2.0-1.0);
+  float IN_D=length(vec2(IN_X,IN_Y))*1.41421356;
+${nodeList.map(k => `  float n_${k}=0.0;`).join('\n')}
+${body}
+  float h=fract(n_0+1.0), s=clamp(n_1,0.0,1.0), v=clamp(abs(n_2),0.0,1.0);
+  vec3 col = uColor>0.5 ? hsv2rgb(vec3(h,s,v)) : vec3(v);
+  gl_FragColor=vec4(col,1.0);
+}`;
+  const vert = `attribute vec2 aPos; varying vec2 vUV;
+void main(){ vUV=aPos*0.5+0.5; gl_Position=vec4(aPos,0.0,1.0); }`;
+
+  function sh(type, src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)+'\n'+src); return s; }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vert));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, frag));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  return { prog, conns, connIndex, nodeList, blendIndex,
+           locW: gl.getUniformLocation(prog,'W'),
+           locBL: gl.getUniformLocation(prog,'BL'),
+           locColor: gl.getUniformLocation(prog,'uColor'),
+           locPos: gl.getAttribLocation(prog,'aPos') };
+}
+
+// Per-frame uniform arrays for fraction t (no recompile).
+function glFrameUniforms(P, connStats, nodePairs, t) {
+  const W = new Float32Array(P.conns.length);
+  for (const c of P.conns) {
+    const s = connStats[c.i + ',' + c.o];
+    let w;
+    if (s.se === s.ee)      w = (1 - t) * s.sw + t * s.ew;
+    else if (s.se && !s.ee) w = s.sw * (1 - t);
+    else                    w = s.ew * t;
+    W[P.connIndex.get(c.i + ',' + c.o)] = w;
+  }
+  const BL = new Float32Array(P.nodeList.length);
+  for (const k of P.nodeList) {
+    const [sa, ea] = nodePairs[k] || [];
+    BL[P.blendIndex.get(k)] = (sa === ea) ? 1.0 : t;   // sa==ea -> mix picks ea (==sa)
+  }
+  return { W, BL };
+}
+
+// ============================================================================
+//  App
+// ============================================================================
+const cvJS = document.getElementById('cvJS'), ctxJS = cvJS.getContext('2d');
+const cvGL = document.getElementById('cvGL');
+let gl = cvGL.getContext('webgl') || cvGL.getContext('experimental-webgl');
+let glQuad;
+if (gl) {
+  glQuad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, glQuad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+}
+
+let RES = 160, useJS = true, useGL = !!gl;
+let tree, genomes, lineage = [], edges = [], glEdgeCache = new Map();
+
+function buildLineage(leafId) {
+  const path = []; let c = leafId;
+  while (c) { path.unshift(c); c = tree.nodes[c] ? tree.nodes[c].p : null; }
+  lineage = path;
+  edges = [];
+  glEdgeCache = new Map();
+  for (let i = 0; i < path.length - 1; i++) {
+    const pj = genomes[path[i]], cj = genomes[path[i+1]];
+    if (!pj || !cj) continue;
+    const sup = buildSuperset(pj, cj);
+    edges.push({ ...sup, parent: path[i], child: path[i+1], col: tree.nodes[path[i+1]].col !== false });
+  }
+  document.getElementById('edgeInfo').textContent =
+    `${edges.length} edges · ${path.length} genomes · depth ${path.length-1}`;
+}
+
+function locate(frac) {                       // global frac 0..1 -> {edge, t}
+  if (!edges.length) return null;
+  const x = frac * edges.length;
+  let ei = Math.min(edges.length - 1, Math.floor(x));
+  return { ei, edge: edges[ei], t: x - ei };
+}
+
+function drawJS(edge, t) {
+  if (cvJS.width !== RES) { cvJS.width = cvJS.height = RES; }
+  applyFraction(edge.sup, edge.nodePairs, edge.connStats, t);
+  const t0 = performance.now();
+  const img = renderGenome(edge.sup, RES, edge.col);
+  ctxJS.putImageData(img, 0, 0);
+  return performance.now() - t0;
+}
+
+function getGLProgram(ei, edge) {
+  if (glEdgeCache.has(ei)) return glEdgeCache.get(ei);
+  const P = buildGLProgram(gl, edge.sup, edge.nodePairs);
+  glEdgeCache.set(ei, P);
+  return P;
+}
+function drawGL(ei, edge, t) {
+  if (cvGL.width !== RES) { cvGL.width = cvGL.height = RES; }
+  const t0 = performance.now();
+  const P = getGLProgram(ei, edge);
+  const { W, BL } = glFrameUniforms(P, edge.connStats, edge.nodePairs, t);
+  gl.viewport(0, 0, RES, RES);
+  gl.useProgram(P.prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, glQuad);
+  gl.enableVertexAttribArray(P.locPos);
+  gl.vertexAttribPointer(P.locPos, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1fv(P.locW, W);
+  gl.uniform1fv(P.locBL, BL);
+  gl.uniform1f(P.locColor, edge.col ? 1 : 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.finish();                                 // force GPU sync so timing is honest
+  return performance.now() - t0;
+}
+
+function fpsClass(ms) { const f = 1000/ms; return f>=45?'fps-good':(f>=20?'fps-mid':'fps-bad'); }
+function setStat(el, ms, label) {
+  el.className = 'stat ' + fpsClass(ms);
+  el.textContent = `${ms.toFixed(1)} ms/frame · ${(1000/ms).toFixed(0)} fps  ${label||''}`;
+}
+
+let dragging = false;
+function render() {
+  const loc = locate(+scrub.value / 1000);
+  if (!loc) return;
+  const lowRes = dragging && document.getElementById('dragLow').checked;
+  const savedRes = RES; if (lowRes) RES = 96;
+  if (useJS) setStat(statJS, drawJS(loc.edge, loc.t)); else statJS.textContent = 'off';
+  if (useGL && gl) {
+    try { setStat(statGL, drawGL(loc.ei, loc.edge, loc.t)); }
+    catch (err) { statGL.className = 'stat fps-bad'; statGL.textContent = 'GL error: ' + String(err.message || err).slice(0, 120); console.error(err); }
+  } else statGL.textContent = gl ? 'off' : 'no WebGL';
+  RES = savedRes;
+}
+
+// ---------- controls ----------
+const scrub = document.getElementById('scrub'), statJS = document.getElementById('statJS'), statGL = document.getElementById('statGL');
+scrub.addEventListener('pointerdown', () => dragging = true);
+scrub.addEventListener('pointerup',   () => { dragging = false; render(); });
+scrub.addEventListener('input', render);
+
+document.getElementById('btnJS').onclick = (e) => { useJS = !useJS; e.target.classList.toggle('on', useJS); e.target.textContent = useJS?'JS on':'JS off'; render(); };
+document.getElementById('btnGL').onclick = (e) => { useGL = !useGL && !!gl; e.target.classList.toggle('on', useGL); e.target.textContent = useGL?'WebGL on':'WebGL off'; render(); };
+
+['96','128','160','200','256','384'].forEach(r => {
+  const b = document.createElement('button'); b.textContent = r + 'px'; if (+r===RES) b.classList.add('on');
+  b.onclick = () => { RES = +r; document.querySelectorAll('#resBtns button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); render(); };
+  document.getElementById('resBtns').appendChild(b);
+});
+
+let playing = false, rafId = null;
+document.getElementById('btnPlay').onclick = (e) => {
+  playing = !playing; e.target.classList.toggle('on', playing); e.target.textContent = playing?'⏸ Stop':'▶ Play loop';
+  if (playing) loop(); else cancelAnimationFrame(rafId);
+};
+function loop() {
+  let v = +scrub.value + 4; if (v > 1000) v = 0; scrub.value = v;
+  render();
+  rafId = requestAnimationFrame(loop);
+}
+
+document.getElementById('btnBench').onclick = () => {
+  const out = document.getElementById('benchOut'); out.textContent = 'benchmarking…';
+  setTimeout(() => {
+    const lines = [];
+    for (const r of [96,128,160,200,256,384]) {
+      RES = r;
+      // sample 24 points across the lineage
+      const N = 24; let jsT = 0, glT = 0;
+      for (let i = 0; i < N; i++) {
+        const loc = locate(i/(N-1));
+        if (useJS) jsT += drawJS(loc.edge, loc.t);
+        if (useGL && gl) glT += drawGL(loc.ei, loc.edge, loc.t);
+      }
+      const js = jsT/N, glm = glT/N;
+      lines.push(`${r}px:  JS ${js.toFixed(1)}ms (${(1000/js).toFixed(0)}fps)   WebGL ${gl?glm.toFixed(2)+'ms ('+(1000/glm).toFixed(0)+'fps)':'n/a'}`);
+    }
+    out.innerHTML = '<b>Benchmark (avg over 24 points on this lineage):</b><br>' + lines.join('<br>');
+    RES = 160; document.querySelectorAll('#resBtns button').forEach(x=>x.classList.toggle('on', x.textContent==='160px'));
+    render();
+  }, 30);
+};
+
+// ---------- boot ----------
+(async function () {
+  [genomes, tree] = await Promise.all([fetchGz('data/tree_genomes.json.gz'), fetchGz('data/tree.json.gz')]);
+  // candidate leaves: deepest path + featured ones
+  const depth = (id) => { let d=0,c=id; while(tree.nodes[c]&&tree.nodes[c].p){c=tree.nodes[c].p;d++;} return d; };
+  const ranked = Object.keys(tree.nodes).map(id => ({id, d: depth(id), t: tree.nodes[id].t}))
+                       .sort((a,b)=>b.d-a.d).slice(0, 40);
+  const sel = document.getElementById('selLineage');
+  for (const r of ranked) {
+    const o = document.createElement('option'); o.value = r.id;
+    o.textContent = `${r.id}—"${r.t||'?'}" (depth ${r.d})`; sel.appendChild(o);
+  }
+  sel.onchange = () => { buildLineage(sel.value); scrub.value = 0; render(); };
+  buildLineage(ranked[0].id);
+  render();
+})();
+</script>
+</body>
+</html>

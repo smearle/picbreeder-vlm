@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>System Overview — Picbreeder-VLM</title>
+<link rel="stylesheet" href="player.css?v=23">
+</head>
+<body>
+<div id="app">
+
+  <!-- Faithful re-creation of paper/system_fig/system_overview.tex, animated:
+       Archive → Sampling → Evolution → Evaluation → Archive. Cross-edges follow
+       the same routes as the TikZ figure (orange feed / green rate / dashed ×20
+       loop / black pipes). -->
+  <div class="fig" id="fig">
+    <svg class="arrows" id="arrows" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="samp-fly"></div><!-- thumbnails gliding from the Archive into the Sampling node -->
+    <div id="arch-fly"></div><!-- the recent publications dispersed over the archive's top layer -->
+    <div id="evo-fly"></div><!-- selected parents converging / candidates spawning in the grid -->
+    <div id="rating-wall"></div><!-- parallel rater: ~100-image sample filling the Sampling node -->
+    <div id="rate-fly"></div><!-- rater: crops streaming Sampling -> Evaluation, one by one -->
+    <div id="rate-stack"></div><!-- rater: rated thumbs cycling the 6-cell layout + stacking right -->
+    <div id="rate-stars"></div><!-- rater: star glyphs riding the rate edge into the Archive -->
+    <div id="branch-clone"></div><!-- branched parent: Sampling centre -> generation-grid seed -->
+    <div id="branch-title"></div>
+    <img id="pub-rider" alt=""><!-- published image, rides the publish arrow into the archive -->
+
+    <!-- ============ TOP-LEFT: ARCHIVE ============ -->
+    <section class="panel" id="p-archive" style="grid-area:arch;">
+      <div class="ptitle">Archive</div>
+      <!-- The Archive node shows a 50-cell SAMPLE of the true archive: #archive-img is the top
+           layer (current checkpoint) and #arch-back is a tight solid stack of buried sheets
+           standing in for the entries it isn't showing. The featured publication rides in along
+           the publish edge; the other recent publications flip into their cells as it lands.
+           Together they cover PART of the top layer and stay there (#arch-fly, gold-ringed).
+           Beneath them #arch-front cross-fades the rest of the top layer over to the next
+           checkpoint. The next epoch's draws then take half their images from those recent
+           arrivals and half from under the pile. -->
+      <div class="pbody arch-body">
+        <div id="arch-back" class="arch-layers"></div>
+        <img id="archive-img" class="cover" alt="archive">
+        <div id="arch-front" class="arch-layers"></div>
+        <img id="fly-pub" class="fly-pub" alt="">
+      </div>
+    </section>
+
+    <!-- ============ TOP-RIGHT: SAMPLING ============ -->
+    <!-- The Sampling node holds exactly TWO stacked draw-cards (injected by
+         player.js; each is [row-labels | strip]): the EVOLUTION draw and the
+         EVALUATION draw. The evolver's draw glides in from the Archive at the front;
+         after it branches, the two cards SWAP (front↔back, one consistent animation)
+         and the evaluation draw — now at the front — glides in from the Archive too. -->
+    <section class="panel" id="p-sampling" style="grid-area:samp;">
+      <div class="ptitle">Sampling</div>
+      <div class="pbody samp-body">
+        <div class="samp-deck" id="samp-deck"></div>
+      </div>
+    </section>
+
+    <!-- ============ BOTTOM-LEFT: EVOLUTION ============ -->
+    <section class="panel short" id="p-evolution" style="grid-area:evo;">
+      <div class="ptitle">Evolution</div>
+      <div class="pbody evo-body">
+        <div class="ebox vlmbox" id="sel">VLM&nbsp;breeder</div>
+        <div class="ebox mutbox" id="mut">Mutation/crossover</div>
+        <div class="gen-wrap" id="gen-wrap">
+          <img id="gen-grid" class="contain" alt="candidate grid">
+          <div class="sel-overlay" id="sel-overlay"></div>
+          <img id="pub-clone" alt="published candidate">
+          <div id="pub-title"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ BOTTOM-RIGHT: EVALUATION ============ -->
+    <section class="panel short" id="p-evaluation" style="grid-area:eval;">
+      <div class="ptitle">Evaluation</div>
+      <div class="pbody eval-body">
+        <div class="ebox vlmbox" id="rat">VLM&nbsp;critic</div>
+        <div class="rated" id="rated"></div>
+      </div>
+    </section>
+  </div>
+
+</div>
+<script src="player.js?v=23"></script>
+</body>
+</html>

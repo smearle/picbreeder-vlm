@@ -1,0 +1,1075 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Above-the-fold hero: fetch the thumbnail atlas + manifest first, ahead of
+     the ~90 article images/videos, so the banner paints near-instantly. -->
+<link rel="preload" as="image" href="assets/hero_sprites/thumbs_atlas.jpg" fetchpriority="high">
+<link rel="preload" as="fetch" href="assets/hero_sprites/manifest.json" fetchpriority="high">
+<!-- global page styles --><link rel="stylesheet" href="assets/page/page.css">
+
+<script type="text/front-matter">
+  title: "The AI Picbreeder Experiment: In Search of Automatic Open-Endedness"
+  description: "We replace Picbreeder's human users with AI (large Vision-Language Models), and ask if AI is capable of open-ended discovery."
+</script>
+
+<head>
+  <link rel="icon" type="image/png" href="assets/favicon.png?v=3" />
+  <link rel="apple-touch-icon" href="assets/favicon.png?v=3" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta property="og:title" content="The AI Picbreeder Experiment: In Search of Automatic Open-Endedness" />
+  <meta property="og:type" content="article" />
+  <meta property="og:description" content="We replace Picbreeder's human users with AI (large Vision-Language Models), and ask which ingredients let AI search open-endedly the way people do." />
+  <!-- ==========================================================================
+       DEPLOY URL — single source of truth for this page's own ABSOLUTE links.
+       Everything else on the page uses relative paths (assets/…, breed/…) and moves
+       with the host automatically; only the social-card tags below need the absolute
+       origin. Social crawlers (Slack/X/Facebook) do NOT run JS, so these must carry
+       the URL statically. The <script> just below rewrites them from window.SITE_BASE
+       for the live page — so to move hosts, change SITE_BASE (one place) and, for the
+       crawler cards, find/replace the same base in the three content="…" values.
+       ========================================================================== -->
+  <meta property="og:image" content="https://pub.sakana.ai/picbreeder-vlm/assets/teaser_hero.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:url" content="https://pub.sakana.ai/picbreeder-vlm/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="The AI Picbreeder Experiment" />
+  <meta name="twitter:description" content="We replace Picbreeder's human users with AI (large Vision-Language Models), and ask which ingredients let AI search open-endedly the way people do." />
+  <meta name="twitter:image" content="https://pub.sakana.ai/picbreeder-vlm/assets/teaser_hero.png" />
+  <script>
+    // Canonical deploy origin (no trailing slash). Change here to re-point the live page.
+    window.SITE_BASE = "https://pub.sakana.ai/picbreeder-vlm";
+    (function (base) {
+      var urls = {
+        'meta[property="og:url"]':    base + "/",
+        'meta[property="og:image"]':  base + "/assets/teaser_hero.png",
+        'meta[name="twitter:image"]': base + "/assets/teaser_hero.png"
+      };
+      for (var sel in urls) {
+        var el = document.querySelector(sel);
+        if (el) el.setAttribute("content", urls[sel]);
+      }
+    })(window.SITE_BASE);
+  </script>
+</head>
+
+<link rel="stylesheet" href="css/katex.min.css">
+<script src="lib/template.v1.js"></script>
+
+<!-- Every route into the archive viewer (thumbnails, results rows, hero grid, #trio):
+     defines window.PBVLMArchive / PBVLMOpenHeroArc, which navigate to archive.html.
+     Loaded up here (before <body>) on purpose so it's defined no matter where the
+     figures that call it end up in the prose below. -->
+<script src="assets/page/archive-links.js"></script>
+
+<body>
+<div id="no_javasript_warning"><h3>This page requires Javascript. Please enable it to view the website.</h3></div>
+<script>document.getElementById("no_javasript_warning").style.display = "none";</script>
+
+<!-- teaser: interactive lineage hero -->
+<div style="text-align:center;">
+  <div id="hero-grid" role="img" aria-label="A grid of images discovered by VLMs; each can rewind through its evolution back to the random pattern it grew from."></div>
+</div>
+<!-- hero grid morph animation --><script src="assets/page/hero-grid.js"></script>
+
+<dt-article id="dtbody">
+
+<dt-byline class="l-page transparent"></dt-byline>
+<h1>The AI Picbreeder Experiment</h1>
+<div style="text-align:right; font-size:13px; color:#888; margin:-.6em 0 0;">Best Paper nominee, <a href="https://gecco-2026.sigevo.org/HomePage" target="_blank" style="color:#FF6C00;">GECCO 2026</a>.</div>
+<dt-byline class="l-page" id="authors_section">
+<div class="byline">
+  <div class="authors">
+    <div class="author">
+      <a class="name" href="https://smearle.github.io">Sam Earle*&nbsp;&nbsp;&nbsp;&nbsp;</a>
+      <span class="affiliation">NYU</span>
+    </div>
+    <div class="author">
+      <a class="name" href="https://kaixhin.com/">Kai Arulkumaran&nbsp;&nbsp;&nbsp;&nbsp;</a>
+      <span class="affiliation">Sakana AI</span>
+    </div>
+    <div class="author">
+      <a class="name" href="https://daia99.github.io/">Andrew Dai*&nbsp;&nbsp;&nbsp;&nbsp;</a>
+      <span class="affiliation">Independent</span>
+    </div>
+    <div class="author">
+      <a class="name" href="https://akarshkumar.com">Akarsh Kumar*&nbsp;&nbsp;&nbsp;&nbsp;</a>
+      <span class="affiliation">MIT</span>
+    </div>
+    <div class="author">
+      <a class="name" href="http://julian.togelius.com">Julian Togelius&nbsp;&nbsp;&nbsp;&nbsp;</a>
+      <span class="affiliation">NYU</span>
+    </div>
+    <div class="author">
+      <a class="name" href="https://sebastianrisi.com">Sebastian Risi&nbsp;&nbsp;&nbsp;&nbsp;</a>
+      <span class="affiliation">Sakana AI</span>
+    </div>
+    <div class="date">
+      <div class="month">Jul 6</div>
+      <div class="year">2026</div>
+    </div>
+    <div class="date">
+      <div class="month" style="color:#FF6C00;"><a href="https://arxiv.org/abs/2605.23908" target="_blank" rel="noopener">Paper</a></div>
+      <div class="year" style="color:#FF6C00;"><a href="https://github.com/smearle/picbreeder-vlm" target="_blank">Code</a></div>
+    </div>
+    <div class="date" style="border-left:none; margin-left:0; padding-left:14px; vertical-align:top;">
+      <div class="month" style="color:#FF6C00;"><a href="https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive" target="_blank" rel="noopener">Data</a></div>
+    </div>
+  </div>
+  <div class="author-note">
+    <span class="note-left"><i>* Work done during an internship or residency at Sakana AI.</i></span>
+  </div>
+</div>
+</dt-byline>
+
+<!-- HUMAN TEXT IN PROGRESS, DO NOT DELETE -->
+<!-- Original first paragraph with hyperlinks, kept for posterity:
+     The culture is filled with <a href="https://knowyourmeme.com/memes/ai-cat-stories-sad-meow-meow-song" target="_blank">slop</a>, fine art is punctuated by <a href="https://www.youtube.com/watch?v=BHt2RXRKCSE&list=RDBHt2RXRKCSE" target="_blank">new</a> <a href="https://quasimondo.com/2018/12/29/memories-of-passersby-i/" target="_blank">AI-driven</a> <a href="https://www.coeval-magazine.com/coeval/frank-manzano" target="_blank">forms</a>, and every day we encounter of all manner of <a href="https://www.instagram.com/p/DQMkuTLDjDQ/" target="_blank">uncanny</a> <a href="https://www.youtube.com/watch?v=rQssjhX31Z0" target="_blank">objects</a> falling somewhere between.
+-->
+<p>Can AI agents be creative? It's a question on the lips and fingertips of many.
+  <!-- Our culture is flooded by slop, fine art is punctuated by new AI-driven forms, and  -->
+  <!-- every day we encounter of all manner of uncanny semi-synthetic cultural objects. -->
+  <!-- All told, we are increasingly deployging AI as a material in cultural conversation. -->
+  <!-- But could it ever meaningfully become the speaker? -->
+  Sure, AI is the new medium, but could it ever be the one making the message?
+  <!-- Could agents self-organize to generate an archive of art objects in a manner as open-ended as humans, forming a kind of self-contained&mdash;at least somewhat alien&mdash;living cultural organism? -->
+  We ask whether the agents we use today as tools might be re-purposed to spontaneously speak among themselves.
+   <!-- effort to synthesize autopoietic cultures. -->
+  The end result would be a model organism of cultural production.
+  <!-- from a substrate of human artifacts but ultimately distinct from them. -->
+  <!-- , art-object factories producing artifacts as open-ended from the inside as our own? -->
+</p>
+
+<p> 
+<!-- This is what AI creativity would look like at the level of culture. What would it look like at the level of an individual agent? -->
+What should we ask of the agents to make this real?
+The tension is that we cannot ask for anything at all&mdash;it has to be left up to them&mdash;yet modern agents demand our asking by design.
+They are trained, evaluated, and orchestrated as goal-following entities.
+<!-- One thing we can say is that it's distinct from the process of pursuing a well-defined plan, or working linearly toward a verifiable goal.] -->
+ But creativity elides planning, and the end products of cultural processes are not conceived of at the outset but forged in serendipity.
+ This is true not only of the arts, but of math and science as well, where the discovery of new questions is at least as important as their resolution.
+ <!-- ; its shape emerges from the process itself. -->
+<!-- In the studio, on the canvas, and on the stage, that which appears insightful in hindsight often first presents itself as an error, accident, or random circumstance. -->
+</p>
+
+<p>
+To this end, we envision agents capable of intentional aimless wandering&mdash;agents that can surprise themselves, and in response throw their plans and preconceptions out the window in pursuit of the unexpected.
+<!-- </p> -->
+
+<!-- <p>
+(Not merely a question of the arts, creativity is a pre-requisite for any effort to seriously automate math or science, which involve not only solutions but the posing of new questions, which themselves follow a more subliminal set of incentives.
+Processes of collective scientific pursuit, in other words&mdash;far from mere optimization processes over the objective of explaining experience in the world&mdash;are themselves creative cultural organisms.)
+</p> -->
+
+<!-- <p> -->
+  To study whether AI systems might have this capacity, we turn to a minimal substrate where we know it to be possible&mdash;even necessary. Picbreeder<dt-cite key="secretan2008picbreeder,secretan2011picbreeder"></dt-cite> was a website which gained a modest cult following in the 2010s. Here, you might imagine us trying to re-animate it with something like the mechanical ghosts of its past users: replacing humans with large models trained on their collective output, and asking if these models are capable of the same level of creative discovery as we were.
+</p>
+
+<figure class="l-body">
+  <div class="screenshot">
+    <div class="pages">
+      <a class="peelhost" href="breed/"><img src="assets/picbreeder_site_p0.png?v=4" alt="The Picbreeder website, page 1 of 3&mdash;click to open our AI re-creation"/><span class="tm-peel" aria-hidden="true"><span class="vlm"></span><span class="lift"></span></span></a>
+      <a href="breed/"><img src="assets/picbreeder_site_p1.png?v=4" alt="The Picbreeder website, page 2 of 3&mdash;click to open our AI re-creation"/></a>
+      <a href="breed/"><img src="assets/picbreeder_site_p2.png?v=4" alt="The Picbreeder website, page 3 of 3&mdash;click to open our AI re-creation"/></a>
+    </div>
+  </div>
+  <figcaption>At <b>picbreeder.org</b>, users participated in a process of generating collaborative art by interactively evolving images. The images began abstract, but over multiple sessions with different users, genealogies complexified and familiar forms emerged, often by surprise. (Image retrieved via the Internet Archive.) (Click to access an <a href="breed/">homage</a> to the original site, populated with aggregate results over multiple replays of AI-driven reproductions of the collective human event.)</b></figcaption>
+</figure>
+
+<p>
+  Before frontier models allowed us to speak into existence a vast distribution of possible images, Picbreeder had users breed images by representing them indirectly.
+  Each image in Picbreeder is encoded as a Compositional Pattern-Producing Network (CPPN)<span style="white-space:nowrap"><dt-cite key="stanley2007compositional"></dt-cite>,</span> an initially small, protean neural network that takes as input some coordinates in pixel space, and outputs that pixel's color. Because they can take arbitrary continuous coordinates as input, these networks effectively encode infinite-resolution images. Elsewhere, they've been used to represent videos<dt-cite key="tweraser2018querying"></dt-cite>, terrain in game-like environments<dt-cite key="wang2019poet,wang2020enhanced"></dt-cite>, and even the weights of larger downstream neural networks with more regular topologies<dt-cite key="stanley2009hypercube"></dt-cite>. 
+  You can see how coordinate values are turned into color pixels in the animation below:
+</p>
+
+<!-- ===================================================================
+   * CPPN explainer — two figures placed right after the first CPPN mention:
+   *   (A) a looping animation: grid cell -> (x,y,r) -> CPPN -> output pixel
+   *   (B) an interactive viewer: pick a human/AI genome and watch it render,
+   *       hover a pixel to see its (x,y,r) coordinate map to a colour.
+   * Both reuse the in-browser CPPN engine (breed/cppn.js, pixel-identical to
+   * the paper) and a small curated bundle (breed/data/cppn_explainer.json,
+   * built by tools/build_cppn_explainer.py).
+   * =================================================================== -->
+<!-- CPPN explainer figure (styles) --><link rel="stylesheet" href="assets/page/cppn-explainer.css">
+
+<figure class="l-page-outset cppnx-figs">
+  <div class="cppnx-card cppnx-anim" id="cppnxAnim">
+    <div class="stage">
+      <div class="panel">
+        <canvas id="cppnxGrid" width="150" height="150"></canvas>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="panel">
+        <canvas id="cppnxNet" width="330" height="150"></canvas>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="panel">
+        <canvas id="cppnxHsv" width="128" height="128"></canvas>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="panel">
+        <canvas id="cppnxPix" width="16" height="16"></canvas>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="panel">
+        <canvas id="cppnxOut" width="150" height="150"></canvas>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>Compositional Pattern-Producing Networks (CPPNs)</b> At every pixel,
+     <span class="cppnx-accent">x</span>,
+    <span class="cppnx-accent">y</span> coordinates, and radius from center <span class="cppnx-accent">r</span> are fed into the network, which returns hue, saturation and value (HSV), i.e. a color. In this way, each CPPN encodes an image of arbitrary resolution. Click the input grid to pin the probe in place; press 'r' to reset.</figcaption>
+</figure>
+
+<p>
+  In practice, we pass all the input coordinates through the network at once.
+  Each node in the network has some grid-shaped activation we can render as a greyscale image, and at the network's output, three such outputs are combined to produce a single color image.
+  <!-- and visualize the grayscale images corresponding to the activations at each node over this grid. -->
+  In the tool below, you can see how changing the weights or activation functions of various nodes and edges changes the intermediary activations and final output of a CPPN:
+</p>
+
+<figure class="l-page-outset cppnx-figs">
+  <div class="cppnx-card cppnx-dna" id="cppnxDNA">
+    <!-- The editor itself is the shared PB.DnaEditor widget (breed/dna-editor.js), mounted
+         here and skinned by the .cppnx-dna rules above — the blog no longer forks its code,
+         so graph/menu/edit behaviour stays in lock-step with breed/dna.html and play.html. -->
+    <div id="cppnxDNAeditor"></div>
+  </div>
+  <figcaption><b>DNA editor.</b> Edit a CPPN and view the real-time effect on intermediary and final outputs. <b>Click a node or edge</b> to open its control ring, <b>drag a node</b> to move it (or drag the ⊕ handle on its border onto another node to link the two), or <b>click and drag on an edge to scrub its weight</b>. (See also the analog on the <a href="breed/dna.html?g=h_butterfly">interactive breeding site</a>.)</figcaption>
+</figure>
+
+<p>
+  Playing with the weights for a moment, you get the sense that building target images by building CPPNs from scratch out of nodes and edges would be a thankless endeavor.
+  Instead, in Picbreeder, images are evolved.
+  This is done interactively with the user in the loop: from a grid of random initial CPPNs (which generally look like smooth blobs or gradients), a user selects one or several which they'd like to grow further.
+ </p> 
+  
+ <p>
+  These individuals (each little brain containing a single picture) are then bred together and mutated to produce a new set of candidate images, and the process repeats.
+  Mutation and crossover operations are drawn from the Neuroevolution of Augmenting Topologies (NEAT) algorithm<dt-cite key="stanley2002evolving"></dt-cite>, which unlike traditional gradient descent not only optimizes the weights of the network, but also its shape or topology in terms of the layout of nodes and edges.</p>
+
+<!-- embedded mini-breeder (styles) --><link rel="stylesheet" href="assets/page/mini-breeder.css">
+
+<figure class="l-page-outset cppnx-figs">
+  <div class="cppnx-card cppnx-breed" id="cppnxBreed" tabindex="0">
+    <!-- Your published images this session — half-scale thumbnails, newest on the
+         right; click one to breed a fresh candidate grid from it. Hidden until the
+         first Publish. -->
+    <div class="cxb-published" id="cxbPublished" hidden></div>
+    <!-- Warnings and publish receipts sit above the grid, centred, so a message of any
+         length leaves the button bar's geometry untouched. -->
+    <div class="cxb-status" id="cxbStatus" role="status"></div>
+    <div class="cxb-grid" id="cxbGrid"></div>
+    <div class="cxb-bar">
+      <div class="cxb-side">
+        <button class="cxb-btn" id="cxbNewParent">
+          <!-- <span class="ic">&#129731;</span> -->
+          New parent</button>
+        <button class="cxb-btn" id="cxbUndo">&#8635; Undo</button>
+        <button class="cxb-btn" id="cxbReset">Reset</button>
+      </div>
+      <button class="cxb-btn cxb-go" id="cxbEvolve">
+        <!-- <span class="ic">&#127754;</span> -->
+         Evolve selected</button>
+      <div class="cxb-side cxb-side-right">
+        <button class="cxb-btn cxb-pub" id="cxbPublish"><span class="ic">&#127907;</span> Publish</button>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>Breeding console.</b> Click to select &middot; space to evolve &middot; z to undo &middot; r to reset &middot; p for new parent. (See the <a href="breed/play.html?seed=apple">full version</a>.)</figcaption>
+</figure>
+
+  <p>
+  In this way, images are created not by design but by a prolonged process of natural selection.
+  And as the human in this loop, it's nearly impossible to plan for a particular long-term goal: for example to imagine an image in advance then successfully breed it.
+  Not within this interaction scheme, not on any reasonable kind of timescale, at least.
+  <!-- it's nearly impossible, within such an interaction scheme, on any kind of reasonable timescale, to plan for a particular outcome. -->
+  <!-- , e.g. to start from a random genome and evolve it toward an image of a house. -->
+  But Picbreeder shows us that these kinds of achievements can be attained anyway if the process of interactive evolution is distributed across a large number of users.
+  Here, the artifacts materialize by accident, appearing to the user as objectives-in-retrospect.
+  </p>
+
+<p>
+  In other words, the Picbreeder users played with the system, wandering, and generated art not by conceiving it against marble or canvas, but by catching it like a fish from a stream.
+  In the AI Picbreeder experiment, we ask: can AI catch similar fish?
+  And if it can, then how does it achieve this? Then we can try to find any parts of its looking at and moving in the water that matter to its success.
+</p>
+
+<p> 
+To get at these questions, we conceive of a simplified interaction loop with the Picbreeder website, automating users with large vision-language models.
+In this loop, we sample from an ever-growing shared archive of publications, and feed these snapshots to various parallel VLM agents. These agents can select an image to "branch", breeding its offspring across generations, then naming and publishing their favorite child. Intermittently, agents are also asked to evaluate the quality and novelty of such snapshots from the archive. Future samples are drawn partially at random, and partially according to recency of publication, mean ratings from past agents, and branching popularity.
+</p>
+
+<figure class="l-page">
+  <div class="sysfig"><img src="assets/system_overview.svg?v=22" style="display:block; margin:0 auto; max-width:900px; width:100%; height:auto;" alt="System overview: a single Picbreeder-VLM agent session and the shared archive it co-evolves with. The archive is sampled into a 100-image branching sample (5 mutually-exclusive subsets), which feeds both Evolution (VLM breeder, mutation/crossover, and the generation grid looping 20 times, after which a VLM publication step sends the chosen image back to the archive) and Evaluation (a fresh VLM rates archive entries 1-5)."/></div>
+  <figcaption style="max-width:900px; margin:.4em auto 0;">
+    <b>AI Picbreeder: mimicking a pared-down version of human interaction with the original Picbreeder website, we use VLM instances to simulate users, growing unbounded archives of collaborative art produced by agents under varying conditions.</b> 
+    In parallel, VLM agents interactively evolve and evaluate candidates saved to an online archive.
+    As the archive grows unboundedly, candidates are selected according to their past evaluation scores and their placement in the phylogenetic tree (recency, number of offspring).
+    In practice, we run 10 breeding agents in parallel continuously, branching from and publishing to the shared archive, and launch a critic agent whenever the archive grows by 5 publications.
+    (Click to <a id="sysfig-animate-link" href="system_overview/index.html">animate</a>.)
+    <!-- An agent branches from the archive (here: from the yellow <i>Rubber Duck Profile</i>), runs a 20-generation Mutation/crossover &harr; VLM&nbsp;selection loop, and publishes a new image (<i>Cartoon Canary</i>) back to the archive. In parallel, a fresh VLM rates archive entries to populate future top-rated/best-new shelves. -->
+  </figcaption>
+</figure>
+<!-- click the static system-overview figure to expand it into the animated player -->
+<script src="assets/page/sysfig-expand.js"></script>
+
+<p>
+This resembles Evolution through Large Models<dt-cite key="lehman2023evolution"></dt-cite>, which involves the use of large language models as mutation operators within existing evolutionary algorithms, and has been variously leveraged to discover robot control policies, novel two-player board games<dt-cite key="todd2024gavel"></dt-cite>, and solutions to combinatorial optimization problems<dt-cite key="romeraparedes2024funsearch"></dt-cite>. The key difference here is that in place of MAP-Elites<dt-cite key="mouret2015illuminating"></dt-cite> or a generic genetic algorithm, we deploy an algorithm modeled after the website: its selection mechanisms, fitness function, and archive structure are all downstream of the design of that former user interface.
+</p>
+
+<figure class="l-page trio-live" id="trio"
+        data-run="th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5"
+        data-arc="mem_10" data-seed="5">
+  <figcaption><b>Timelapse: the growth of an archive.</b> As agents branch from previous creations, we track the central (most-branched) nodes to get a sense of the aesthetic and semantic trends of the archive over time. Here, we see surges in popularity of legs, ducks, hawks, bulls, and finally an especially popular "anatomical study"&mdash;an impressionist, human-like form. <span class="trio-archive-note">(Double click to open in the <a id="trio-archive-link" href="archive.html?arc=mem_10&amp;seed=5&amp;run=th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5&amp;meta=growth&amp;back=trio">archive viewer</a>.)</span></figcaption>
+</figure>
+
+<p>
+Such an experiment in open-endedness cannot have a pre-defined objective.
+<!-- There is no good definition of open-endedness. As designers of systems aspiring to be such, the best we can do is to use our eyes.  -->
+<!-- We used our eyes a lot  -->
+But while developing the system, examining its outputs, and reconstructing the phylogeny of the human archive, we concluded that qualitatively, the human archive has a certain <i>je ne sais quoi</i>. There is a kind of discernment among the forms there, a refinement lacking from some of the AI galleries, as if the AI agents never got over the initial spark of resemblance to find something better yet.
+</p>
+
+<p>
+Indeed the agents' work projects a certain <i>je sais exactly what</i>. They often get sucked into their own attractors. Where the humans seem to capitalize on luck and imbue it with attention to create something refined, the AI often seems to experience it more passively, if perceptively. 
+<!-- Maybe large language models are high-intelligence, low-agency, and a little rigid&mdash;not necessarily the most natural vehicle for the kind of dumb, flexible intuition you need to be productive in Picbreeder.  -->
+For what it's worth, though, the attractors that show up are different enough between seeds and hyperparameters to make repeatedly running the system a relatively entertaining endeavor.
+<!-- &mdash;at least from our biased remove. -->
+</p>
+
+<!-- <figure class="l-page trio-live" id="trio-soda"
+        data-run="th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s8">
+  <figcaption><b>Phylogeny, most-branched leaderboard, and publication reel of the long-context run (CL&nbsp;=&nbsp;10, seed&nbsp;8).</b> The same run advancing in step: left, the branching tree grows and its most-branched hubs swell into view; centre, a running leaderboard of the most-branched images; right, the archive fills publication by publication. As context length grows, the VLM's preferences collapse onto a top-down soda-can lid&mdash;it dominates the leaderboard (every leader is a can top) and spreads through the archive. <span style="opacity:.7;">Drag the bar to scrub all three together.</span></figcaption>
+</figure>
+-->
+<link rel="stylesheet" href="assets/page/trio-live.css">
+<script src="assets/page/trio-live.js"></script>
+
+<p>
+<!-- You can have a look at all the images generated by the system (and compare it against the human baseline) in the viewer below. -->
+ Have a look at the galleries by clicking the thumbnails below:
+</p>
+
+<figure class="l-page" id="archives">
+  <div class="intro-arc-thumbs" id="intro-arc-thumbs">
+    <figure data-src="human" tabindex="0" role="button" aria-label="Open the human Picbreeder archive">
+      <span class="thumb">
+        <img src="assets/grid_human_representative.png" alt="A representative grid of the human-bred Picbreeder archive"/>
+        <canvas class="flip" aria-hidden="true"></canvas>
+      </span>
+      <figcaption><b>Human archive</b>
+        <!-- 9,375 images -->
+      </figcaption>
+    </figure>
+    <figure data-src="ai" tabindex="0" role="button" aria-label="Open the VLM-driven Picbreeder archives">
+      <span class="thumb">
+        <img src="assets/grid_ai_representative.png" alt="A coverage-maximizing sample of one VLM-driven Picbreeder archive"/>
+        <canvas class="flip" aria-hidden="true"></canvas>
+      </span>
+      <figcaption><b>AI archives</b>
+        <!-- 13 runs &middot; noise, memory &amp; agents -->
+      </figcaption>
+    </figure>
+  </div>
+  <!-- <figcaption style="text-align:center;">Click either to open the full archive. Switch between the human and AI archives&mdash;and across AI runs&mdash;from the viewer's top bar; sort by recency, similarity, or phylogeny.</figcaption> -->
+</figure>
+
+<!-- intro thumbnails hover-mutate --><script src="assets/page/intro-thumbs-mutate.js"></script>
+
+<p>
+With some idea of the shape of this qualitative difference in mind, we architect some metrics to express it numerically.
+<!-- (They do not try to measure the quality of open-endedness itself but rather some byproducts of it that we expect to arise in this domain.) -->
+<!-- </p> -->
+<!-- <p> -->
+In sum, we try to measure how visually different images in the archive look, how much they look similar to a predefined set of objects, and—beyond this predefined set—the diversity among the things they depict (i.e. in terms of the captions a model would generate for them).
+</p>
+
+
+<figure class="l-body">
+  <!-- Flowchart and aggregate triptych share ONE width at the body text width, and stack
+       as the two slides of a swapper: the arrows below the frame flip between the metric
+       definitions and their illustration on the aggregate data, and the caption follows.
+       Only the active slide is display:block. The coverage hover-bloom and the recall
+       easter egg both size themselves lazily on first interaction, so neither ever
+       measures a hidden panel. -->
+  <div class="metric-joint" style="width:100%; margin:0 auto;">
+  <style>
+  @font-face {
+    font-family: "CMUBold";
+    src: url("assets/fonts/cmb10.ttf") format("truetype");
+    font-weight: normal; font-style: normal; font-display: swap;
+  }
+  .metric-grid-head { font-family: "CMUBold", "Latin Modern Roman", Georgia, serif;
+    font-size: 1.12em; margin-bottom: .4em; }
+  .metric-joint figure > figcaption.metric-subcap { font-size:12.5px; margin-top:.45em; }
+  /* No CSS transitions here: the track's x, the frame's height, and the scroll
+     compensation that holds the figure's vertical centre still are stepped together in
+     one rAF tween (see the script below), so the three can never drift out of step. */
+  .metric-swap { position:relative; overflow:hidden; overflow-anchor:none; }
+  .metric-track { display:flex; align-items:flex-start; touch-action:pan-y;
+    cursor:grab; will-change:transform; }
+  .metric-track.dragging { cursor:grabbing; }
+  .metric-slide { flex:0 0 100%; width:100%; margin:0; }
+  .metric-slide img { -webkit-user-drag:none; user-select:none; }
+  .metric-nav { display:flex; align-items:center; justify-content:center; gap:.8em;
+    margin:.85em auto 0; }
+  .metric-arrow[disabled] { opacity:.3; cursor:default; }
+  .metric-arrow[disabled]:hover { background:#fff; border-color:rgba(0,0,0,.18); color:#555; }
+  .metric-arrow { -webkit-appearance:none; appearance:none; cursor:pointer; padding:0;
+    width:1.85em; height:1.85em; border-radius:50%; border:1px solid rgba(0,0,0,.18);
+    background:#fff; color:#555; font:inherit; font-size:14px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    transition:background .12s ease, border-color .12s ease, color .12s ease; }
+  .metric-arrow:hover { background:#f3f3f3; border-color:rgba(0,0,0,.4); color:#000; }
+  .metric-arrow:focus-visible { outline:2px solid #7A52C0; outline-offset:2px; }
+  </style>
+
+  <div class="metric-swap">
+  <div class="metric-track">
+  <figure class="metric-slide" data-slide="0" style="margin:0;">
+  <img src="assets/metric_spaces_stack.svg?v=15" style="display:block; width:100%; height:auto;" alt="The three diversity metrics, each measured in its own embedding space. The archive passes through SigLIP2 image embedding once; that single image embedding is reused by both the Visual Coverage plane and the joint Semantic Recall plane. The archive is also captioned by a VLM and text-embedded for Semantic Coverage, and a set of nouns is text-embedded into the same SigLIP2 space for Semantic Recall. Visual and Semantic Coverage are the k-covering radii of the archives embedded in their respective spaces; Semantic Recall is the mean nearest-noun distance."/>
+  </figure>
+  <figure class="metric-slide" data-slide="1">
+  <!-- Aggregate triptych. The .metric-joint wrapper above sets the shared (text) width;
+       the panels fill it. -->
+  <div style="display:flex; gap:1.4%; align-items:flex-start; justify-content:center;">
+    <div style="flex:1 1 0; min-width:0; text-align:center;">
+      <div class="metric-grid-head" style="color:#C01515;">Visual Coverage</div>
+      <!-- Hover-bloom: mousing over the cloud lazy-loads a thumbnail atlas and
+           swells the nearest sampled individuals into view (coverage-cloud.js +
+           assets/coverage_clouds/visual/). -->
+      <div class="cov-cloud" data-base="assets/coverage_clouds/visual/">
+      <img src="assets/grid_visual.png?v=8" style="display:block; width:100%; height:auto;" alt="A 2D UMAP projection of a uniform sample of images pooled from every experiment—all VLM sweep runs and the full human Picbreeder archive—in SigLIP2 image space, softly partitioned into nine regions, with a representative image called out from each region and labeled by the experiment that produced it."/>
+      </div>
+    </div>
+    <div style="flex:1 1 0; min-width:0; text-align:center;">
+      <div class="metric-grid-head" style="color:#7A52C0;">Semantic Recall</div>
+      <!-- Easter egg: clicking this panel turns the static 9-cell grid into a draggable
+           scroll through ALL 1,823 THINGS nouns paired with their single closest archive
+           image (assets/page/recall-egg.js + assets/recall_things/). -->
+      <div id="recall-egg" data-base="assets/recall_things/">
+        <img class="recall-egg-grid" src="assets/grid_recall.png?v=7" style="display:block; width:100%; height:auto;" alt="A 3x3 grid of archive images, each the single closest match in the joint SigLIP2 space to a THINGS noun, taken from whichever archive across every VLM sweep run and the human Picbreeder archive produced it: the nine best matches over the whole vocabulary—eyedropper, tuning fork, pickax, keyhole, trombone, safety pin, tooth, yoke, chalice. Each cell is captioned with the noun and the winning run's condition."/>
+      </div>
+    </div>
+    <div style="flex:1 1 0; min-width:0; text-align:center;">
+      <div class="metric-grid-head" style="color:#B8860B;">Semantic Coverage</div>
+      <div class="cov-cloud" data-base="assets/coverage_clouds/semantic/">
+      <img src="assets/grid_semantic.png?v=8" style="display:block; width:100%; height:auto;" alt="A 2D UMAP projection of a uniform sample of images pooled from every experiment—all VLM sweep runs and the full human Picbreeder archive—in VLM-caption text space, softly partitioned into nine regions, with a representative image called out from each region together with the caption a vision-language model generated for it and the experiment that produced it."/>
+      </div>
+    </div>
+  </div>
+  </figure>
+  </div>
+  </div>
+
+  <nav class="metric-nav">
+    <button type="button" class="metric-arrow" data-dir="-1" aria-label="Previous figure">&lsaquo;</button>
+    <button type="button" class="metric-arrow" data-dir="1" aria-label="Next figure">&rsaquo;</button>
+  </nav>
+
+  <!-- One caption for both slides. -->
+  <figcaption style="text-align:left; margin:0.9em auto 0;"><b>Evaluation metrics.</b>
+    Visual and Semantic Coverage embed images and (VLM-generated) captions to a shared embedding space and measure each archive's propensity to cover that space in terms of k-covering radii.
+    Semantic Recall pre-defines a set of nouns corresponding to images we might hope to recover, maps images and labels to a joint text and image embedding space, and measures the extent to which generated images approximate the set of labels, via max per-label cosine similarity.
+    In our experiments, we use these metrics to evaluate the archives produced by individual runs of the system.
+    Use the arrows above to see them visualized on the aggregate over all of these experiments, for the sake of illustration.
+  </figcaption>
+  </div>
+
+  <script>
+  (function () {
+    var joint  = document.currentScript.closest('figure').querySelector('.metric-joint');
+    var swap   = joint.querySelector('.metric-swap');
+    var track  = joint.querySelector('.metric-track');
+    var slides = joint.querySelectorAll('.metric-slide');
+    var arrows = joint.querySelectorAll('.metric-arrow');
+    var N = slides.length, cur = 0;
+
+    // The slides differ in height, so the frame's height changes as you swap. Growing it
+    // downward alone would shove the text below while the top stayed put; instead the
+    // figure's vertical CENTRE is held fixed. The frame still grows downward in document
+    // flow, so we scroll the page by HALF the height delta to compensate: on screen the
+    // text above rises and the text below falls by the same amount, and the figure blooms
+    // symmetrically about its middle.
+    function h(i) { return slides[i].offsetHeight; }
+    function width() { return swap.clientWidth; }
+    function setX(px) { track.style.transform = 'translate3d(' + px + 'px,0,0)'; }
+
+    // scrollBy takes whole pixels in practice; carry the fraction so a long tween of
+    // small deltas doesn't accumulate rounding error and drift the centre.
+    var curH = 0, carry = 0;
+    function setHeight(px) {
+      if (!curH) { curH = px; swap.style.height = px + 'px'; return; }
+      var half = (px - curH) / 2 + carry;
+      var whole = half > 0 ? Math.floor(half) : Math.ceil(half);
+      carry = half - whole;
+      curH = px;
+      swap.style.height = px + 'px';
+      if (whole) window.scrollBy(0, whole);
+    }
+    // Height changes that aren't a swap (image load, resize) must NOT move the page.
+    function setHeightQuietly(px) { curH = px; carry = 0; swap.style.height = px + 'px'; }
+
+    // One tween drives x and height together, so the two axes and the scroll
+    // compensation are always the same fraction of the way through the swap.
+    var raf = 0;
+    function cancelTween() { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
+    function tweenTo(i) {
+      cancelTween();
+      var W = width(), x0 = curX(), h0 = curH || h(cur);
+      var x1 = -i * W, h1 = h(i), t0 = 0, dur = 420;
+      if (reduce) { cur = i; setX(x1); setHeight(h1); return; }
+      function step(ts) {
+        if (!t0) { t0 = ts; raf = requestAnimationFrame(step); return; }
+        var k = Math.min(1, (ts - t0) / dur);
+        var e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;   // easeInOutCubic
+        setX(x0 + (x1 - x0) * e);
+        setHeight(h0 + (h1 - h0) * e);
+        if (k < 1) { raf = requestAnimationFrame(step); }
+        else { raf = 0; setX(x1); setHeight(h1); }
+      }
+      raf = requestAnimationFrame(step);
+    }
+    function curX() {
+      var m = /translate3d\((-?[\d.]+)px/.exec(track.style.transform);
+      return m ? parseFloat(m[1]) : -cur * width();
+    }
+
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function show(i) {
+      i = Math.max(0, Math.min(N - 1, i));
+      for (var a = 0; a < arrows.length; a++) {
+        var d = +arrows[a].getAttribute('data-dir');
+        arrows[a].disabled = (i + d < 0 || i + d > N - 1);
+      }
+      tweenTo(i);
+      cur = i;
+    }
+
+    // Images (the SVG, the three PNGs) settle their heights after load; keep the frame
+    // honest as they do, and across resizes — quietly, without scrolling the reader.
+    function resync() {
+      if (down || raf) return;
+      setX(-cur * width());
+      setHeightQuietly(h(cur));
+    }
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(resync);
+      for (var s = 0; s < N; s++) ro.observe(slides[s]);
+    }
+    window.addEventListener('resize', resync, { passive: true });
+
+    // ---------------------------------------------------------------- drag, like the reels
+    // Same shape as the hero banner rows (assets/page/hero-grid.js): follow the pointer
+    // past a small threshold, smooth the release velocity, and let a quick flick carry the
+    // swap even when the sweep was short. Edges rubber-band instead of tearing free.
+    //
+    // The Recall panel scrolls its own reel vertically (recall-egg.js) on the same surface,
+    // so the gesture is split by AXIS rather than by region: whichever of the two the
+    // pointer commits to first takes it, and marks the DOM (.metric-track.dragging here,
+    // [data-vdrag] there) so the other stands down for the rest of the gesture. Dragging
+    // the figure sideways from anywhere — including across the leaderboard — works.
+    var recall = joint.querySelector('#recall-egg');
+    function reelHasGesture() { return !!(recall && recall.hasAttribute('data-vdrag')); }
+
+    var down = false, dragging = false, startX = 0, startY = 0, lastX = 0, lastT = 0, vel = 0;
+
+    track.addEventListener('pointerdown', function (e) {
+      if (e.button) return;
+      cancelTween();
+      down = true; dragging = false;
+      startX = lastX = e.clientX; startY = e.clientY; lastT = e.timeStamp; vel = 0;
+    });
+
+    track.addEventListener('pointermove', function (e) {
+      if (!down) return;
+      var dx = e.clientX - startX, dy = e.clientY - startY;
+      if (!dragging) {
+        if (reelHasGesture()) { down = false; return; }     // the reel claimed this drag
+        if (Math.abs(dx) < 5) return;                       // under threshold: leave hover/click intact
+        if (Math.abs(dx) < Math.abs(dy)) { down = false; return; }  // vertical: page scroll, or the reel's
+        dragging = true;
+        track.classList.add('dragging');
+        try { track.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      e.preventDefault();
+      var dt = e.timeStamp - lastT;
+      if (dt > 0) vel = 0.7 * ((e.clientX - lastX) / dt) + 0.3 * vel;   // smoothed px/ms for the flick
+      lastX = e.clientX; lastT = e.timeStamp;
+
+      var W = width(), off = dx;
+      if ((cur === 0 && off > 0) || (cur === N - 1 && off < 0)) off *= 0.35;   // rubber band at the ends
+      setX(-cur * W + off);
+
+      // Vertical follows horizontal: lerp toward whichever neighbour we're heading for,
+      // centre held fixed the whole way, so the page breathes with the drag.
+      var to = cur + (off < 0 ? 1 : -1), t = Math.min(1, Math.abs(off) / W);
+      setHeight(to >= 0 && to < N ? h(cur) + (h(to) - h(cur)) * t : h(cur));
+    });
+
+    function end() {
+      if (!down) return;
+      down = false;
+      if (!dragging) return;
+      dragging = false;
+      track.classList.remove('dragging');
+      var dx = lastX - startX;
+      // Commit on a decisive sweep (a third of the frame) or on a flick released with speed.
+      var far = Math.abs(dx) > width() / 3, flick = Math.abs(vel) > 0.35;
+      show(cur + ((far || flick) && dx !== 0 ? (dx < 0 ? 1 : -1) : 0));
+    }
+    track.addEventListener('pointerup', end);
+    track.addEventListener('pointercancel', end);
+    track.addEventListener('lostpointercapture', end);
+
+    for (var a = 0; a < arrows.length; a++) {
+      arrows[a].addEventListener('click', function (e) {
+        show(cur + (+e.currentTarget.getAttribute('data-dir')));
+      });
+    }
+
+    arrows[0].disabled = true;                 // slide 0: nothing to go back to
+    setX(0);
+    setHeightQuietly(h(0));
+  })();
+  </script>
+</figure>
+
+<p>
+We also develop a choice set of knobs for the system.
+<!-- , and study their quantitative and qualitative effects, inspired by factors we imagine to affect the human capacity for creative discovery. -->
+We're inspired by the idea that serendipity requires chance, a kind of local narrative flow, and a broader personal context; and design interventions intended to serve as simplified computational models of these effects.
+In particular, we inject random noise into the agents' decision making process, we play with their memories&mdash;erasing everything but the present moment or overloading them with a full view of everything they've ever seen&mdash;and we seed them with simple personality traits intended to indirectly influence their interaction with the system.
+<!-- We inject noise into the selection process, we play with the amount of memory provided the agent (by giving the agents context of prior publications and in-session offspring), and we try to generate appropriately subtle personalities to result in meaningfully distinct (but not reductively single-objective) behavior profiles for the different agents. -->
+<!-- We posit that serendipity requires randomness, narrative, and context, and build models of these effects by injecting noise into the selection process, playing with the agents' memory, and seeding them with personality traits intended to influence their behavior and decision-making. -->
+<!-- (by giving the agents context of prior publications and in-session offspring), and we try to generate appropriately subtle personality prompts to result in meaningfully distinct (but not reductively single-objective) behavior profiles for the different agents. -->
+</p>
+
+<figure class="l-page">
+  <img src="assets/intervention_triptych.svg?v=12" style="display:block; margin:0 auto; width:100%; height:auto;" alt="Three variations on the inner evolution loop from the system figure, one per knob. In each, a selection stage feeds mutation/crossover, which produces a grid of offspring whose selected cell is tinted blue; the loop runs twenty times back to the selection stage. Noise: the loop returns to a gate that draws a uniform random variate u in zero to one; if u is at most epsilon it routes to a random pick, otherwise to the VLM's pick, both feeding mutation. Memory: faded copies of the candidate grid, each a past turn with a different pick, are stacked behind the current grid along a depth diagonal braced and labeled CL. Agents: a single trait is sampled once from a pool of NA personality traits (the pool braced and labeled NA) and prepended to the VLM system prompt."/>
+  <figcaption><b>Agent interventions</b> applied during interactive evolution. <b>Noise:</b> at each selection step, we draw <i>u</i>&nbsp;&sim;&nbsp;&#119828;(0,1); when <i>u</i>&nbsp;&le;&nbsp;<b>&epsilon;</b>, a random candidate image is selected. <b>Memory:</b> the last <b>CL</b> turns&mdash;past generations, breeding selections, and the original archive sample&mdash;sit stacked behind the current grid in the VLM's chat history. <b>Agents:</b> a single trait is sampled once, at session start, from a pool of <b>NA</b> personality traits and prepended to the breeder's system prompt.</figcaption>
+</figure>
+
+<p>
+We find that the historical human archive tends to dominate VLM runs in terms of our evaluation metrics.
+We additionally measure the tree balance of generated phylogenies to gain a sense of the extent to which agents and users fixate on a choice few prolific parents when branching.
+Without interventions, VLMs tend to be more discriminatory/myopic/obsessive than humans by this measure, while the random baseline&mdash;by definition&mdash;is the most balanced.
+</p>
+
+<p>
+When augmenting the VLM loop with agent diversity, the system&mdash;on separate occasions&mdash;catches up in terms of semantic recall and semantic coverage.
+Adding agents also tends to steadily increase the degree of balance in the tree.
+</p>
+
+<p>
+When we remove agents' memories, and they only have context of the current generation, they're prone to reproducing the same image ad nauseam.
+Even one previous generation of history is enough to break this pathology, making the agent less likely to knowingly repeat a selection.
+Too much memory seems to overload the agent's context and degrade its capabilities, with archives at longer memory-lengths often filled with overly abstract or repetitive, simple forms.
+</p>
+
+<p>
+Injecting noise in agents' breeding selections can also&mdash;if a little crudely&mdash;push the agents out of problematic basins, at the risk of filling the archive with a greater proportion of intermittent stepping-stone slop (though interestingly, recognizable forms eventually do emerge even when agents are restricted solely to branching decisions; and indeed we can see this dial as a second-order mutation rate).
+</p>
+
+<!-- References preserved from the removed draft prose; the descriptions are placeholders
+     for human-written copy, not finished sentences. -->
+<!-- <ul class="ref-list">
+  <li>NEAT, which evolves the weights and topology of neural networks.<dt-cite key="stanley2002evolving"></dt-cite></li>
+  <li>Searching for novelty and diversity rather than a fixed objective (novelty search and quality&ndash;diversity).<dt-cite key="woolley2011deleterious,mouret2015illuminating,gaier2019quality"></dt-cite></li>
+  <li><i>Why Greatness Cannot Be Planned</i>.<dt-cite key="stanley2015greatness"></dt-cite></li>
+  <li>Open-endedness and machine creativity.<dt-cite key="soros2024creativity"></dt-cite></li>
+  <li>Gemini&nbsp;2.5, the vision&ndash;language model used here as the selector.<dt-cite key="comanici2025gemini"></dt-cite></li>
+  <li>Innovation engines: a trained network's own responses driving open-ended search.<dt-cite key="nguyen2016understanding"></dt-cite></li>
+  <li>SigLIP&nbsp;2 image/text embeddings, used to measure archive coverage.<dt-cite key="tschannen2025siglip"></dt-cite></li>
+  <li>THINGS, a dataset of human object-similarity judgments.<dt-cite key="hebart2023things"></dt-cite></li>
+  <li>Deep networks are easily fooled by high-confidence, unrecognizable images.<dt-cite key="nguyen2015deep"></dt-cite></li>
+  <li>Evolution through large models.<dt-cite key="lehman2023evolution"></dt-cite></li>
+  <li>OMNI: open-endedness via models of human notions of interestingness.<dt-cite key="zhang2024omni"></dt-cite></li>
+  <li>Reinforcement learning.<dt-cite key="sutton1998reinforcement"></dt-cite></li>
+</ul> -->
+
+
+<script src="breed/cppn.js"></script>
+<!-- GPU CPPN renderer (PB.CppnGL); the editor uses it for live render/scrub, CPU fallback if absent. -->
+<script src="breed/cppn-gl.js"></script>
+<!-- Live GPU CPPN morph engine for the hero banner (PB.HeroMorph); ?gpu=1 renders
+     lineages from genome JSON instead of the HF sprite sheets. Needs cppn.js globals. -->
+<script src="assets/page/hero-morph.js"></script>
+<!-- The DNA editor (figure B) is the SHARED widget breed/dna-editor.js (PB.DnaEditor) — the
+     same one that powers breed/dna.html and breed/play.html — not a blog-local copy. It needs
+     a PB namespace to attach to (the breeder site provides one via pbsite.js, which we don't
+     load here) and the cppn.js globals above. -->
+<script>window.PB = window.PB || {};</script>
+<!-- CPPN weight/value colormap (single source of truth; flip its ACTIVE toggle to swap) -->
+<script src="breed/weight-cmap.js"></script>
+<script src="breed/dna-editor.js"></script>
+<!-- CPPN explainer figure --><script src="assets/page/cppn-explainer.js"></script>
+
+<!-- Embedded mini-breeder (after the NEAT paragraph): a stripped-down breed/play.html —
+     selection + evolve + undo + reset, plus New parent (random human-archive publication)
+     and Publish (collects the selected tile into a local, this-session row — no sharing).
+     Reuses the cppn.js globals loaded above (newPopulation / reproduce / renderGenome /
+     genome(From|To)JSON / Population). -->
+<!-- embedded mini-breeder --><script src="assets/page/mini-breeder.js"></script>
+
+
+<!-- Semantic Recall panel easter egg: drag-scroll through all THINGS noun->image pairs -->
+<link rel="stylesheet" href="assets/page/recall-egg.css">
+<script src="assets/page/recall-egg.js" defer></script>
+
+<!-- Coverage cloud hover-bloom: reveal sampled individuals near the cursor -->
+<link rel="stylesheet" href="assets/page/coverage-cloud.css">
+<script src="assets/page/coverage-cloud.js" defer></script>
+
+<!-- human/AI archive thumbnails (styles) --><link rel="stylesheet" href="assets/page/archive-thumbs.css">
+
+<!-- single-pane inline gallery coordinator (PBVLMArcViewer/Manager) is loaded in <head>, before <body>, so it's always defined before the figures below use it. -->
+
+
+
+
+
+<figure class="l-page">
+<table class="results" id="results">
+  <thead>
+    <tr><th class="lab">Sweep</th><th class="lab">Setting</th><th>Semantic Recall</th><th>Visual Coverage</th><th>Semantic Coverage</th><th>Tree Balance (J&sup1;)</th></tr>
+  </thead>
+  <tbody>
+    <tr data-arc="default" data-label="Noise &epsilon; = 0.0 (default run)"><td class="lab" rowspan="6">Noise (&epsilon;)</td><td class="lab default">0.0</td><td class="default">0.087 <span class="pm">&plusmn;0.001</span></td><td class="default">0.614 <span class="pm">&plusmn;0.002</span></td><td class="default">0.696 <span class="pm">&plusmn;0.004</span></td><td class="default">0.235 <span class="pm">&plusmn;0.026</span></td></tr>
+    <tr data-arc="noise_0.05" data-label="Noise &epsilon; = 0.05"><td class="lab">0.05</td><td>0.086 <span class="pm">&plusmn;0.001</span></td><td>0.619 <span class="pm">&plusmn;0.011</span></td><td>0.702 <span class="pm">&plusmn;0.006</span></td><td>0.246 <span class="pm">&plusmn;0.023</span></td></tr>
+    <ytr data-arc="noise_0.25" data-label="Noise &epsilon; = 0.25"><td class="lab">0.25</td><td class="best">0.088 <span class="pm">&plusmn;0.001</span></td><td>0.638 <span class="pm">&plusmn;0.009</span></td><td class="best">0.717 <span class="pm">&plusmn;0.004</span></td><td>0.249 <span class="pm">&plusmn;0.022</span></td></tr>
+    <tr data-arc="noise_0.5" data-label="Noise &epsilon; = 0.5"><td class="lab">0.5</td><td>0.085 <span class="pm">&plusmn;0.001</span></td><td>0.633 <span class="pm">&plusmn;0.007</span></td><td>0.709 <span class="pm">&plusmn;0.005</span></td><td>0.260 <span class="pm">&plusmn;0.013</span></td></tr>
+    <tr data-arc="noise_0.75" data-label="Noise &epsilon; = 0.75"><td class="lab">0.75</td><td>0.084 <span class="pm">&plusmn;0.001</span></td><td class="best">0.639 <span class="pm">&plusmn;0.004</span></td><td>0.706 <span class="pm">&plusmn;0.003</span></td><td class="best">0.303 <span class="pm">&plusmn;0.010</span></td></tr>
+    <tr data-arc="noise_1.0" data-label="Noise &epsilon; = 1.0"><td class="lab">1.0</td><td>0.082 <span class="pm">&plusmn;0.001</span></td><td>0.610 <span class="pm">&plusmn;0.013</span></td><td>0.700 <span class="pm">&plusmn;0.003</span></td><td>0.275 <span class="pm">&plusmn;0.030</span></td></tr>
+  </tbody>
+  <tbody>
+    <tr data-arc="mem_0" data-label="Memory CL = 0 (no memory)"><td class="lab" rowspan="5">Memory (CL)</td><td class="lab">0</td><td>0.082 <span class="pm">&plusmn;0.001</span></td><td>0.527 <span class="pm">&plusmn;0.009</span></td><td>0.632 <span class="pm">&plusmn;0.006</span></td><td>0.305 <span class="pm">&plusmn;0.027</span></td></tr>
+    <tr data-arc="default" data-label="Memory CL = 1 (default run)"><td class="lab default">1</td><td class="default best">0.087 <span class="pm">&plusmn;0.001</span></td><td class="default best">0.614 <span class="pm">&plusmn;0.002</span></td><td class="default">0.696 <span class="pm">&plusmn;0.004</span></td><td class="default">0.235 <span class="pm">&plusmn;0.026</span></td></tr>
+    <tr data-arc="mem_2" data-label="Memory CL = 2"><td class="lab">2</td><td>0.083 <span class="pm">&plusmn;0.001</span></td><td>0.583 <span class="pm">&plusmn;0.004</span></td><td>0.675 <span class="pm">&plusmn;0.006</span></td><td>0.339 <span class="pm">&plusmn;0.033</span></td></tr>
+    <tr data-arc="mem_10" data-label="Memory CL = 10"><td class="lab">10</td><td>0.079 <span class="pm">&plusmn;0.003</span></td><td>0.512 <span class="pm">&plusmn;0.021</span></td><td>0.661 <span class="pm">&plusmn;0.010</span></td><td>0.331 <span class="pm">&plusmn;0.040</span></td></tr>
+    <tr data-arc="mem_20" data-label="Memory CL = 20 (full history)"><td class="lab">20 (full)</td><td>0.083 <span class="pm">&plusmn;0.001</span></td><td>0.595 <span class="pm">&plusmn;0.010</span></td><td class="best">0.697 <span class="pm">&plusmn;0.003</span></td><td class="best">0.350 <span class="pm">&plusmn;0.018</span></td></tr>
+  </tbody>
+  <tbody>
+    <tr data-arc="default" data-label="Agents = 0 (default run)"><td class="lab" rowspan="4">Agents (NA)</td><td class="lab default">0</td><td class="default">0.087 <span class="pm">&plusmn;0.001</span></td><td class="default">0.614 <span class="pm">&plusmn;0.002</span></td><td class="default">0.696 <span class="pm">&plusmn;0.004</span></td><td class="default">0.235 <span class="pm">&plusmn;0.026</span></td></tr>
+    <tr data-arc="agents_10" data-label="Agents = 10 personalities"><td class="lab">10</td><td>0.086 <span class="pm">&plusmn;0.002</span></td><td>0.605 <span class="pm">&plusmn;0.012</span></td><td>0.698 <span class="pm">&plusmn;0.011</span></td><td>0.373 <span class="pm">&plusmn;0.030</span></td></tr>
+    <tr data-arc="agents_100" data-label="Agents = 100 personalities"><td class="lab">100</td><td class="win">0.089 <span class="pm">&plusmn;0.001</span></td><td>0.659 <span class="pm">&plusmn;0.006</span></td><td>0.710 <span class="pm">&plusmn;0.009</span></td><td>0.473 <span class="pm">&plusmn;0.022</span></td></tr>
+    <tr data-arc="agents_1000" data-label="Agents = 1000 personalities"><td class="lab">1000</td><td>0.088 <span class="pm">&plusmn;0.001</span></td><td class="best">0.665 <span class="pm">&plusmn;0.004</span></td><td class="win">0.734 <span class="pm">&plusmn;0.013</span></td><td class="best">0.476 <span class="pm">&plusmn;0.013</span></td></tr>
+  </tbody>
+  <tbody>
+    <tr data-arc="random" data-label="Random-selection baseline"><td class="lab" colspan="2">Random</td><td>0.080 <span class="pm">&plusmn;0.001</span></td><td>0.612 <span class="pm">&plusmn;0.005</span></td><td>0.692 <span class="pm">&plusmn;0.002</span></td><td class="win">0.540 <span class="pm">&plusmn;0.003</span></td></tr>
+    <tr data-arc="human" data-poster="assets/grid_human_representative.png" data-label="Human Picbreeder archive"><td class="lab" colspan="2">Human</td><td class="win">0.089</td><td class="win">0.681</td><td>0.730</td><td>0.363</td></tr>
+  </tbody>
+</table>
+<figcaption><b>Quantitative results.</b> The human archive emerges as a strong upper bound relative to our VLM-driven experiments, where we measure the effects of noise, memory and agents on Picbreeder. The random baseline provides a lower bound. Among VLM experiments, agent diversity via the injection of subtle breeder system prompts is particularly effective in closing the VLM-human gap. A minimal amount of memory is crucial in reducing repetitive actions while avoiding context bloat in this token-hungry multimodal regime. A bit of noise in the selection process can also encourage exploration. Uniformly random branching produces maximally balanced trees in expectation. Humans are much less balanced; VLMs similarly so, though they can be made somewhat more or less balanced under varying hyperparameters. Mean &plusmn; std over 6 seeds; 2,000 sessions each. The Human archive consists of a single historical "run" (and thus carries no interval).</figcaption>
+</figure>
+
+<!-- All told, open-ended, VLM agent-driven exploration of the space of CPPN images via the Picbreeder interface  -->
+
+<p>
+  Elsewhere, it’s been argued that with respect to training large models like LLMs, open-ended search might be crucial to learning good representations<dt-cite key="kumar2025questioning"></dt-cite>.
+  For example, imagine that a model trained only to predict the next token in language corpora might not have the same “mental model” of abstract, symbolic arithmetic operations that we might expect (e.g. being able to compute quantities over one  class of objects but not another).
+  Maybe, if we can reproduce the open-endedness of something like Picbreeder, we could also apply it to processes of training large models themselves.
+  Further still, we might hope that the agents at the helm of this model cultural organism might instead form a research culture concerning their own growth, in turn refining their understanding, bootstrapping their models of the world, and perhaps leading to recursive self-improvement.
+</p>
+
+<p>
+ We see some evidence of that here, perhaps, in a skull form produced by AI Picbreeder&mdash;without our asking, and indeed the AI variant is plainly lesser than the human one. Sweeping the most consequential CPPN weights of this image does not explode it as in a CPPN optimized to produce such a skull via gradient descent.
+ It remains to be seen, however, how much of this representational robustness is owing to CPPNs and NEAT, and how much to the VLMs' judgment and the Picbreeder interaction loop at large.
+ But these experiments would seem to suggest that at least some of one potentially important emergent byproduct of open-endedness can recur in a synthetic system without its being optimized for it directly. 
+</p>
+
+<!-- skull weight-sweep grid (styles) --><link rel="stylesheet" href="assets/page/skull-grid.css">
+
+<figure class="l-page">
+  <div class="figrow figrow-weights">
+    <span>
+      <img src="assets/fer_skull_weights_sgd.png" alt="Weight-sweep visualization of an SGD-trained skull CPPN from Kumar et al. (2025)."/>
+      <span class="cap"><b>SGD-trained CPPN.</b> Perturbing individual weights causes skull-crushing distortions&mdash;the "fractured, entangled" regime. <i>From <dt-cite key="kumar2025questioning"></dt-cite>, Fig. 6b.</i></span>
+    </span>
+    <span>
+      <img src="assets/skull_weights.png" alt="Weight-sweep visualization of a VLM-evolved skull CPPN."/>
+      <span class="cap"><b>VLM-evolved CPPN (ours).</b> Perturbations stay skull-like and change relatively smoothly&mdash;less fractured than SGD, but without crisp semantic factors.</span>
+    </span>
+    <span>
+      <img src="assets/fer_skull_weights_human.png" alt="Weight-sweep visualization of a human-evolved Picbreeder skull CPPN from Kumar et al. (2025)."/>
+      <span class="cap"><b>Human-evolved Picbreeder CPPN.</b> Individual weights cleanly factor into semantic controls&mdash;"Mouth Opening", "Eye Winking", etc. <i>From <dt-cite key="kumar2025questioning"></dt-cite>, Fig. 6a.</i></span>
+    </span>
+  </div>
+  <figcaption><b>Why open-ended agent-based evolution might be used to train (AI with) better representations. </b>
+    Both VLMs and humans found something that looked like a skull. (The human skull is better.) When one tries to optimize a CPPN to depict that skull (left), it has a fractured, noisy representation.
+    The human skull looks to have more meaningful representations. 
+    VLM agents seeking open-endedly seems to result in representations somewhere in between.
+    <!-- Each row varies one weight from &delta;w&nbsp;=&nbsp;&minus;1 to &delta;w&nbsp;=&nbsp;+1 while holding the rest fixed. SGD optimization yields entangled representations whose perturbations are destructive; human-driven Picbreeder yields cleanly factorized ones; VLM-driven Picbreeder sits in between&mdash;smooth and skull-preserving, but not yet semantically labelable.</figcaption> -->
+</figure>
+
+<p>
+  But this doesn't mean that synthetic open-endedness is not necessarily solved.
+  One could contend, for example, that VLM-driven Picbreeder is not engaged in a process of open-ended discovery so much as of rediscovery&mdash;of circuitously and arduously recovering its vanilla visual priors through a molasses of neural image representations.
+  Though here we'd counter that a large part of human creativity in this space could be cast in the same light, that this is by design a space where creativity operates under and is characterized by strong constraints.
+</p>
+
+<p>
+  No, maybe in spite of our efforts to engineer a pipeline for collaborative design, the agents driving it are plagued by an irreconcilable rigidity.
+  We can see traces, perhaps, of their striver pathology in the transcripts.
+  See below, where two vehicles are arrived at via more or less winding roads; the VLMs tend to remain in the semantic space of cars in general (moving from the driver's seat, to the dashboard, to the hood, to a full profile) while humans traverse a more eclectic and unpredictable sequence, exploring eyes and (alien) faces before suddenly landing on the automobile.
+  In this light, one could argue the VLMs show a lack of imagination, where even the apparently serendipitous leaps in semantic space are in fact predictable according to an implicit theme or predetermined objective.
+</p>
+
+<figure class="l-body">
+  <figure class="lineage-sub">
+    <div class="lineage" id="lineage-human">
+      <figure><img src="assets/lineages/human/00.png" alt="Human lineage step 1"/></figure>
+      <figure><img src="assets/lineages/human/01.png" alt="Human lineage step 2"/></figure>
+      <figure><img src="assets/lineages/human/02.png" alt="Human lineage step 3"/></figure>
+      <figure><img src="assets/lineages/human/03.png" alt="Human lineage step 4"/></figure>
+      <figure><img src="assets/lineages/human/04.png" alt="Human lineage step 5"/></figure>
+      <figure><img src="assets/lineages/human/05.png" alt="Human lineage step 6"/></figure>
+    </div>
+    <figcaption><b>Human selections and publications.</b></figcaption>
+  </figure>
+  <figure class="lineage-sub">
+    <div class="lineage" id="lineage-vlm">
+      <figure><img src="assets/lineages/vlm/00.png" alt="VLM lineage step 1: Chrome Bird"/><figcaption><b>Chrome Bird</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/01.png" alt="VLM lineage step 2: Driver's Seat"/><figcaption><b>Driver's Seat</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/02.png" alt="VLM lineage step 3: Dashboard View"/><figcaption><b>Dashboard View</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/03.png" alt="VLM lineage step 4: Vintage Chrome"/><figcaption><b>Vintage Chrome</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/04.png" alt="VLM lineage step 5: Chrome Insignia"/><figcaption><b>Chrome Insignia</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/05.png" alt="VLM lineage step 6: Vintage Hood Ornament"/><figcaption><b>Vintage Hood Ornament</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/06.png" alt="VLM lineage step 7: Chrome Roadster"/><figcaption><b>Chrome Roadster</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/07.png" alt="VLM lineage step 8: Chrome Speedster"/><figcaption><b>Chrome Speedster</b></figcaption></figure>
+      <figure><img src="assets/lineages/vlm/08.png" alt="VLM lineage step 9: Chrome Streamliner"/><figcaption><b>Chrome Streamliner</b></figcaption></figure>
+    </div>
+    <figcaption><b>VLM selections and publications.</b></figcaption>
+  </figure>
+  <figcaption><b>Lineage comparison.</b> Having found images in the human and VLM archives that each resemble roughly the same kind of profile view of a car, we trace the lineage of each. In general, VLM agents appear to take smaller semantic leaps during interactive evolution than human users. While VLM sessions are fixed at 20 generations each, the genetic distance between publications is often shorter due to the VLMs' repeatedly selecting the same parent. Human sessions are sometimes much longer.</figcaption>
+</figure>
+
+<p>
+
+</p>
+
+<!-- generation-scaled lineage timeline --><script src="assets/page/lineage-timeline.js"></script>
+<!-- morph tile that rides along each strip, pausing on each publication --><script src="assets/page/lineage-ride.js"></script>
+
+
+<!-- results-table archive viewer --><script src="assets/page/archive-viewer.js"></script>
+
+<p>
+We make the <a href="https://github.com/smearle/picbreeder-vlm" target="_blank" rel="noopener">code</a> and <a href="https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive" target="_blank" rel="noopener">data</a> available for follow-up questions.
+Though here we’ve distilled from the design of Picbreeder.org a kind of simple, bespoke evolutionary algorithm, there might be some benefit in taking a more unstructured, true-to-life approach.
+<!-- it could be even more directly translated to an agentic harness.  -->
+Our <a href="breed/">homage</a> to the former website acts as a first step in that direction: a number of agents could be allowed to interact with the site's various pages open-endedly, browsing, searching, and jumping between sessions at their own pace.
+<!-- It similarly opens the door to collecting further human data and ratings, which might allow us to better ground evaluation metrics in the future. -->
+<!-- We welcome you to throw yourselves and your agents at it. -->
+</p>
+
+
+</dt-article>
+
+<dt-appendix>
+
+<h3 id="citation">Citation</h3>
+<p>For attribution in academic contexts, please cite this work as</p>
+<pre class="citation short">
+Sam Earle, Kai Arulkumaran, Andrew Dai, Akarsh Kumar, Julian Togelius, Sebastian Risi, "In Search of the Ingredients of Open-Endedness: Replicating Picbreeder with Large Vision-Language Models", GECCO 2026.
+</pre>
+<p>BibTeX citation</p>
+<pre class="citation long">
+@inproceedings{earle2026picbreedervlm,
+  title     = {In Search of the Ingredients of Open-Endedness: Replicating Picbreeder with Large Vision-Language Models},
+  author    = {Earle, Sam and Arulkumaran, Kai and Dai, Andrew and Kumar, Akarsh and Togelius, Julian and Risi, Sebastian},
+  booktitle = {Proceedings of the Genetic and Evolutionary Computation Conference (GECCO '26)},
+  year      = {2026}
+}
+</pre>
+
+<h2>Open Source Code</h2>
+<p>We release our code <a href="https://github.com/smearle/picbreeder-vlm" target="_blank" rel="noopener">here</a>. The full paper is on <a href="https://arxiv.org/abs/2605.23908" target="_blank" rel="noopener">arXiv</a>.</p>
+
+</dt-appendix>
+</body>
+
+<script type="text/bibliography">
+@article{mouret2015illuminating,
+  title={Illuminating search spaces by mapping elites},
+  author={Mouret, Jean-Baptiste and Clune, Jeff},
+  journal={arXiv preprint arXiv:1504.04909}, year={2015},
+  url={https://arxiv.org/pdf/1504.04909.pdf}
+}
+@inproceedings{secretan2008picbreeder,
+  title={Picbreeder: evolving pictures collaboratively online},
+  author={Secretan, Jimmy and Beato, Nicholas and D'Ambrosio, David B and Rodriguez, Adelein and Campbell, Adam and Stanley, Kenneth O},
+  booktitle={Proceedings of the SIGCHI conference on human factors in computing systems},
+  pages={1759--1768},
+  year={2008},
+  url={https://www.campbellssite.com/papers/secretan_chi08.pdf}
+}
+@article{secretan2011picbreeder,
+  title={Picbreeder: A case study in collaborative evolutionary exploration of design space},
+  author={Secretan, Jimmy and Beato, Nicholas and D'Ambrosio, David B and Rodriguez, Adelein and Campbell, Adam and Folsom-Kovarik, Jeremiah T and Stanley, Kenneth O},
+  journal={Evolutionary computation}, volume={19}, number={3}, pages={373--403}, year={2011}, publisher={MIT Press},
+  url={https://stars.library.ucf.edu/cgi/viewcontent.cgi?article=2880&context=facultybib2010}
+}
+@article{stanley2007compositional,
+  title={Compositional pattern producing networks: A novel abstraction of development},
+  author={Stanley, Kenneth O},
+  journal={Genetic programming and evolvable machines}, volume={8}, number={2}, pages={131--162}, year={2007}, publisher={Springer},
+  url={https://link.springer.com/content/pdf/10.1007/s10710-007-9028-8.pdf}
+}
+@article{stanley2009hypercube,
+  title={A hypercube-based encoding for evolving large-scale neural networks},
+  author={Stanley, Kenneth O and D'Ambrosio, David B and Gauci, Jason},
+  journal={Artificial Life}, volume={15}, number={2}, pages={185--212}, year={2009}, publisher={MIT Press},
+  url={https://direct.mit.edu/artl/article-abstract/15/2/185/2634/A-Hypercube-Based-Encoding-for-Evolving-Large}
+}
+@inproceedings{wang2019poet,
+  title={Paired open-ended trailblazer (POET): Endlessly generating increasingly complex and diverse learning environments and their solutions},
+  author={Wang, Rui and Lehman, Joel and Clune, Jeff and Stanley, Kenneth O},
+  journal={arXiv preprint arXiv:1901.01753}, year={2019},
+  url={https://arxiv.org/abs/1901.01753}
+}
+@inproceedings{wang2020enhanced,
+  title={Enhanced POET: Open-ended reinforcement learning through unbounded invention of learning challenges and their solutions},
+  author={Wang, Rui and Lehman, Joel and Rawal, Aditya and Zhi, Jiale and Li, Yulun and Clune, Jeff and Stanley, Kenneth O},
+  booktitle={International Conference on Machine Learning}, pages={9940--9951}, year={2020}, organization={PMLR},
+  url={http://proceedings.mlr.press/v119/wang20l/wang20l.pdf}
+}
+@inproceedings{tweraser2018querying,
+  title={Querying across time to interactively evolve animations},
+  author={Tweraser, Isabel and Gillespie, Lauren E and Schrum, Jacob},
+  booktitle={Proceedings of the Genetic and Evolutionary Computation Conference}, pages={1948--1955}, year={2018},
+  url={https://people.southwestern.edu/~schrum2/SCOPE/tweraser.gecco18.pdf}
+}
+@article{stanley2002evolving,
+  title={Evolving neural networks through augmenting topologies},
+  author={Stanley, Kenneth O and Miikkulainen, Risto},
+  journal={Evolutionary computation}, volume={10}, number={2}, pages={99--127}, year={2002}, publisher={MIT Press},
+  url={https://nn.cs.utexas.edu/downloads/papers/stanley.ec02.pdf}
+}
+@article{kumar2025questioning,
+  title={Questioning Representational Optimism in Deep Learning: The Fractured Entangled Representation Hypothesis},
+  author={Kumar, Akarsh and Clune, Jeff and Lehman, Joel and Stanley, Kenneth O},
+  journal={arXiv preprint arXiv:2505.11581}, year={2025},
+  url={https://arxiv.org/pdf/2505.11581.pdf}
+}
+@article{nguyen2016understanding,
+  title={Understanding innovation engines: Automated creativity and improved stochastic optimization via deep learning},
+  author={Nguyen, Anh and Yosinski, Jason and Clune, Jeff},
+  journal={Evolutionary computation}, volume={24}, number={3}, pages={545--572}, year={2016}, publisher={MIT Press},
+  url={https://yosinski.com/media/papers/Nguyen__2016__Understanding_Innovation_Engines_Automated_Creativity.pdf}
+}
+@inproceedings{woolley2011deleterious,
+  title={On the deleterious effects of a priori objectives on evolution and representation},
+  author={Woolley, Brian G and Stanley, Kenneth O},
+  booktitle={Proceedings of the 13th annual conference on Genetic and evolutionary computation}, pages={957--964}, year={2011},
+  url={https://groups.csail.mit.edu/EVO-DesignOpt/gecco2011Proceedings/proceedings/p957.pdf}
+}
+@inproceedings{gaier2019quality,
+  title={Are quality diversity algorithms better at generating stepping stones than objective-based search?},
+  author={Gaier, Adam and Asteroth, Alexander and Mouret, Jean-Baptiste},
+  booktitle={Proceedings of the Genetic and Evolutionary Computation Conference Companion}, pages={115--116}, year={2019}
+}
+@article{hebart2023things,
+  title={THINGS-data, a multimodal collection of large-scale datasets for investigating object representations in human brain and behavior},
+  author={Hebart, Martin N and Contier, Oliver and Teichmann, Lina and Rockter, Adam H and Zheng, Charles Y and Kidder, Alexis and Corriveau, Anna and Vaziri-Pashkam, Maryam and Baker, Chris I},
+  journal={Elife}, volume={12}, pages={e82580}, year={2023}, publisher={eLife Sciences Publications Limited},
+  url={https://elifesciences.org/articles/82580.pdf}
+}
+@article{tschannen2025siglip,
+  title={Siglip 2: Multilingual vision-language encoders with improved semantic understanding, localization, and dense features},
+  author={Tschannen, Michael and Gritsenko, Alexey and Wang, Xiao and Naeem, Muhammad Ferjad and Alabdulmohsin, Ibrahim and Parthasarathy, Nikhil and Evans, Talfan and Beyer, Lucas and Xia, Ye and Mustafa, Basil and others},
+  journal={arXiv preprint arXiv:2502.14786}, year={2025},
+  url={https://arxiv.org/pdf/2502.14786.pdf}
+}
+@article{comanici2025gemini,
+  title={Gemini 2.5: Pushing the frontier with advanced reasoning, multimodality, long context, and next generation agentic capabilities},
+  author={Comanici, Gheorghe and others},
+  journal={arXiv preprint arXiv:2507.06261}, year={2025},
+  url={https://arxiv.org/pdf/2507.06261.pdf}
+}
+@inproceedings{nguyen2015deep,
+  title={Deep neural networks are easily fooled: High confidence predictions for unrecognizable images},
+  author={Nguyen, Anh and Yosinski, Jason and Clune, Jeff},
+  booktitle={Proceedings of the IEEE conference on computer vision and pattern recognition}, pages={427--436}, year={2015},
+  url={https://openaccess.thecvf.com/content_cvpr_2015/papers/Nguyen_Deep_Neural_Networks_2015_CVPR_paper.pdf}
+}
+@book{stanley2015greatness,
+  title={Why Greatness Cannot Be Planned: The Myth of the Objective},
+  author={Stanley, Kenneth O and Lehman, Joel}, year={2015}, publisher={Springer}
+}
+@article{soros2024creativity,
+  title={On Creativity and Open-Endedness},
+  author={Soros, Lisa and Adams, Alyssa and Kalonaris, Stefano and Witkowski, Olaf and Guckelsberger, Christian},
+  journal={arXiv preprint arXiv:2405.18016}, year={2024},
+  url={https://arxiv.org/pdf/2405.18016.pdf}
+}
+@book{sutton1998reinforcement,
+  title={Reinforcement learning: An introduction},
+  author={Sutton, Richard S and Barto, Andrew G}, year={1998}, publisher={MIT press},
+  url={http://incompleteideas.net/book/RLbook2020.pdf}
+}
+@incollection{lehman2023evolution,
+  title={Evolution through large models},
+  author={Lehman, Joel and Gordon, Jonathan and Jain, Shawn and Ndousse, Kamal and Yeh, Cathy and Stanley, Kenneth O},
+  booktitle={Handbook of Evolutionary Machine Learning}, pages={331--366}, year={2023}, publisher={Springer},
+  url={https://arxiv.org/pdf/2206.08896.pdf}
+}
+@inproceedings{todd2024gavel,
+  title={{GAVEL}: Generating Games Via Evolution and Language Models},
+  author={Todd, Graham and Padula, Alexander and Stephenson, Matthew and Piette, {\'E}ric and Soemers, Dennis J N J and Togelius, Julian},
+  booktitle={Advances in Neural Information Processing Systems}, volume={37}, pages={110723--110745}, year={2024},
+  url={https://arxiv.org/pdf/2407.09388.pdf}
+}
+@article{romeraparedes2024funsearch,
+  title={Mathematical discoveries from program search with large language models},
+  author={Romera-Paredes, Bernardino and Barekatain, Mohammadamin and Novikov, Alexander and Balog, Matej and Kumar, M Pawan and Dupont, Emilien and Ruiz, Francisco J R and Ellenberg, Jordan S and Wang, Pengming and Fawzi, Omar and Kohli, Pushmeet and Fawzi, Alhussein},
+  journal={Nature}, volume={625}, number={7995}, pages={468--475}, year={2024}, publisher={Nature Publishing Group},
+  url={https://www.nature.com/articles/s41586-023-06924-6}
+}
+@inproceedings{zhang2024omni,
+  title={OMNI: Open-endedness via Models of human Notions of Interestingness},
+  author={Zhang, Jenny and Lehman, Joel and Stanley, Kenneth and Clune, Jeff},
+  booktitle={The Twelfth International Conference on Learning Representations}, year={2024},
+  url={https://openreview.net/pdf?id=AgM3MzT99c}
+}
+@misc{klingemann2015rasterfairy,
+  title={{R}aster{F}airy: An algorithm for transforming 2D point clouds into rectangular rasters},
+  author={Klingemann, Mario},
+  year={2015},
+  url={https://github.com/Quasimondo/RasterFairy},
+  howpublished={\url{https://github.com/Quasimondo/RasterFairy}}
+}
+</script>
+
+<script language="javascript" type="text/javascript" src="lib/blazy.js"></script>
+<script language="javascript" type="text/javascript" src="lib/jquery-1.12.4.min.js"></script>
+<script language="javascript" type="text/javascript" src="lib/controller.js"></script>
+
+<script>
+// Carry a dev `?archiveBase=` from the homepage into the sub-sites it links to
+// (breed/, agent_life/, …) so a local mirror/proxy stays selected when you click
+// through. The breed sub-site's pbsite.js then keeps propagating it page-to-page,
+// but only if it arrives with the param set — so the homepage has to seed it here.
+// No-op in production where archiveBase is unset. A single capture-phase click
+// listener rewrites internal links the instant they're clicked, covering any that
+// were added dynamically after load too. Mirrors pbsite.js's propagateBase().
+(function(){
+  var ab = new URLSearchParams(location.search).get('archiveBase');
+  if(!ab) return;
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest && e.target.closest('a[href]');
+    if(!a) return;
+    var href = a.getAttribute('href');
+    // Only same-origin relative links (skip absolute URLs, anchors, mailto, etc.).
+    if(!href || /^(?:[a-z]+:|\/\/|#)/i.test(href) || href.indexOf('archiveBase=') >= 0) return;
+    a.setAttribute('href', href + (href.indexOf('?') < 0 ? '?' : '&') + 'archiveBase=' + encodeURIComponent(ab));
+  }, true);
+})();
+</script>
+</body>
+</html>
+

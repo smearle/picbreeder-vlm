@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Family Tree — Picbreeder · VLM</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+<style>
+  /* ===================================================================
+   * Family Tree — a re-creation of picbreeder.org's familytree.php, whose
+   * Java "TreeOfLifeApplet" (tol.jar) drew a pannable / zoomable node-link
+   * tree of published images: click a node to reveal the images other users
+   * branched from it, drag empty space to pan, wheel to zoom. Here the branch
+   * relation comes from each archive entry's source_entry_ids (the published
+   * image an AI agent started its branch from) — a clean single-parent forest.
+   * =================================================================== */
+  .ft-instr { background:#f4f8ee; border:0.5px solid #b9d39a; padding:7px 10px; margin:0 0 8px; font-size:.92em; color:#365; }
+  .ft-instr b { color:#3a6b1e; }
+  .ft-instr ul { margin:4px 0 0; padding-left:20px; }
+  .ft-instr li { margin:1px 0; }
+
+  /* run picker */
+  .ft-runbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin:0 0 7px; }
+  .ft-runbar label { font-weight:bold; color:#3a59bc; }
+  .ft-runbar select { font-family:arial,sans-serif; font-size:.95em; max-width:520px; padding:1px 3px; }
+  .ft-runbar .runmeta { color:#777; font-size:.88em; }
+
+  /* toolbar */
+  .ft-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0 0 6px; }
+  .ft-bar .grow { flex:1 1 auto; }
+  .ft-bar .lineage { color:#555; font-size:.9em; }
+  .ft-bar .lineage b { color:#cd6137; }
+
+  /* viewport: the draggable/zoomable canvas the tree lives on */
+  #view { position:relative; width:100%; height:760px; overflow:hidden; cursor:grab;
+          background:#fbfcfe; border:1px solid #7186a3; border-radius:2px;
+          background-image:radial-gradient(#e4eaf4 1px, transparent 1px); background-size:22px 22px; }
+  #view.grabbing { cursor:grabbing; }
+  #stage { position:absolute; left:0; top:0; transform-origin:0 0; }
+  /* edges and nodes MUST share transform-origin (0 0) or they drift apart on zoom
+     — an <svg> defaults to a 50% 50% origin, unlike the absolutely-placed #stage */
+  #edges { position:absolute; left:0; top:0; width:1px; height:1px; transform-origin:0 0; overflow:visible; pointer-events:none; }
+  #edges path { fill:none; stroke:#9fb2cf; stroke-width:2px; }
+  #edges path.onpath { stroke:#3a6b1e; stroke-width:2.5px; }
+
+  /* a node = framed thumbnail + caption, echoing the breeding grid's tiles */
+  .tnode { position:absolute; width:120px; margin-left:-60px; text-align:center;
+           font-size:11px; line-height:1.25; user-select:none; }
+  .tnode .frame { width:108px; height:108px; margin:0 auto; padding:5px; background:#202080;
+                  cursor:pointer; box-sizing:border-box; transition:background .1s; }
+  .tnode .frame:hover { background:#3a3aa6; }
+  .tnode.has-kids .frame { background:#2a6f2a; }
+  .tnode.has-kids .frame:hover { background:#3cbb3c; }
+  .tnode.collapsed .frame { background:#b07a1a; }          /* expandable but collapsed */
+  .tnode.collapsed .frame:hover { background:#d2962a; }
+  .tnode.focus .frame { background:#30a030; box-shadow:0 0 0 3px #cd6137; }
+  .tnode canvas { width:98px; height:98px; display:block; background:#000; }
+  .tnode .cap { margin-top:3px; }
+  /* title row: name (left, ellipsised) + personality username (right, traits runs) */
+  .tnode .cap .ttlrow { display:flex; align-items:baseline; gap:4px; }
+  .tnode .cap .ttl { flex:1 1 auto; min-width:0; font-weight:bold; color:#33336b;
+                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tnode .cap .who { flex:0 0 auto; max-width:64px; color:#3a59bc; font-size:10px;
+                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tnode .cap .rowline { display:flex; align-items:center; justify-content:center; gap:5px; margin-top:1px; }
+  .tnode .cap .badge { display:inline-block; padding:0 5px; border-radius:8px;
+                       background:#e8eef8; color:#3a59bc; font-size:10px; font-weight:bold; }
+  .tnode .cap .badge.leaf { background:#f0f0f0; color:#999; }
+  /* Evolve appears on hover; display:none (not visibility:hidden) so it reserves no
+     space and can't collide with the tile stacked below it */
+  .tnode .acts { margin-top:1px; display:none; }
+  .tnode:hover .acts { display:block; }
+  .tnode .acts a { font-size:10px; margin:0 4px; }
+
+  /* "+N more" expander tile (shown when a node has > MAX_KIDS children) */
+  .tnode.tmore .morebox { display:flex; align-items:center; justify-content:center; text-align:center;
+                          background:#eef2fa; border:2px dashed #9fb2cf; color:#3a59bc; font-weight:bold; }
+  .tnode.tmore .morebox:hover { background:#dfe7f6; border-color:#3a59bc; }
+
+  .ft-empty { color:#777; padding:30px; text-align:center; }
+  .ft-load { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:#888; }
+</style>
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; <span id="crumb">Family Tree</span></div>
+    <h1 style="font-size:2em;">Family Tree</h1>
+
+    <div class="ft-instr">
+      The <b>family tree</b> of a published image&mdash;the AI agents that branched from one another.
+      Each tile is one published image; a line drops from an image to the ones an agent later evolved <i>from</i> it.
+      <ul>
+        <li><b>Click an image</b> to reveal (or hide) its children&mdash;the images bred from it.</li>
+        <li><b>Click a title</b> to re-center the tree on that image (its full lineage back to the founder).</li>
+        <li><b>Drag</b> empty space to pan; <b>scroll</b> to zoom. <b>Fit</b> re-centers everything; <b>Root</b> jumps to the founder. Hover a tile for its <b>info</b> page or to <b>Evolve</b> it.</li>
+      </ul>
+    </div>
+
+    <div class="ft-runbar">
+      <label for="runsel">Experiment:</label>
+      <select id="runsel" title="Show the family tree from a different run"></select>
+      <span class="runmeta" id="runmeta"></span>
+    </div>
+
+    <div class="ft-bar">
+      <button class="pbbtn" id="btn-root" title="Jump to the founder of this lineage">&#8689; Root</button>
+      <button class="pbbtn" id="btn-layout" title="Switch between a radial 'tree of life' and the linear left&rarr;right layout">&#9711; Radial</button>
+      <button class="pbbtn" id="btn-fit">Fit</button>
+      <button class="pbbtn" id="btn-in">Zoom +</button>
+      <button class="pbbtn" id="btn-out">Zoom &minus;</button>
+      <button class="pbbtn" id="btn-expand">Expand all</button>
+      <button class="pbbtn" id="btn-collapse">Collapse to path</button>
+      <span class="grow"></span>
+      <span class="lineage" id="lineage"></span>
+    </div>
+
+    <div id="view"><div class="ft-load" id="loadmsg">Loading the archive&hellip;</div>
+      <svg id="edges"></svg><div id="stage"></div>
+    </div>
+
+    <p class="note" style="margin-top:10px;">
+      Every tile is rendered live from its CPPN genome (no stored images), exactly as on the
+      <a href="index.html">gallery</a> and <a href="play.html">breeding console</a>. The branch links are the real
+      provenance recorded during our run: <span id="runinfo"></span>.
+      <a href="../">About the project &raquo;</a>
+    </p>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="pbsite.js"></script>
+<script>
+(function () {
+  PB.chrome('');
+  const params = new URLSearchParams(location.search);
+
+  // ---- layout constants ----
+  // Two crossing-free tidy-tree layouts, both recomputed client-side on every
+  // expand/collapse (no server, no precompute):
+  //   - LINEAR: grows LEFT→RIGHT (as in Fig. 11 of Secretan et al. 2011) — depth
+  //     advances horizontally, siblings stack vertically (DEPTH_X / SIB_Y).
+  //   - RADIAL: a "tree of life" disc (Reingold–Tilford in polar coords, like the
+  //     blog's Phylogeny tab) — depth = radius, siblings spread by angle. Far more
+  //     compact for the VLM trees' very high branching factor, and still has zero
+  //     edge crossings because every parent sits within its children's angular span.
+  const DEPTH_X = 172, SIB_Y = 164, THUMB_RES = 80, MAX_KIDS = 24;
+  // radial: R0 = inner radius (root ring), RING = radius per depth level,
+  // R_GAP = min arc-length between adjacent tiles (≥ tile so thumbnails never touch).
+  // SPIRAL: a "family tree" lineage can need more than a full turn of leaves; rather
+  // than overlap on the wrap, the radius also grows with the (unwrapped) angle — an
+  // Archimedean spiral so each extra turn pushes tiles outward by ≥ a tile. RING is
+  // kept ≥ tile + 2π·SPIRAL so a node one ring out and one turn back can't collide.
+  const R0 = 150, RING = 280, R_GAP = 152, SPIRAL = 24;
+  let LAYOUT = 'radial';     // 'radial' | 'linear'
+
+  const viewEl = document.getElementById('view');
+  const stageEl = document.getElementById('stage');
+  const edgesEl = document.getElementById('edges');
+  const loadEl = document.getElementById('loadmsg');
+
+  let MANIFEST = null;       // {canon, runs:[{run,label,group,model,n,depth,traits}]}
+  let CANON = null;          // bundled run (genomes shipped locally)
+  let RUN = null;            // current run name
+  let TREE = null;           // {nodes:{id:{t,a,g,r,n,c,col,p,u}}, roots, featured, default, run, model, n, traits}
+  let GEN = null;            // {id: genomeJSON}  (lazy, per run)
+  let kids = {};             // id -> [childId]   (derived)
+  let focus = null;          // highlighted image id
+  let expanded = new Set();  // ids whose children are drawn
+  let showAll = new Set();   // parent ids whose children are NOT capped to MAX_KIDS
+  const positions = {};      // id -> {x,y,depth}
+  const nodeEls = {};        // id -> element (reused across relayouts)
+  const synthParent = {};    // "+more:<pid>" -> pid, for the "+N more" expander tiles
+
+  // pan/zoom
+  let zoom = 1, panX = 0, panY = 0;
+
+  // ---- gz fetch (HF-style: server sends raw .gz, we inflate client-side) ----
+  async function fetchGz(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + url);
+    const stream = r.body.pipeThrough(new DecompressionStream('gzip'));
+    return JSON.parse(await new Response(stream).text());
+  }
+
+  function node(id) { return TREE.nodes[id]; }
+  function childrenOf(id) { return kids[id] || []; }
+  function isSynth(id) { return typeof id === 'string' && id.indexOf('+more:') === 0; }
+  function parentOf(id) { return isSynth(id) ? synthParent[id] : (node(id) && node(id).p); }
+  function pathToRoot(id) { const p = []; let x = id; while (x != null) { p.push(x); x = node(x) && node(x).p; } return p; } // [id … root]
+  // children drawn under an expanded node, capped to MAX_KIDS unless un-capped;
+  // when capped, the last slot is a synthetic "+N more" tile that uncaps on click.
+  function drawnKids(id) {
+    const all = childrenOf(id);
+    if (showAll.has(id) || all.length <= MAX_KIDS) return all.slice();
+    const synthId = '+more:' + id;
+    synthParent[synthId] = id;
+    return all.slice(0, MAX_KIDS).concat([synthId]);
+  }
+
+  // ---- transform ----
+  function applyTransform() {
+    stageEl.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+    edgesEl.style.transform = stageEl.style.transform;
+  }
+
+  // positions[id] = {x, y, depth, r?, a?}  where (x, y) are stage coords with x =
+  // horizontal CENTRE of the tile and y = TOP of the 108px frame (so the frame's
+  // centre is at y+54). r/a (polar radius/angle) are filled only in radial mode,
+  // and the edge builder uses them for smooth radial links.
+
+  // ---- tidy LEFT→RIGHT layout over the currently-expanded subtree ----
+  function computeLayoutLinear(rootId) {
+    let leaf = 0;   // running vertical slot for leaves (siblings stack down the page)
+    (function place(id, depth) {
+      const ch = (!isSynth(id) && expanded.has(id)) ? drawnKids(id) : [];
+      if (!ch.length) {
+        positions[id] = { x: depth * DEPTH_X, y: leaf * SIB_Y, depth };
+        leaf++;
+      } else {
+        ch.forEach((c) => place(c, depth + 1));
+        const ys = ch.map((c) => positions[c].y);
+        positions[id] = { x: depth * DEPTH_X, y: (Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2, depth };
+      }
+    })(rootId, 0);
+  }
+
+  // ---- RADIAL ("tree of life") layout over the currently-expanded subtree ----
+  // Size-aware Reingold–Tilford in polar coords (depth = radius, siblings spread
+  // by angle), in two passes so fixed-size thumbnails never overlap at any ring:
+  //   1. bottom-up: each node claims an angular EXTENT = max(its children's total,
+  //      R_GAP/radius) — the second term reserves enough arc for the tile itself,
+  //      which matters most at shallow rings where a small radius makes a given
+  //      angle a tiny arc. Disjoint sibling extents ⇒ no same-ring overlap.
+  //   2. top-down: lay children consecutively inside the parent's extent (centred
+  //      if the parent reserved slack); a node sits at its children's angular mid-
+  //      point ⇒ every parent lies within its children's span ⇒ zero crossings.
+  const radExt = {};
+  function radMeasure(id, depth) {
+    const own = R_GAP / (R0 + depth * RING);
+    const ch = (!isSynth(id) && expanded.has(id)) ? drawnKids(id) : [];
+    let sum = 0;
+    for (let i = 0; i < ch.length; i++) sum += radMeasure(ch[i], depth + 1);
+    return (radExt[id] = Math.max(own, sum));
+  }
+  function radPlace(id, depth, a0) {
+    const ch = (!isSynth(id) && expanded.has(id)) ? drawnKids(id) : [];
+    let a;
+    if (!ch.length) {
+      a = a0 + radExt[id] / 2;
+    } else {
+      let sum = 0; for (let i = 0; i < ch.length; i++) sum += radExt[ch[i]];
+      let cur = a0 + (radExt[id] - sum) / 2;          // centre the children block
+      ch.forEach((c) => { radPlace(c, depth + 1, cur); cur += radExt[c]; });
+      const first = positions[ch[0]].a, last = positions[ch[ch.length - 1]].a;
+      a = (first + last) / 2;
+    }
+    const r = R0 + depth * RING + a * SPIRAL;          // depth ring + Archimedean term
+    positions[id] = { x: r * Math.cos(a), y: r * Math.sin(a) - 54, depth, r, a };
+  }
+  function computeLayoutRadial(rootId) {
+    for (const k in radExt) delete radExt[k];
+    radMeasure(rootId, 0);
+    radPlace(rootId, 0, 0);
+  }
+
+  function computeLayout(rootId) {
+    for (const k in positions) delete positions[k];
+    (LAYOUT === 'radial' ? computeLayoutRadial : computeLayoutLinear)(rootId);
+  }
+
+  // ---- render the visible nodes + edges ----
+  let renderToken = 0;
+  function render() {
+    const rootId = pathToRoot(focus).slice(-1)[0];
+    computeLayout(rootId);
+    const vis = Object.keys(positions);
+    const onPath = new Set(pathToRoot(focus));
+
+    // remove stale node elements
+    for (const id in nodeEls) if (!positions[id]) { nodeEls[id].remove(); delete nodeEls[id]; }
+
+    // edges (parent -> child, for every visible parent/child pair)
+    let d = '';
+    vis.forEach((id) => {
+      const p = parentOf(id);
+      if (p == null || !positions[p]) return;
+      const a = positions[p], b = positions[id];
+      const cls = (onPath.has(id) && onPath.has(p)) ? ' class="onpath"' : '';
+      if (LAYOUT === 'radial') {
+        // smooth radial link (D3-style): control points at the mid-radius held at
+        // each endpoint's angle, so the edge eases out radially then sweeps round.
+        const rm = (a.r + b.r) / 2;
+        const px = a.r * Math.cos(a.a), py = a.r * Math.sin(a.a);
+        const cx = b.r * Math.cos(b.a), cy = b.r * Math.sin(b.a);
+        const c1x = rm * Math.cos(a.a), c1y = rm * Math.sin(a.a);
+        const c2x = rm * Math.cos(b.a), c2y = rm * Math.sin(b.a);
+        d += '<path' + cls + ' d="M' + px + ',' + py + ' C' + c1x + ',' + c1y + ' ' + c2x + ',' + c2y + ' ' + cx + ',' + cy + '"/>';
+      } else {
+        // horizontal connector: parent's right edge → child's left edge, both at
+        // the frame's vertical center (frame is 108px tall starting at node y)
+        const ay = a.y + 54, by = b.y + 54, ax = a.x + 54, bx = b.x - 54;
+        const midX = (ax + bx) / 2;
+        d += '<path' + cls + ' d="M' + ax + ',' + ay + ' C' + midX + ',' + ay + ' ' + midX + ',' + by + ' ' + bx + ',' + by + '"/>';
+      }
+    });
+    edgesEl.innerHTML = d;
+
+    // nodes
+    const my = ++renderToken;
+    vis.forEach((id) => {
+      let el = nodeEls[id];
+      if (isSynth(id)) {                              // "+N more" expander tile
+        const pid = synthParent[id];
+        const more = childrenOf(pid).length - MAX_KIDS;
+        if (!el) {
+          el = document.createElement('div');
+          el.className = 'tnode tmore';
+          el.innerHTML = '<div class="frame morebox"><span>+' + more + '<br>more</span></div>';
+          nodeEls[id] = el; stageEl.appendChild(el);
+          el.querySelector('.frame').addEventListener('click', (e) => { e.stopPropagation(); showAll.add(pid); renderAnchored(pid); });
+        }
+        el.style.left = positions[id].x + 'px';
+        el.style.top = positions[id].y + 'px';
+        return;
+      }
+      const nd = node(id);
+      const nKids = childrenOf(id).length;
+      const isOpen = expanded.has(id);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'tnode';
+        // Evolve: canon run is bundled (offline ?tree=); other runs stream from
+        // HF via play.html's ?run=&id= path. Tree links always carry the run.
+        const rq = 'run=' + encodeURIComponent(RUN) + '&';
+        const branch = (RUN === CANON)
+          ? 'play.html?tree=' + encodeURIComponent(id)
+          : 'play.html?' + rq + 'id=' + encodeURIComponent(id);
+        const detail = (RUN === CANON)
+          ? 'detail.html?tree=' + encodeURIComponent(id)
+          : 'detail.html?' + rq + 'id=' + encodeURIComponent(id);
+        const treeUrl = 'tree.html?' + rq + 'id=' + encodeURIComponent(id);
+        // traits runs caption the tile by the AI "artist" (personality username),
+        // to the right of the title; other runs show just the title (the
+        // generation is ~constant and the agent number isn't meaningful here)
+        const who = nd.u ? '<span class="who" title="' + esc(nd.u) + '">' + esc(nd.u) + '</span>' : '';
+        el.innerHTML =
+          '<div class="frame"><canvas width="' + THUMB_RES + '" height="' + THUMB_RES + '"></canvas></div>' +
+          '<div class="cap">' +
+            '<div class="ttlrow"><a class="ttl" href="' + treeUrl + '" title="' + esc(nd.t) + '">' + esc(nd.t) + '</a>' + who + '</div>' +
+            '<div class="rowline">' + PB.starHTML(nd.r, nd.n) +
+              '<span class="badge' + (nKids ? '' : ' leaf') + '">' + (nKids ? nKids + (nKids === 1 ? ' branch' : ' branches') : 'leaf') + '</span></div>' +
+            '<div class="acts"><a href="' + detail + '">info</a><a href="' + branch + '">Evolve</a></div>' +
+          '</div>';
+        nodeEls[id] = el;
+        stageEl.appendChild(el);
+        // clicking the thumbnail expands/collapses children (the core interaction)
+        el.querySelector('.frame').addEventListener('click', (e) => { e.stopPropagation(); toggle(id); });
+        // clicking the title re-roots the tree here, in-page (plain click only —
+        // keep the href so middle-click / ctrl-click still open a fresh tab)
+        el.querySelector('.ttl').addEventListener('click', (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault(); e.stopPropagation();
+          if (id !== focus) { setFocus(id); centerOn(id, 0.85); }
+        });
+        // render thumbnail once genomes are available
+        paintThumb(id, el.querySelector('canvas'));
+      }
+      el.style.left = positions[id].x + 'px';
+      el.style.top = positions[id].y + 'px';
+      el.classList.toggle('focus', id === focus);
+      el.classList.toggle('has-kids', nKids > 0 && isOpen);
+      el.classList.toggle('collapsed', nKids > 0 && !isOpen);
+    });
+    if (my !== renderToken) return;
+  }
+
+  function esc(s) { return (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  function paintThumb(id, canvas) {
+    if (!GEN) return;                 // will be filled by repaintAll once loaded
+    const g = GEN[id];
+    if (!g) return;
+    PB.renderThumb(canvas, { g: g, color: node(id).col !== false });
+  }
+  function repaintAll() {
+    for (const id in nodeEls) {
+      const c = nodeEls[id].querySelector('canvas');
+      if (c) paintThumb(id, c);
+    }
+  }
+
+  // Re-layout while keeping `anchorId` pinned under the same screen point, so the
+  // node you clicked doesn't jump as siblings reflow above/below it.
+  function renderAnchored(anchorId) {
+    const before = positions[anchorId] ? { x: positions[anchorId].x, y: positions[anchorId].y } : null;
+    render();
+    const after = positions[anchorId];
+    if (before && after) {
+      panX += (before.x - after.x) * zoom;
+      panY += (before.y - after.y) * zoom;
+      applyTransform();
+    }
+  }
+
+  function toggle(id) {
+    if (!childrenOf(id).length) return;
+    if (expanded.has(id)) collapseSubtree(id); else expanded.add(id);
+    renderAnchored(id);
+  }
+  function collapseSubtree(id) {       // collapsing hides the whole subtree below id
+    expanded.delete(id);
+    childrenOf(id).forEach(collapseSubtree);
+  }
+
+  // ---- fit everything visible into the viewport ----
+  function fit() {
+    const ids = Object.keys(positions);
+    if (!ids.length) return;
+    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    ids.forEach((id) => {
+      const p = positions[id];   // tile: ~120px wide centred on x, ~190px tall from y (frame + caption)
+      minX = Math.min(minX, p.x - 64); maxX = Math.max(maxX, p.x + 64);
+      minY = Math.min(minY, p.y - 8); maxY = Math.max(maxY, p.y + 190);
+    });
+    const vw = viewEl.clientWidth, vh = viewEl.clientHeight;
+    const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+    zoom = Math.min(vw / w, vh / h, 1.1);
+    panX = (vw - w * zoom) / 2 - minX * zoom;
+    panY = (vh - h * zoom) / 2 - minY * zoom;
+    applyTransform();
+  }
+
+  // center the viewport on one node at a readable zoom (the initial framing —
+  // the original applet opened zoomed-in on the seed, not fit-to-all)
+  function centerOn(id, z) {
+    const p = positions[id]; if (!p) return fit();
+    zoom = z;
+    // LINEAR: focus left-of-centre so its ancestors (to the left) and branches (to
+    // the right) are both in view. RADIAL: ancestors lie inward and branches
+    // outward in every direction, so just centre the focus tile.
+    const fx = LAYOUT === 'radial' ? p.x : p.x + 54;
+    panX = viewEl.clientWidth * (LAYOUT === 'radial' ? 0.5 : 0.42) - fx * zoom;
+    panY = viewEl.clientHeight / 2 - (p.y + 54) * zoom;
+    applyTransform();
+  }
+
+  function zoomBy(factor, cx, cy) {
+    cx = cx == null ? viewEl.clientWidth / 2 : cx;
+    cy = cy == null ? viewEl.clientHeight / 2 : cy;
+    const z2 = Math.max(0.12, Math.min(2.5, zoom * factor));
+    // keep the point under the cursor fixed
+    panX = cx - (cx - panX) * (z2 / zoom);
+    panY = cy - (cy - panY) * (z2 / zoom);
+    zoom = z2; applyTransform();
+  }
+
+  // ---- pan (drag empty space) ----
+  let dragging = false, sx = 0, sy = 0, spx = 0, spy = 0, moved = false;
+  viewEl.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.tnode')) return;       // let node clicks through
+    dragging = true; moved = false; sx = e.clientX; sy = e.clientY; spx = panX; spy = panY;
+    viewEl.classList.add('grabbing');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    panX = spx + (e.clientX - sx); panY = spy + (e.clientY - sy);
+    if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 3) moved = true;
+    applyTransform();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; viewEl.classList.remove('grabbing'); });
+  viewEl.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = viewEl.getBoundingClientRect();
+    // gentle + magnitude-aware: normalise deltaMode to px, clamp spikes, ~3% per notch
+    let dy = e.deltaY;
+    if (e.deltaMode === 1) dy *= 16; else if (e.deltaMode === 2) dy *= 400;
+    dy = Math.max(-50, Math.min(50, dy));
+    zoomBy(Math.exp(-dy * 0.0006), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  document.getElementById('btn-root').addEventListener('click', () => {
+    const root = pathToRoot(focus).slice(-1)[0];
+    if (root != null) { setFocus(root); centerOn(root, 0.85); }
+  });
+  document.getElementById('btn-layout').addEventListener('click', () => {
+    LAYOUT = LAYOUT === 'radial' ? 'linear' : 'radial';
+    document.getElementById('btn-layout').innerHTML =
+      (LAYOUT === 'radial' ? '○ Radial' : '⇥ Linear');
+    render();
+    if (focus != null) centerOn(focus, 0.85); else fit();
+  });
+  document.getElementById('btn-fit').addEventListener('click', fit);
+  document.getElementById('btn-in').addEventListener('click', () => zoomBy(1.2));
+  document.getElementById('btn-out').addEventListener('click', () => zoomBy(1 / 1.2));
+  document.getElementById('btn-collapse').addEventListener('click', () => { setFocus(focus); centerOn(focus, 0.85); });
+  document.getElementById('btn-expand').addEventListener('click', () => {
+    const rootId = pathToRoot(focus).slice(-1)[0];
+    let n = 0;
+    (function exp(id) { if (childrenOf(id).length) { expanded.add(id); n++; childrenOf(id).forEach(exp); } })(rootId);
+    render(); fit();
+  });
+
+  // ---- focus = highlight an image and auto-open the path from its founder ----
+  function setFocus(id) {
+    focus = id;
+    expanded = new Set(pathToRoot(id));   // show founder→…→focus
+    expanded.add(id);                     // and open the focus so its branches show
+    showAll = new Set();                  // re-cap wide fan-outs on every re-root
+    render();
+    // lineage breadcrumb (founder → … → focus)
+    const chain = pathToRoot(id).slice().reverse();
+    const root = node(chain[0]);
+    document.getElementById('crumb').textContent = node(id).t;
+    document.getElementById('lineage').innerHTML =
+      'Lineage depth <b>' + (chain.length - 1) + '</b> &middot; founder <b>&ldquo;' + esc(root.t) + '&rdquo;</b>' +
+      ' &middot; <b>' + node(id).c + '</b> direct ' + (node(id).c === 1 ? 'branch' : 'branches');
+    const u = new URLSearchParams(); u.set('run', RUN); u.set('id', id);
+    const ab = params.get('archiveBase'); if (ab) u.set('archiveBase', ab);
+    history.replaceState(null, '', location.pathname + '?' + u.toString());
+  }
+
+  // ---- per-run loading -------------------------------------------------------
+  // The canonical run's genomes are bundled (instant, offline); every other run
+  // streams its genome shard from the HF archive on demand (same as runs.html).
+  function genomesURL(run) {
+    return (run === CANON)
+      ? 'data/tree_genomes.json.gz'
+      : PB.archiveBase() + '/site/' + run + '/genomes.json.gz';
+  }
+
+  function resetView() {
+    GEN = null; renderToken++;
+    for (const k in nodeEls) { nodeEls[k].remove(); delete nodeEls[k]; }
+    for (const k in positions) delete positions[k];
+    for (const k in synthParent) delete synthParent[k];
+    expanded = new Set(); showAll = new Set();
+    edgesEl.innerHTML = '';
+  }
+
+  function loadRunTree(run, wantId) {
+    RUN = run;
+    resetView();
+    loadEl.style.display = ''; loadEl.textContent = 'Loading family tree…';
+    const sel = document.getElementById('runsel'); if (sel) sel.value = run;
+    return fetchGz(PB.treeShardURL(run)).then((t) => {
+      if (RUN !== run) return;                 // superseded by a newer switch
+      TREE = t;
+      kids = {};
+      Object.keys(t.nodes).forEach((id) => { const p = t.nodes[id].p; if (p != null) (kids[p] = kids[p] || []).push(id); });
+      // most-branched child first → tidy, big branches on top
+      Object.keys(kids).forEach((p) => kids[p].sort((a, b) => (t.nodes[b].c - t.nodes[a].c) || (a < b ? -1 : 1)));
+      document.getElementById('runmeta').innerHTML =
+        t.n.toLocaleString() + ' images · depth ' + t.depth + (t.traits ? ' · ' + t.traits + ' personalities' : '');
+      document.getElementById('runinfo').textContent =
+        t.n.toLocaleString() + ' published images from run “' + run + '” (' + (t.model || 'gemini-2.5-pro') + ')';
+      loadEl.style.display = 'none';
+      const id = (wantId && t.nodes[wantId]) ? wantId : (t.default || t.featured[0] || t.roots[0]);
+      setFocus(id);
+      centerOn(id, 0.85);
+      fetchGz(genomesURL(run)).then((g) => { if (RUN === run) { GEN = g; repaintAll(); } })
+        .catch((e) => {
+          const m = document.getElementById('runmeta');
+          if (m && RUN === run) m.innerHTML += ' · <span style="color:#b23a1a">thumbnails unavailable (' + esc(e.message) + ')</span>';
+        });
+    }).catch((e) => { loadEl.style.display = ''; loadEl.textContent = 'Could not load this run’s tree (' + e.message + ').'; });
+  }
+
+  // ---- the run dropdown (grouped by model) -----------------------------------
+  function buildDropdown() {
+    const sel = document.getElementById('runsel');
+    const groups = {};
+    MANIFEST.runs.forEach((m) => { (groups[m.group] = groups[m.group] || []).push(m); });
+    let html = '';
+    Object.keys(groups).forEach((g) => {
+      html += '<optgroup label="' + esc(g) + '">';
+      groups[g].forEach((m) => {
+        const lbl = m.label.replace(/&nbsp;/g, ' ') + '  (' + m.n.toLocaleString() + ' imgs, d' + m.depth + ')';
+        html += '<option value="' + esc(m.run) + '">' + lbl + '</option>';
+      });
+      html += '</optgroup>';
+    });
+    sel.innerHTML = html;
+    sel.addEventListener('change', () => loadRunTree(sel.value));
+  }
+
+  // ---- boot ------------------------------------------------------------------
+  // accept ?run=<run> and ?id=<imgid> / ?g=<c_/h_/u_ key>; default = canon run.
+  fetch('data/tree/manifest.json').then((r) => r.json()).then((mf) => {
+    MANIFEST = mf; CANON = mf.canon;
+    buildDropdown();
+    let run = params.get('run');
+    if (!run || !MANIFEST.runs.some((m) => m.run === run)) run = CANON;
+    const wantId = params.get('id') || (params.get('g') || '').replace(/^[a-z]+_/, '');
+    return loadRunTree(run, wantId);
+  }).catch((e) => {
+    loadEl.textContent = 'Could not load the family-tree index (' + e.message + ').';
+  });
+})();
+</script>
+</body>
+</html>

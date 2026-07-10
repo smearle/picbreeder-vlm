@@ -1,0 +1,8 @@
+
+# local reel demo (symlink to run images, do not commit)
+assets/reel_demo_images
+reel_demo.html
+
+# python cache + editing backups (do not commit)
+__pycache__/
+*.bak_*

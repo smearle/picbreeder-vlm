@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Picbreeder trio&mdash;pure-HTML prototype</title>
+<style>
+  :root { --bg:#fff; --ink:#222; --mut:rgba(0,0,0,.55); --orange:#FF6C00; --gold:#DAA520; }
+  body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--ink); background:var(--bg); }
+  .wrap { max-width:1180px; margin:32px auto; padding:0 16px; }
+  h1 { font-size:20px; font-weight:600; margin:0 0 4px; }
+  p.sub { color:var(--mut); margin:0 0 20px; max-width:820px; }
+
+  .stage { display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start; justify-content:center; }
+  .panel { display:flex; flex-direction:column; }
+  .panel h2 { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.04em;
+              color:var(--mut); margin:0 0 7px; }
+  .frame { background:#fff; border-radius:4px; box-shadow:0 1px 6px rgba(0,0,0,.16); overflow:hidden; }
+  canvas { display:block; }
+
+  .ctl { display:flex; align-items:center; gap:10px; margin:18px auto 0; max-width:680px; }
+  .ctl button { border:1px solid #ccc; background:#fafafa; border-radius:4px; cursor:pointer;
+                width:34px; height:30px; font-size:13px; }
+  .ctl button:hover { border-color:var(--orange); }
+  .ctl input[type=range] { flex:1; accent-color:var(--orange); }
+  .ctl .t { font-variant-numeric:tabular-nums; color:var(--mut); min-width:96px; text-align:right; }
+
+  .opts { margin:16px auto 0; max-width:820px; color:var(--mut); font-size:13px; text-align:center; }
+  .opts label { margin:0 14px; cursor:pointer; }
+  code { background:#f2f2f2; padding:1px 5px; border-radius:3px; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI Picbreeder trio&mdash;pure-HTML prototype</h1>
+  <p class="sub">The whole run (th10&nbsp;s5, 3,123 publications) advancing in step from one
+     scrubber&mdash;no video, no H.264. Left: the branching tree grows from its founders, the most-branched hubs swelling
+     into view. Centre: a running Most-Branched leaderboard. Right: the archive fills publication by publication.</p>
+
+  <div class="stage">
+    <div class="panel">
+      <h2>Phylogeny growth</h2>
+      <div class="frame"><canvas id="phylo"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>Most-Branched leaderboard</h2>
+      <div class="frame"><canvas id="lb"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>Archive reel</h2>
+      <div class="frame"><canvas id="reel"></canvas></div>
+    </div>
+  </div>
+
+  <div class="ctl">
+    <button id="play" aria-label="Pause">&#10073;&#10073;</button>
+    <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Scrub all three">
+    <span class="t" id="time">0 / 3123</span>
+  </div>
+
+  <div class="opts">
+    <span>full pass: <code id="secsv"></code>s &middot; source: <code>single sprite atlas + JSON</code></span>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var qs   = new URLSearchParams(location.search);
+  var RUN  = qs.get("run") || "th10_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s5";
+  var DATA = "assets/trio_demo/" + RUN;
+  var SECS = +(qs.get("secs") || 110);            // seconds for a full pass (matches the video pacing)
+  var DPR  = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  document.getElementById("secsv").textContent = SECS;
+
+  // ---- shared state, filled once data + atlas load ----
+  var PHY=null, LB=null, atlas=null, N=0, COLS=0, CELL=0;
+  var childrenIdx=[];     // node index -> [child node indices]
+  var px=[], py=[];       // phylo pixel positions for current canvas size
+  var ready=false;
+
+  function cellUV(i){ return [ (i % COLS) * CELL, ((i / COLS) | 0) * CELL ]; }
+
+  // sized canvases (CSS px -> backing store * DPR)
+  function sizeCanvas(cv, w, h){
+    cv.style.width=w+"px"; cv.style.height=h+"px";
+    cv.width=Math.round(w*DPR); cv.height=Math.round(h*DPR);
+    var ctx=cv.getContext("2d"); ctx.setTransform(DPR,0,0,DPR,0,0);
+    return ctx;
+  }
+
+  // panel geometry (CSS px). All three share a height; the phylogeny panel takes
+  // the portrait aspect the trio video stretched its sfdp layout into (fw x fh).
+  var PANEL_H=600, PH_W=324, PH_H=PANEL_H, LB_W=384, LB_H=PANEL_H, RE_W=300, RE_H=PANEL_H;
+  var phyCv=document.getElementById("phylo"), lbCv=document.getElementById("lb"), reCv=document.getElementById("reel");
+  var phyCtx, lbCtx, reCtx;
+
+  function relayout(){
+    PH_W = Math.round(PANEL_H * (PHY.fw || 554) / (PHY.fh || 1028));
+    phyCtx=sizeCanvas(phyCv, PH_W, PH_H);
+    lbCtx =sizeCanvas(lbCv,  LB_W, LB_H);
+    reCtx =sizeCanvas(reCv,  RE_W, RE_H);
+    // phylo pixel positions (normalised [0,1] -> inset rect)
+    var m=14, iw=PH_W-2*m, ih=PH_H-2*m;
+    px=new Array(N); py=new Array(N);
+    for(var i=0;i<N;i++){ px[i]=m+PHY.nodes[i].x*iw; py[i]=m+PHY.nodes[i].y*ih; }
+    initPhBuf();   // (re)create the phylo layers at the new size; next draw rebakes
+  }
+
+  // =====================================================================
+  // PHYLOGENY
+  // =====================================================================
+  function boardAt(count){
+    // latest timeline entry with .count <= count
+    var tl=LB.timeline, lo=0, hi=tl.length-1, res=null;
+    while(lo<=hi){ var mid=(lo+hi)>>1; if(tl[mid].count<=count){ res=tl[mid]; lo=mid+1; } else hi=mid-1; }
+    return res ? res.board : [];
+  }
+  function curChildCount(idx, fInt){
+    var ch=childrenIdx[idx], c=0;
+    for(var k=0;k<ch.length;k++) if(ch[k]<fInt) c++;
+    return c;
+  }
+
+  // Incremental: edges + nodes are baked into two offscreen buffers that only
+  // GROW as publications reveal, so the per-frame cost is O(new nodes) not O(all
+  // 3k). Edges go in their own layer so they always sit BEHIND the thumbnails
+  // (matching the rendered video's two-layer composite). The live Most-Branched
+  // emphasis is the only thing redrawn every frame, on top of the two blits.
+  var edgeBuf=document.createElement("canvas"), nodeBuf=document.createElement("canvas");
+  var edgeCtx=null, nodeCtx=null, builtUpTo=0;
+  var PH_TH=7, EDGE_W=1.3, EDGE_A=1;     // opaque lineage edges, matching the video
+
+  function initPhBuf(){
+    [edgeBuf,nodeBuf].forEach(function(c){ c.width=Math.round(PH_W*DPR); c.height=Math.round(PH_H*DPR); });
+    edgeCtx=edgeBuf.getContext("2d"); nodeCtx=nodeBuf.getContext("2d");
+    edgeCtx.setTransform(DPR,0,0,DPR,0,0); nodeCtx.setTransform(DPR,0,0,DPR,0,0);
+    edgeCtx.lineWidth=EDGE_W; edgeCtx.lineCap="round";
+    builtUpTo=0;
+  }
+  function bakeTo(toInt){
+    if(toInt<builtUpTo){                 // scrubbed backward -> rebuild from scratch
+      edgeCtx.clearRect(0,0,PH_W,PH_H); nodeCtx.clearRect(0,0,PH_W,PH_H); builtUpTo=0;
+    }
+    for(var i=builtUpTo;i<toInt;i++){
+      var nd=PHY.nodes[i], p=nd.p, col=nd.col;
+      if(p>=0){                          // parent always published earlier -> already baked
+        edgeCtx.strokeStyle="rgba("+col[0]+","+col[1]+","+col[2]+","+EDGE_A+")";
+        edgeCtx.beginPath(); edgeCtx.moveTo(px[p],py[p]); edgeCtx.lineTo(px[i],py[i]); edgeCtx.stroke();
+      }
+      var uv=cellUV(i);
+      nodeCtx.drawImage(atlas, uv[0],uv[1],CELL,CELL, px[i]-PH_TH/2, py[i]-PH_TH/2, PH_TH, PH_TH);
+    }
+    builtUpTo=toInt;
+  }
+
+  function drawPhylo(f){
+    var fInt=Math.min(N, Math.floor(f));
+    bakeTo(fInt);
+    var ctx=phyCtx;
+    ctx.clearRect(0,0,PH_W,PH_H);
+    ctx.drawImage(edgeBuf, 0,0, PH_W,PH_H);   // buffers are backing-res; blit back at CSS size (1:1)
+    ctx.drawImage(nodeBuf, 0,0, PH_W,PH_H);
+    // emphasis: current Most-Branched board nodes drawn large, sized by live child count
+    var board=boardAt(fInt);
+    for(var b=0;b<board.length;b++){
+      var idx=board[b];
+      if(idx>=fInt) continue;
+      var cnt=curChildCount(idx,fInt);
+      var sz=PH_TH*(2.2 + Math.min(1,cnt/40)*1.6);
+      var uv2=cellUV(idx);
+      ctx.drawImage(atlas, uv2[0],uv2[1],CELL,CELL, px[idx]-sz/2, py[idx]-sz/2, sz, sz);
+      var c2=PHY.nodes[idx].col;
+      ctx.strokeStyle="rgb("+c2[0]+","+c2[1]+","+c2[2]+")"; ctx.lineWidth=1.4;
+      ctx.strokeRect(px[idx]-sz/2, py[idx]-sz/2, sz, sz);
+    }
+    // spawn flash: a freshly-revealed node briefly shows its edge IN FRONT of the
+    // thumbnails (thicker), then the front copy fades and only the behind-layer
+    // edge remains -- so it recedes behind the images, matching the rendered
+    // video's two-pass highlight (anim_render.emit's `new_nodes`).
+    var SPAWN=7;                                  // node-units a node stays "fresh"
+    for(var s=fInt-1; s>=Math.max(0,fInt-SPAWN); s--){
+      var a=1-(f-(s+1))/SPAWN; if(a<=0) continue; // 1 the instant it appears -> 0
+      var nd=PHY.nodes[s], pp=nd.p, c=nd.col;
+      if(pp<0) continue;
+      ctx.globalAlpha=a;
+      ctx.strokeStyle="rgb("+c[0]+","+c[1]+","+c[2]+")"; ctx.lineWidth=EDGE_W+0.8;
+      ctx.beginPath(); ctx.moveTo(px[pp],py[pp]); ctx.lineTo(px[s],py[s]); ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  // =====================================================================
+  // LEADERBOARD  (eased per-id slide; faithful to leaderboard.py list layout)
+  // =====================================================================
+  var lbDisp={};   // idx -> {y, a}  (eased display state)
+  var GOLD="#DAA520", INK="#1c1c1c", MUT="#8c8c8c", TRACK="#e4e4e4", ROWALT="#f6f6f6";
+  var BAR_H=26, HEAD_H=BAR_H+18;
+
+  function ease(cur,target,k){ return cur+(target-cur)*k; }
+
+  function drawLB(f, dt){
+    var fInt=Math.min(N, Math.floor(f));
+    var ctx=lbCtx;
+    ctx.clearRect(0,0,LB_W,LB_H);
+    var margin=12, K=LB.K;
+    var rowH=(LB_H-HEAD_H-margin)/K;
+    var cell=Math.min(rowH-8, 62);
+
+    // ---- fullness bar: subsampled published tiles along a track ----
+    var bx0=margin, bx1=LB_W-margin, by0=8, bw=bx1-bx0, card=BAR_H;
+    ctx.fillStyle=TRACK; roundRect(ctx,bx0,by0,bw,card,4); ctx.fill();
+    if(fInt>0){
+      var span=Math.max(1,bw-card), last=fInt;
+      var xl=bx0+span*((last-1)/Math.max(1,N-1));
+      // one overlapping tile per ~1px column; the image shown at a given column is
+      // fixed (depends on the column, NOT on `last`), so the stripe never resamples
+      // or pops as the bar fills -- each new publication simply extends the leading
+      // edge and flips the front thumbnail, rapid-fire (as in the rendered video).
+      for(var xcol=bx0; xcol<=xl+0.001; xcol+=1){
+        var i=Math.round(((xcol-bx0)/span)*(N-1));
+        if(i<0) i=0; if(i>=last) continue;
+        var uv=cellUV(i);
+        ctx.drawImage(atlas, uv[0],uv[1],CELL,CELL, xcol, by0, card, card);
+      }
+      var uvl=cellUV(last-1);                       // newest image, crisp at the leading edge
+      ctx.drawImage(atlas, uvl[0],uvl[1],CELL,CELL, xl, by0, card, card);
+      ctx.strokeStyle=GOLD; ctx.lineWidth=2; ctx.strokeRect(xl, by0, card, card);
+    }
+
+    // ---- target board -> eased rows ----
+    var board=boardAt(fInt);
+    var rankOf={}; board.forEach(function(idx,r){ rankOf[idx]=r; });
+    // ensure display entries; ease toward target
+    var k = dt ? Math.min(1, dt*9) : 1;
+    board.forEach(function(idx,r){
+      var ty=HEAD_H + r*rowH;
+      if(!lbDisp[idx]) lbDisp[idx]={y:ty, a:0};
+      lbDisp[idx].y=ease(lbDisp[idx].y, ty, k);
+      lbDisp[idx].a=ease(lbDisp[idx].a, 1, k);
+    });
+    // fade out / drop departed
+    for(var id in lbDisp){
+      if(!(id in rankOf)){
+        lbDisp[id].a=ease(lbDisp[id].a, 0, k);
+        if(lbDisp[id].a<0.02){ delete lbDisp[id]; }
+      }
+    }
+    var ref=board.length ? Math.max.apply(null, board.map(function(idx){return curChildCount(idx,fInt);})) : 1;
+    ref=Math.max(1,ref);
+
+    // draw rows (departed first/under, then board members by rank)
+    var ids=Object.keys(lbDisp).sort(function(a,b){ return lbDisp[b].a-lbDisp[a].a; });
+    ids.forEach(function(idStr){
+      var idx=+idStr, st=lbDisp[idStr];
+      if(st.a<=0.02) return;
+      var rank = (idStr in rankOf) ? rankOf[idStr] : 99;
+      drawLBRow(ctx, idx, st.y, st.a, rank, curChildCount(idx,fInt), ref, rowH, cell, margin);
+    });
+  }
+
+  function drawLBRow(ctx, idx, y, a, rank, cnt, ref, rowH, cell, margin){
+    ctx.save(); ctx.globalAlpha=a;
+    var band = rank===0 ? "#fff8e8" : (rank%2 ? ROWALT : "#fff");
+    ctx.fillStyle=band; ctx.fillRect(margin, y, LB_W-2*margin, rowH-3);
+    // rank number
+    ctx.fillStyle = rank===0 ? GOLD : MUT;
+    ctx.font="bold 20px Georgia,serif"; ctx.textBaseline="middle"; ctx.textAlign="center";
+    ctx.fillText(String(rank+1<100?rank+1:""), margin+16, y+rowH/2);
+    // thumbnail
+    var tx=margin+34, ty=y+(rowH-cell)/2, uv=cellUV(idx);
+    ctx.drawImage(atlas, uv[0],uv[1],CELL,CELL, tx,ty,cell,cell);
+    ctx.strokeStyle = rank===0 ? GOLD : "#ddd"; ctx.lineWidth = rank===0?2:1;
+    ctx.strokeRect(tx,ty,cell,cell);
+    // title
+    var textX=tx+cell+12;
+    ctx.textAlign="left"; ctx.fillStyle=INK; ctx.font="bold 14px Georgia,serif";
+    var title=trunc(ctx, LB.items[idx].t, LB_W-margin-textX-4);
+    ctx.fillText(title, textX, ty+11);
+    // branch-count bar
+    var bw=Math.min(110, LB_W-margin-textX-46), bh=15, sy=ty+30;
+    ctx.fillStyle=TRACK; roundRect(ctx,textX,sy,bw,bh,bh/2); ctx.fill();
+    var fw=Math.max(0,Math.min(1,cnt/ref))*bw;
+    if(fw>=bh){ ctx.fillStyle=GOLD; roundRect(ctx,textX,sy,fw,bh,bh/2); ctx.fill(); }
+    ctx.fillStyle=INK; ctx.font="bold 14px Georgia,serif";
+    ctx.fillText(String(cnt), textX+bw+8, sy+bh/2+1);
+    ctx.restore();
+  }
+
+  function trunc(ctx,t,maxw){
+    if(ctx.measureText(t).width<=maxw) return t;
+    while(t.length && ctx.measureText(t+"…").width>maxw) t=t.slice(0,-1);
+    return t.replace(/\s+$/,"")+"…";
+  }
+  function roundRect(ctx,x,y,w,h,r){
+    r=Math.min(r,h/2,w/2); ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+  }
+
+  // =====================================================================
+  // REEL  (archive fills bottom-up, 7-wide; drawn from the atlas)
+  // =====================================================================
+  function drawReel(f){
+    var ctx=reCtx; ctx.clearRect(0,0,RE_W,RE_H);
+    var cols=7, gap=4, tile=(RE_W-(cols+1)*gap)/cols, step=tile+gap;
+    var vrows=RE_H/step, revealedRows=f/cols, maxRow=Math.floor(revealedRows);
+    var fInt=Math.floor(f);
+    var first=Math.floor(revealedRows-vrows-1), lastRow=Math.ceil(revealedRows+1);
+    if(first<0) first=0;
+    for(var r=first;r<lastRow;r++){
+      if(r>maxRow) continue;
+      var yy=(vrows-revealedRows+r)*step+gap;
+      if(yy>RE_H||yy<-step) continue;
+      for(var c=0;c<cols;c++){
+        var i=r*cols+c; if(i>=N) break;
+        if(i>=fInt) continue;   // discrete: each tile pops in at full opacity once published (no fade)
+        var uv=cellUV(i), x=gap+c*step;
+        ctx.drawImage(atlas, uv[0],uv[1],CELL,CELL, x, Math.round(yy), tile, tile);
+      }
+    }
+  }
+
+  // =====================================================================
+  // CLOCK
+  // =====================================================================
+  var playing=true, p=0, last=null;
+  var seek=document.getElementById("seek"), timeEl=document.getElementById("time"),
+      playBtn=document.getElementById("play");
+
+  function renderAt(f, dt){
+    drawPhylo(f); drawLB(f, dt); drawReel(f);
+  }
+  function setProgress(np, dt){
+    p=Math.max(0,Math.min(1,np));
+    var f=p*N;
+    renderAt(f, dt);
+    seek.value=Math.round(p*1000);
+    timeEl.textContent=Math.min(N,Math.floor(f))+" / "+N;
+  }
+  function frame(ts){
+    if(ready){
+      var dt=0;
+      if(playing){
+        if(last==null) last=ts;
+        dt=(ts-last)/1000; last=ts;
+        var np=p+dt/SECS; if(np>=1) np=0;
+        setProgress(np, dt);
+      } else { last=null; setProgress(p, 1/60); }   // keep easing the LB while paused
+    }
+    requestAnimationFrame(frame);
+  }
+
+  playBtn.addEventListener("click", function(){
+    playing=!playing;
+    playBtn.innerHTML=playing?"&#10073;&#10073;":"&#9654;";
+    playBtn.setAttribute("aria-label", playing?"Pause":"Play");
+  });
+  seek.addEventListener("input", function(){
+    playing=false; playBtn.innerHTML="&#9654;"; setProgress(seek.value/1000, 1);
+  });
+
+  // =====================================================================
+  // BOOT
+  // =====================================================================
+  Promise.all([
+    fetch(DATA+"/phylo.json").then(function(r){return r.json();}),
+    fetch(DATA+"/leaderboard.json").then(function(r){return r.json();}),
+    new Promise(function(res,rej){ var im=new Image(); im.onload=function(){res(im);}; im.onerror=rej; im.src=DATA+"/atlas.jpg"; })
+  ]).then(function(out){
+    PHY=out[0]; LB=out[1]; atlas=out[2];
+    N=PHY.n; COLS=PHY.cols; CELL=PHY.cell;
+    seek.max=1000; timeEl.textContent="0 / "+N;
+    document.querySelector("p.sub").innerHTML =
+      document.querySelector("p.sub").innerHTML.replace("3,123", N.toLocaleString());
+    // childrenIdx
+    childrenIdx=new Array(N); for(var i=0;i<N;i++) childrenIdx[i]=[];
+    for(var j=0;j<N;j++){ var pj=PHY.nodes[j].p; if(pj>=0) childrenIdx[pj].push(j); }
+    relayout();
+    ready=true;
+    setProgress(0, 1);
+    requestAnimationFrame(frame);
+  }).catch(function(e){
+    document.querySelector(".stage").innerHTML =
+      '<p style="color:#b23a1a">Could not load demo data for <code>'+RUN+'</code> ('+e.message+'). '+
+      'Run <code>tools/build_trio_demo_data.py --run sweep_logs/sweep/'+RUN+'</code> first.</p>';
+  });
+})();
+</script>
+</body>
+</html>

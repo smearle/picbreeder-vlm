@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+  tree-morph-demo.html — scrubbable phylogeny.
+
+  Built on tree.html's layout/pan/zoom/expand. Node thumbnails render from their
+  CPPN genome via the usual JS path (PB.renderThumb). The new bit: grab the little
+  handle on any edge and drag it — a GPU "traveler" renders the interpolated CPPN
+  (parent->child superset morph) in real time as it slides along the edge.
+
+  GPU path: each edge's CPPN graph is compiled to a GLSL fragment shader once;
+  scrubbing only updates weight + activation-blend uniforms, so it's 60fps.
+  Throwaway probe — delete when done. Serve over the local :8090 server.
+============================================================================ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scrubbable phylogeny — demo</title>
+<link rel="icon" type="image/png" href="pb_assets/favicon.png?v=1">
+<link rel="stylesheet" href="pbsite.css">
+<style>
+  .ft-instr { background:#f4f8ee; border:0.5px solid #b9d39a; padding:7px 10px; margin:0 0 8px; font-size:.92em; color:#365; }
+  .ft-instr b { color:#3a6b1e; }
+  .ft-runbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin:0 0 7px; }
+  .ft-runbar label { font-weight:bold; color:#3a59bc; }
+  .ft-runbar select { font-family:arial,sans-serif; font-size:.95em; max-width:520px; padding:1px 3px; }
+  .ft-runbar .runmeta { color:#777; font-size:.88em; }
+  .ft-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0 0 6px; }
+  .ft-bar .grow { flex:1 1 auto; }
+  .ft-bar .lineage { color:#555; font-size:.9em; }
+
+  #view { position:relative; width:100%; height:760px; overflow:hidden; cursor:grab;
+          background:#fbfcfe; border:1px solid #7186a3; border-radius:2px;
+          background-image:radial-gradient(#e4eaf4 1px, transparent 1px); background-size:22px 22px; }
+  #view.grabbing { cursor:grabbing; }
+  #view.scrub { cursor:ew-resize; }
+  #stage { position:absolute; left:0; top:0; transform-origin:0 0; }
+  #edges { position:absolute; left:0; top:0; width:1px; height:1px; transform-origin:0 0; overflow:visible; pointer-events:none; }
+  #edges path.wire { fill:none; stroke:#9fb2cf; stroke-width:2px; }
+  #edges path.wire.active { stroke:#cd6137; stroke-width:3px; }
+
+  .tnode { position:absolute; width:120px; margin-left:-60px; text-align:center; font-size:11px; line-height:1.25; user-select:none; }
+  .tnode .frame { width:108px; height:108px; margin:0 auto; padding:5px; background:#202080; cursor:pointer; box-sizing:border-box; transition:background .1s; }
+  .tnode .frame:hover { background:#3a3aa6; }
+  .tnode.has-kids .frame { background:#2a6f2a; }
+  .tnode.collapsed .frame { background:#b07a1a; }
+  .tnode.focus .frame { background:#30a030; box-shadow:0 0 0 3px #cd6137; }
+  .tnode canvas { width:98px; height:98px; display:block; background:#000; }
+  .tnode .cap { margin-top:3px; }
+  .tnode .cap .ttl { font-weight:bold; color:#33336b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tnode .cap .badge { display:inline-block; padding:0 5px; border-radius:8px; background:#e8eef8; color:#3a59bc; font-size:10px; font-weight:bold; }
+  .tnode .cap .badge.leaf { background:#f0f0f0; color:#999; }
+
+  /* edge handle: small grabbable dot sitting at the middle of every drawable edge */
+  .ehandle { position:absolute; width:16px; height:16px; margin:-8px 0 0 -8px; border-radius:50%;
+             background:#fff; border:2px solid #cd6137; box-shadow:0 1px 3px rgba(0,0,0,.3);
+             cursor:ew-resize; z-index:5; }
+  .ehandle:hover { background:#ffe9df; transform:scale(1.15); }
+
+  /* the traveler: the live morph thumbnail that rides the active edge */
+  #traveler { position:absolute; width:108px; margin:-54px 0 0 -54px; z-index:8; display:none; pointer-events:none; }
+  #traveler canvas { width:104px; height:104px; display:block; background:#000; border-radius:4px;
+                     box-shadow:0 0 0 3px #cd6137, 0 4px 14px rgba(0,0,0,.4); }
+  #traveler .tt { text-align:center; font-size:11px; font-weight:bold; color:#cd6137; background:#fff;
+                  border-radius:6px; margin:3px auto 0; padding:0 6px; display:inline-block; position:relative; left:50%; transform:translateX(-50%); }
+</style>
+</head>
+<body id="main_bg">
+<div id="box">
+  <div id="imageheaderhome"><div id="pb-mast"></div></div>
+  <div id="hdr"><span id="pb-nav"></span></div>
+
+  <div id="rh-col" style="margin:10px;">
+    <div class="crumbs"><a href="index.html">Home</a> &raquo; <span>Scrubbable phylogeny (demo)</span></div>
+    <h1 style="font-size:2em;">Scrubbable phylogeny <span style="font-size:.5em;color:#999;">demo</span></h1>
+
+    <div class="ft-instr">
+      A real family tree, but every branch is a <b>CPPN morph you can scrub</b>.
+      Click a tile to expand its children; <b>drag the orange dot on any edge</b> to slide a live morph
+      from the parent image into the child&mdash;rendered on the GPU, no stored frames.
+      Drag empty space to pan, scroll to zoom.
+    </div>
+
+    <div class="ft-runbar">
+      <label for="runsel">Experiment:</label>
+      <select id="runsel"></select>
+      <span class="runmeta" id="runmeta"></span>
+    </div>
+
+    <div class="ft-bar">
+      <button class="pbbtn" id="btn-root">&#8689; Root</button>
+      <button class="pbbtn" id="btn-fit">Fit</button>
+      <button class="pbbtn" id="btn-in">Zoom +</button>
+      <button class="pbbtn" id="btn-out">Zoom &minus;</button>
+      <button class="pbbtn" id="btn-expand">Expand all</button>
+      <button class="pbbtn" id="btn-collapse">Collapse to path</button>
+      <span class="grow"></span>
+      <span class="lineage" id="lineage"></span>
+    </div>
+
+    <div id="view">
+      <div class="ft-load" id="loadmsg" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#888;">Loading the archive&hellip;</div>
+      <svg id="edges"></svg>
+      <div id="stage"></div>
+      <div id="traveler"><canvas width="104" height="104"></canvas><div class="tt" id="tt"></div></div>
+    </div>
+    <p class="note" style="margin-top:10px;color:#7a8290;font-size:12.5px;">
+      Throwaway probe (<code>tree-morph-demo.html</code>). Morph = superset of parent&cup;child genes,
+      weights lerped, appearing/disappearing connections faded, activations blended&mdash;the same
+      interpolation as <code>render_lineage_animation.py</code>, compiled to a fragment shader.
+    </p>
+  </div>
+</div>
+
+<script src="cppn.js"></script>
+<script src="pbsite.js"></script>
+<script>
+(function () {
+  if (window.PB && PB.chrome) try { PB.chrome(''); } catch (e) {}
+  const params = new URLSearchParams(location.search);
+  const DEPTH_X = 172, SIB_Y = 164, THUMB_RES = 80, MAX_KIDS = 24;
+
+  const viewEl = document.getElementById('view');
+  const stageEl = document.getElementById('stage');
+  const edgesEl = document.getElementById('edges');
+  const loadEl = document.getElementById('loadmsg');
+  const travEl = document.getElementById('traveler');
+  const travCanvas = travEl.querySelector('canvas');
+  const travCtx = travCanvas.getContext('2d');
+  const ttEl = document.getElementById('tt');
+
+  let MANIFEST = null, CANON = null, RUN = null, TREE = null, GEN = null;
+  let kids = {}, focus = null, expanded = new Set(), showAll = new Set();
+  const positions = {}, nodeEls = {}, synthParent = {};
+  const edgeGeom = {};          // childId -> {P0,P1,P2,P3, parent}
+  let zoom = 1, panX = 0, panY = 0;
+
+  // ===========================================================================
+  //  WebGL morph engine (shared offscreen canvas; one program per edge, cached)
+  // ===========================================================================
+  const glCanvas = document.createElement('canvas');
+  glCanvas.width = glCanvas.height = 128;
+  let gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
+  let glQuad = null;
+  if (gl) { glQuad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, glQuad);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW); }
+
+  const GLSL_ACT = {
+    identity: (s) => s,
+    sin:      (s) => `sin(clamp(${s},-60.0,60.0))`,
+    cos:      (s) => `cos(clamp(${s},-60.0,60.0))`,
+    sigmoid:  (s) => `(2.0/(1.0+exp(-clamp(${s},-60.0,60.0)))-1.0)`,
+    gaussian: (s) => { const z = `clamp(${s},-60.0,60.0)`; return `(2.0*exp(-(${z})*(${z}))-1.0)`; },
+  };
+  const glslAct = (n) => GLSL_ACT[n] ? n : 'identity';
+
+  function buildSuperset(parentJ, childJ) {
+    const parent = genomeFromJSON(parentJ), child = genomeFromJSON(childJ);
+    const sup = cloneGenome(child), nodePairs = {};
+    for (const [k, n] of child.nodes) { const pn = parent.nodes.get(k); nodePairs[k] = [pn ? pn.activation : n.activation, n.activation]; }
+    for (const [k, n] of parent.nodes) if (!sup.nodes.has(k)) { sup.nodes.set(k, { activation: n.activation, affinity: n.affinity, input: n.input }); nodePairs[k] = [n.activation, n.activation]; }
+    const connStats = {}, keys = new Set([...sup.conns.keys(), ...parent.conns.keys()]);
+    for (const key of keys) {
+      const pc = parent.conns.get(key), cc = child.conns.get(key);
+      const sw = pc ? pc.weight : 0, se = pc ? pc.enabled : false;
+      const ew = cc ? cc.weight : sw, ee = cc ? cc.enabled : se;
+      const ref = cc || pc;
+      connStats[key] = { sw, ew, se, ee, i: ref.i, o: ref.o };
+      if (!sup.conns.has(key)) sup.conns.set(key, { i: ref.i, o: ref.o, weight: sw, enabled: se });
+    }
+    return { sup, nodePairs, connStats };
+  }
+
+  function buildGLProgram(sup, nodePairs) {
+    const conns = [...sup.conns.values()];
+    const connIndex = new Map(conns.map((c, i) => [c.i + ',' + c.o, i]));
+    const allLayers = feedForwardLayers(INPUT_KEYS, OUTPUT_KEYS, conns.map(c => [c.i, c.o]));
+    const nodeList = [];
+    for (const layer of allLayers) for (const n of layer) nodeList.push(n);
+    const declared = new Set(nodeList);
+    for (const k of OUTPUT_KEYS) if (!declared.has(k)) { nodeList.push(k); declared.add(k); }
+    const blendIndex = new Map(nodeList.map((k, i) => [k, i]));
+    const varName = (k) => k < 0 ? ({ '-1': 'IN_X', '-2': 'IN_Y', '-3': 'IN_D', '-4': '1.0' })[String(k)] : `n_${k}`;
+    let body = '';
+    for (const node of nodeList) {
+      const links = conns.filter(c => c.o === node && (c.i < 0 || declared.has(c.i)));
+      const sum = links.length ? links.map(c => `W[${connIndex.get(c.i + ',' + c.o)}]*${varName(c.i)}`).join('+') : '0.0';
+      const [sa, ea] = nodePairs[node] || ['identity', 'identity'];
+      body += `  { float S=(${sum}); n_${node}=mix(${GLSL_ACT[glslAct(sa)]('S')},${GLSL_ACT[glslAct(ea)]('S')},BL[${blendIndex.get(node)}]); }\n`;
+    }
+    const frag = `precision highp float;
+varying vec2 vUV;
+uniform float W[${Math.max(conns.length, 1)}];
+uniform float BL[${Math.max(nodeList.length, 1)}];
+uniform float uColor;
+vec3 hsv2rgb(vec3 c){ vec4 K=vec4(1.,2./3.,1./3.,3.); vec3 p=abs(fract(c.xxx+K.xyz)*6.-K.www); return c.z*mix(K.xxx,clamp(p-K.xxx,0.,1.),c.y); }
+void main(){
+  float IN_X=(vUV.x*2.0-1.0);
+  float IN_Y=(1.0-vUV.y*2.0);            // flip so it matches the JS thumbnails / gallery
+  float IN_D=length(vec2(IN_X,IN_Y))*1.41421356;
+${nodeList.map(k => `  float n_${k}=0.0;`).join('\n')}
+${body}
+  float h=fract(n_0+1.0), s=clamp(n_1,0.0,1.0), v=clamp(abs(n_2),0.0,1.0);
+  vec3 col = uColor>0.5 ? hsv2rgb(vec3(h,s,v)) : vec3(v);
+  gl_FragColor=vec4(col,1.0);
+}`;
+    const vert = `attribute vec2 aPos; varying vec2 vUV; void main(){ vUV=aPos*0.5+0.5; gl_Position=vec4(aPos,0.0,1.0); }`;
+    const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vert));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, frag));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    return { prog, conns, connIndex, nodeList, blendIndex,
+      locW: gl.getUniformLocation(prog, 'W'), locBL: gl.getUniformLocation(prog, 'BL'), locColor: gl.getUniformLocation(prog, 'uColor'),
+      locPos: gl.getAttribLocation(prog, 'aPos') };
+  }
+
+  function glFrameUniforms(P, connStats, nodePairs, t) {
+    const W = new Float32Array(P.conns.length);
+    for (const c of P.conns) {
+      const s = connStats[c.i + ',' + c.o];
+      let w; if (s.se === s.ee) w = (1 - t) * s.sw + t * s.ew; else if (s.se && !s.ee) w = s.sw * (1 - t); else w = s.ew * t;
+      W[P.connIndex.get(c.i + ',' + c.o)] = w;
+    }
+    const BL = new Float32Array(P.nodeList.length);
+    for (const k of P.nodeList) { const [sa, ea] = nodePairs[k] || []; BL[P.blendIndex.get(k)] = (sa === ea) ? 1.0 : t; }
+    return { W, BL };
+  }
+
+  // per-edge cache: childId -> {sup,nodePairs,connStats, P, col}
+  const edgeCache = new Map();
+  function getEdge(childId) {
+    if (edgeCache.has(childId)) return edgeCache.get(childId);
+    const pid = node(childId).p;
+    if (!GEN || !GEN[pid] || !GEN[childId]) return null;
+    const sup = buildSuperset(GEN[pid], GEN[childId]);
+    let P = null; try { P = buildGLProgram(sup.sup, sup.nodePairs); } catch (e) { console.error('shader', e); }
+    const rec = { ...sup, P, col: node(childId).col !== false };
+    edgeCache.set(childId, rec);
+    return rec;
+  }
+
+  function renderMorph(childId, t) {
+    const e = getEdge(childId);
+    if (!e || !e.P || !gl) return false;
+    const { W, BL } = glFrameUniforms(e.P, e.connStats, e.nodePairs, t);
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+    gl.useProgram(e.P.prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, glQuad);
+    gl.enableVertexAttribArray(e.P.locPos);
+    gl.vertexAttribPointer(e.P.locPos, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform1fv(e.P.locW, W);
+    gl.uniform1fv(e.P.locBL, BL);
+    gl.uniform1f(e.P.locColor, e.col ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    travCtx.clearRect(0, 0, travCanvas.width, travCanvas.height);
+    travCtx.drawImage(glCanvas, 0, 0, travCanvas.width, travCanvas.height);
+    return true;
+  }
+
+  // bezier helpers (cubic, control pts P0..P3)
+  function bez(g, t) { const u = 1 - t;
+    return { x: u*u*u*g.P0.x + 3*u*u*t*g.P1.x + 3*u*t*t*g.P2.x + t*t*t*g.P3.x,
+             y: u*u*u*g.P0.y + 3*u*u*t*g.P1.y + 3*u*t*t*g.P2.y + t*t*t*g.P3.y }; }
+  // nearest t on an edge to a stage-space point (sampled)
+  function nearestT(g, x, y) {
+    let bt = 0, bd = 1e18;
+    for (let i = 0; i <= 24; i++) { const t = i/24, p = bez(g, t), d = (p.x-x)*(p.x-x)+(p.y-y)*(p.y-y); if (d < bd) { bd = d; bt = t; } }
+    return { t: bt, dist: Math.sqrt(bd) };
+  }
+
+  // ===========================================================================
+  //  tree plumbing (from tree.html)
+  // ===========================================================================
+  async function fetchGz(url) { const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status); const s = r.body.pipeThrough(new DecompressionStream('gzip')); return JSON.parse(await new Response(s).text()); }
+  function node(id) { return TREE.nodes[id]; }
+  function childrenOf(id) { return kids[id] || []; }
+  function isSynth(id) { return typeof id === 'string' && id.indexOf('+more:') === 0; }
+  function parentOf(id) { return isSynth(id) ? synthParent[id] : (node(id) && node(id).p); }
+  function pathToRoot(id) { const p = []; let x = id; while (x != null) { p.push(x); x = node(x) && node(x).p; } return p; }
+  function drawnKids(id) { const all = childrenOf(id); if (showAll.has(id) || all.length <= MAX_KIDS) return all.slice();
+    const s = '+more:' + id; synthParent[s] = id; return all.slice(0, MAX_KIDS).concat([s]); }
+  function applyTransform() { const t = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')'; stageEl.style.transform = t; edgesEl.style.transform = t; layoutHandles(); }
+
+  function computeLayout(rootId) {
+    for (const k in positions) delete positions[k];
+    let leaf = 0;
+    (function place(id, depth) {
+      const ch = (!isSynth(id) && expanded.has(id)) ? drawnKids(id) : [];
+      if (!ch.length) { positions[id] = { x: depth * DEPTH_X, y: leaf * SIB_Y, depth }; leaf++; }
+      else { ch.forEach((c) => place(c, depth + 1)); const ys = ch.map((c) => positions[c].y);
+        positions[id] = { x: depth * DEPTH_X, y: (Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2, depth }; }
+    })(rootId, 0);
+  }
+
+  const handleEls = {};   // childId -> handle div
+  function layoutHandles() {
+    // position the edge handles at the curve midpoint (stage coords; they live in #stage so they scale)
+    for (const id in handleEls) { const g = edgeGeom[id];
+      if (!g) { handleEls[id].style.display = 'none'; continue; }
+      const m = bez(g, 0.5); handleEls[id].style.display = ''; handleEls[id].style.left = m.x + 'px'; handleEls[id].style.top = m.y + 'px'; }
+  }
+
+  function render() {
+    const rootId = pathToRoot(focus).slice(-1)[0];
+    computeLayout(rootId);
+    const vis = Object.keys(positions);
+    for (const id in nodeEls) if (!positions[id]) { nodeEls[id].remove(); delete nodeEls[id]; }
+    for (const k in edgeGeom) delete edgeGeom[k];
+
+    // edges
+    let d = '';
+    vis.forEach((id) => {
+      const p = parentOf(id);
+      if (p != null && positions[p]) {
+        const a = positions[p], b = positions[id];
+        const ay = a.y + 54, by = b.y + 54, ax = a.x + 54, bx = b.x - 54, midX = (ax + bx) / 2;
+        d += '<path class="wire" data-id="' + id + '" d="M' + ax + ',' + ay + ' C' + midX + ',' + ay + ' ' + midX + ',' + by + ' ' + bx + ',' + by + '"/>';
+        if (!isSynth(id)) edgeGeom[id] = { P0: {x:ax,y:ay}, P1: {x:midX,y:ay}, P2: {x:midX,y:by}, P3: {x:bx,y:by}, parent: p };
+      }
+    });
+    edgesEl.innerHTML = d;
+
+    // handles (one per real edge) — reuse elements across relayouts
+    for (const id in handleEls) if (!edgeGeom[id]) { handleEls[id].remove(); delete handleEls[id]; }
+    for (const id in edgeGeom) {
+      if (!handleEls[id]) {
+        const h = document.createElement('div'); h.className = 'ehandle'; h.dataset.id = id;
+        h.addEventListener('mousedown', (e) => { e.stopPropagation(); startScrub(id, e); });
+        stageEl.appendChild(h); handleEls[id] = h;
+      }
+    }
+    layoutHandles();
+
+    // nodes
+    vis.forEach((id) => {
+      let el = nodeEls[id];
+      if (isSynth(id)) {
+        const pid = synthParent[id], more = childrenOf(pid).length - MAX_KIDS;
+        if (!el) { el = document.createElement('div'); el.className = 'tnode'; el.innerHTML = '<div class="frame" style="background:#eef2fa;border:2px dashed #9fb2cf;color:#3a59bc;display:flex;align-items:center;justify-content:center;font-weight:bold;">+' + more + '<br>more</div>';
+          nodeEls[id] = el; stageEl.appendChild(el); el.querySelector('.frame').addEventListener('click', (e) => { e.stopPropagation(); showAll.add(pid); renderAnchored(pid); }); }
+        el.style.left = positions[id].x + 'px'; el.style.top = positions[id].y + 'px'; return;
+      }
+      const nd = node(id), nKids = childrenOf(id).length, isOpen = expanded.has(id);
+      if (!el) {
+        el = document.createElement('div'); el.className = 'tnode';
+        el.innerHTML = '<div class="frame"><canvas width="' + THUMB_RES + '" height="' + THUMB_RES + '"></canvas></div>' +
+          '<div class="cap"><div class="ttl" title="' + esc(nd.t) + '">' + esc(nd.t) + '</div>' +
+          '<div><span class="badge' + (nKids ? '' : ' leaf') + '">' + (nKids ? nKids + (nKids === 1 ? ' branch' : ' branches') : 'leaf') + '</span></div></div>';
+        nodeEls[id] = el; stageEl.appendChild(el);
+        el.querySelector('.frame').addEventListener('click', (e) => { e.stopPropagation(); toggle(id); });
+        el.querySelector('.ttl').addEventListener('click', (e) => { e.stopPropagation(); if (id !== focus) { setFocus(id); centerOn(id, 0.85); } });
+        paintThumb(id, el.querySelector('canvas'));
+      }
+      el.style.left = positions[id].x + 'px'; el.style.top = positions[id].y + 'px';
+      el.classList.toggle('focus', id === focus);
+      el.classList.toggle('has-kids', nKids > 0 && isOpen);
+      el.classList.toggle('collapsed', nKids > 0 && !isOpen);
+    });
+  }
+
+  function esc(s) { return (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+  function paintThumb(id, canvas) { if (!GEN) return; const g = GEN[id]; if (!g) return;
+    if (window.PB && PB.renderThumb) PB.renderThumb(canvas, { g: g, color: node(id).col !== false }); }
+  function repaintAll() { for (const id in nodeEls) { const c = nodeEls[id].querySelector('canvas'); if (c) paintThumb(id, c); } }
+
+  function renderAnchored(anchorId) {
+    const before = positions[anchorId] ? { x: positions[anchorId].x, y: positions[anchorId].y } : null;
+    render(); const after = positions[anchorId];
+    if (before && after) { panX += (before.x - after.x) * zoom; panY += (before.y - after.y) * zoom; applyTransform(); }
+  }
+  function toggle(id) { if (!childrenOf(id).length) return; if (expanded.has(id)) collapseSubtree(id); else expanded.add(id); renderAnchored(id); }
+  function collapseSubtree(id) { expanded.delete(id); childrenOf(id).forEach(collapseSubtree); }
+
+  function fit() {
+    const ids = Object.keys(positions); if (!ids.length) return;
+    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    ids.forEach((id) => { const p = positions[id]; minX = Math.min(minX, p.x - 64); maxX = Math.max(maxX, p.x + 64); minY = Math.min(minY, p.y - 8); maxY = Math.max(maxY, p.y + 190); });
+    const vw = viewEl.clientWidth, vh = viewEl.clientHeight, w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+    zoom = Math.min(vw / w, vh / h, 1.1); panX = (vw - w * zoom) / 2 - minX * zoom; panY = (vh - h * zoom) / 2 - minY * zoom; applyTransform();
+  }
+  function centerOn(id, z) { const p = positions[id]; if (!p) return fit(); zoom = z;
+    panX = viewEl.clientWidth * 0.42 - (p.x + 54) * zoom; panY = viewEl.clientHeight / 2 - (p.y + 54) * zoom; applyTransform(); }
+  function zoomBy(factor, cx, cy) { cx = cx == null ? viewEl.clientWidth / 2 : cx; cy = cy == null ? viewEl.clientHeight / 2 : cy;
+    const z2 = Math.max(0.12, Math.min(2.5, zoom * factor)); panX = cx - (cx - panX) * (z2 / zoom); panY = cy - (cy - panY) * (z2 / zoom); zoom = z2; applyTransform(); }
+
+  // ---- scrubbing the active edge ----
+  let scrubbing = null;   // {id, geom}
+  function viewToStage(clientX, clientY) { const r = viewEl.getBoundingClientRect();
+    return { x: (clientX - r.left - panX) / zoom, y: (clientY - r.top - panY) / zoom }; }
+  function setActiveWire(id) { edgesEl.querySelectorAll('path.wire').forEach((p) => p.classList.toggle('active', p.dataset.id === id)); }
+
+  function startScrub(id, e) {
+    const g = edgeGeom[id]; if (!g) return;
+    scrubbing = { id, geom: g }; viewEl.classList.add('scrub'); setActiveWire(id);
+    travEl.style.display = ''; if (handleEls[id]) handleEls[id].style.visibility = 'hidden';
+    scrubMove(e);
+  }
+  function scrubMove(e) {
+    if (!scrubbing) return;
+    const s = viewToStage(e.clientX, e.clientY);
+    const { t } = nearestT(scrubbing.geom, s.x, s.y);
+    const p = bez(scrubbing.geom, t);
+    travEl.style.left = p.x + 'px'; travEl.style.top = p.y + 'px';
+    ttEl.textContent = Math.round(t * 100) + '%';
+    renderMorph(scrubbing.id, t);
+  }
+  function endScrub() { if (!scrubbing) return; const id = scrubbing.id; scrubbing = null; viewEl.classList.remove('scrub');
+    travEl.style.display = 'none'; setActiveWire(null); if (handleEls[id]) handleEls[id].style.visibility = ''; }
+
+  // ---- pan (drag empty space) + global pointer routing ----
+  let dragging = false, sx = 0, sy = 0, spx = 0, spy = 0;
+  viewEl.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.tnode') || e.target.closest('.ehandle')) return;
+    // grab an edge if the click landed near one (lets you scrub the wire directly, not just the dot)
+    const s = viewToStage(e.clientX, e.clientY); let best = null, bestD = 16 / zoom;
+    for (const id in edgeGeom) { const r = nearestT(edgeGeom[id], s.x, s.y); if (r.dist < bestD) { bestD = r.dist; best = id; } }
+    if (best) { startScrub(best, e); return; }
+    dragging = true; sx = e.clientX; sy = e.clientY; spx = panX; spy = panY; viewEl.classList.add('grabbing');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (scrubbing) { scrubMove(e); return; }
+    if (!dragging) return; panX = spx + (e.clientX - sx); panY = spy + (e.clientY - sy); applyTransform();
+  });
+  window.addEventListener('mouseup', () => { if (scrubbing) endScrub(); dragging = false; viewEl.classList.remove('grabbing'); });
+  viewEl.addEventListener('wheel', (e) => { e.preventDefault(); const r = viewEl.getBoundingClientRect();
+    let dy = e.deltaY; if (e.deltaMode === 1) dy *= 16; else if (e.deltaMode === 2) dy *= 400; dy = Math.max(-50, Math.min(50, dy));
+    zoomBy(Math.exp(-dy * 0.0006), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+
+  document.getElementById('btn-root').addEventListener('click', () => { const root = pathToRoot(focus).slice(-1)[0]; if (root != null) { setFocus(root); centerOn(root, 0.85); } });
+  document.getElementById('btn-fit').addEventListener('click', fit);
+  document.getElementById('btn-in').addEventListener('click', () => zoomBy(1.2));
+  document.getElementById('btn-out').addEventListener('click', () => zoomBy(1 / 1.2));
+  document.getElementById('btn-collapse').addEventListener('click', () => { setFocus(focus); centerOn(focus, 0.85); });
+  document.getElementById('btn-expand').addEventListener('click', () => { const rootId = pathToRoot(focus).slice(-1)[0];
+    (function exp(id) { if (childrenOf(id).length) { expanded.add(id); childrenOf(id).forEach(exp); } })(rootId); render(); fit(); });
+
+  function setFocus(id) {
+    focus = id; expanded = new Set(pathToRoot(id)); expanded.add(id); showAll = new Set(); edgeCache.clear(); render();
+    const chain = pathToRoot(id).slice().reverse(), root = node(chain[0]);
+    document.getElementById('lineage').innerHTML = 'Lineage depth <b>' + (chain.length - 1) + '</b> &middot; founder &ldquo;' + esc(root.t) + '&rdquo;';
+  }
+
+  function genomesURL(run) { return (run === CANON) ? 'data/tree_genomes.json.gz' : PB.archiveBase() + '/site/' + run + '/genomes.json.gz'; }
+  function resetView() { GEN = null; edgeCache.clear();
+    for (const k in nodeEls) { nodeEls[k].remove(); delete nodeEls[k]; }
+    for (const k in handleEls) { handleEls[k].remove(); delete handleEls[k]; }
+    for (const k in positions) delete positions[k]; for (const k in synthParent) delete synthParent[k];
+    expanded = new Set(); showAll = new Set(); edgesEl.innerHTML = ''; }
+
+  function loadRunTree(run, wantId) {
+    RUN = run; resetView(); loadEl.style.display = ''; loadEl.textContent = 'Loading family tree…';
+    const sel = document.getElementById('runsel'); if (sel) sel.value = run;
+    return fetchGz(PB.treeShardURL(run)).then((t) => {
+      if (RUN !== run) return; TREE = t; kids = {};
+      Object.keys(t.nodes).forEach((id) => { const p = t.nodes[id].p; if (p != null) (kids[p] = kids[p] || []).push(id); });
+      Object.keys(kids).forEach((p) => kids[p].sort((a, b) => (t.nodes[b].c - t.nodes[a].c) || (a < b ? -1 : 1)));
+      document.getElementById('runmeta').innerHTML = t.n.toLocaleString() + ' images · depth ' + t.depth + (t.traits ? ' · ' + t.traits + ' personalities' : '');
+      loadEl.style.display = 'none';
+      const id = (wantId && t.nodes[wantId]) ? wantId : (t.default || t.featured[0] || t.roots[0]);
+      setFocus(id); centerOn(id, 0.85);
+      fetchGz(genomesURL(run)).then((g) => { if (RUN === run) { GEN = g; edgeCache.clear(); repaintAll(); } })
+        .catch((e) => { const m = document.getElementById('runmeta'); if (m && RUN === run) m.innerHTML += ' · <span style="color:#b23a1a">thumbnails unavailable</span>'; });
+    }).catch((e) => { loadEl.style.display = ''; loadEl.textContent = 'Could not load this run’s tree (' + e.message + ').'; });
+  }
+
+  function buildDropdown() { const sel = document.getElementById('runsel'); const groups = {};
+    MANIFEST.runs.forEach((m) => { (groups[m.group] = groups[m.group] || []).push(m); });
+    let html = ''; Object.keys(groups).forEach((g) => { html += '<optgroup label="' + esc(g) + '">';
+      groups[g].forEach((m) => { html += '<option value="' + esc(m.run) + '">' + (m.label.replace(/&nbsp;/g, ' ') + '  (' + m.n.toLocaleString() + ' imgs, d' + m.depth + ')') + '</option>'; });
+      html += '</optgroup>'; }); sel.innerHTML = html; sel.addEventListener('change', () => loadRunTree(sel.value)); }
+
+  fetch('data/tree/manifest.json').then((r) => r.json()).then((mf) => { MANIFEST = mf; CANON = mf.canon; buildDropdown();
+    let run = params.get('run'); if (!run || !MANIFEST.runs.some((m) => m.run === run)) run = CANON;
+    const wantId = params.get('id') || (params.get('g') || '').replace(/^[a-z]+_/, ''); return loadRunTree(run, wantId);
+  }).catch((e) => { loadEl.textContent = 'Could not load the family-tree index (' + e.message + ').'; });
+})();
+</script>
+</body>
+</html>

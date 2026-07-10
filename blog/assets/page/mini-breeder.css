@@ -1,0 +1,47 @@
+/* Embedded mini-breeder — a stripped-down port of breed/play.html: selection +
+   evolve (NEAT mutation/crossover) + undo + reset, plus New parent (random
+   human-archive publication) and Publish (local this-session row). No resolution /
+   population / DNA controls. Green selection frame is the Picbreeder hallmark. */
+.cppnx-breed { padding:14px 16px 12px; }
+.cppnx-breed .cxb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(116px,1fr)); gap:6px; position:relative; }
+/* While a new parent loads: grey the candidate grid and float a spinner over it. */
+.cppnx-breed .cxb-grid.loading .bcell { opacity:.3; filter:grayscale(1); pointer-events:none; }
+.cppnx-breed .cxb-spin { position:absolute; top:50%; left:50%; width:38px; height:38px; margin:-19px 0 0 -19px;
+  border:4px solid rgba(0,0,0,.14); border-top-color:#FF6C00; border-radius:50%; z-index:2;
+  pointer-events:none; animation:cxbspin .8s linear infinite; }
+@keyframes cxbspin { to { transform:rotate(360deg); } }
+/* Your published images, in a single scrolling row above the candidate grid. Half
+   the candidate-tile scale; newest on the right; click one to breed from it. */
+.cppnx-breed .cxb-published { display:flex; gap:6px; align-items:center; margin-bottom:12px;
+  padding-bottom:4px; overflow-x:auto; }
+.cppnx-breed .cxb-published[hidden] { display:none; }
+.cppnx-breed .cxb-pub-item { flex:0 0 auto; padding:3px; background:#e9e9e9; border-radius:4px;
+  cursor:pointer; line-height:0; border:2px solid transparent; transition:background .12s; }
+.cppnx-breed .cxb-pub-item:hover { background:#d7d7d7; }
+.cppnx-breed .cxb-pub-item.active { border-color:#30a030; }
+.cppnx-breed .cxb-pub-item img { width:58px; height:58px; display:block; border-radius:2px; background:#fff; }
+.cppnx-breed .bcell { position:relative; padding:5px; background:#e9e9e9; border-radius:4px; cursor:pointer;
+  line-height:0; transition:background .12s; }
+.cppnx-breed .bcell:hover { background:#d7d7d7; }
+.cppnx-breed .bcell.sel { background:#30a030; }
+.cppnx-breed .bcell.sel:hover { background:#3cbb3c; }
+.cppnx-breed .bcell canvas { width:100%; aspect-ratio:1/1; display:block; border-radius:2px; background:#fff; }
+.cppnx-breed .cxb-bar { display:flex; align-items:center; gap:8px; margin-top:12px; flex-wrap:wrap; }
+.cppnx-breed .cxb-btn { font:inherit; font-size:13px; padding:6px 13px; border:1px solid #d8d8d8;
+  border-radius:6px; background:#f7f7f7; color:#333; cursor:pointer; }
+.cppnx-breed .cxb-btn:hover { background:#ececec; }
+.cppnx-breed .cxb-btn:disabled { color:#bbb; background:#f3f3f3; cursor:default; }
+.cppnx-breed .cxb-go { border-color:#FF6C00; color:#fff; background:#FF6C00; }
+.cppnx-breed .cxb-go:hover { background:#ff7d1a; }
+/* Evolve is the console's centre of gravity: the two side groups share the leftover
+   width equally (flex:1 from a 0 basis), so Evolve's midpoint is the bar's midpoint
+   however wide New parent / Undo / Reset or the status line happen to be. */
+.cppnx-breed .cxb-side { flex:1 1 0; min-width:0; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.cppnx-breed .cxb-side-right { justify-content:flex-end; }
+.cppnx-breed .cxb-pub .ic { margin-right:2px; }
+/* One reserved line above the grid: an empty status leaves the same gap a message
+   would, so nothing below it moves when a warning appears or clears. */
+.cppnx-breed .cxb-status { font-size:12px; color:#999; text-align:center;
+  min-height:16px; line-height:16px; margin-bottom:8px; }
+.cppnx-breed .cxb-status.hint { color:#c0392b; }
+.cppnx-breed .cxb-status a { color:#FF6C00; }

@@ -1,0 +1,199 @@
+/* ===========================================================================
+ * pbsite.css — a close replica of picbreeder.org (circa 2016), recovered from
+ * the Internet Archive (layout.css + headers.css), adapted for the AI archive.
+ * The top block is the original site CSS, near-verbatim; the lower block adds
+ * the gallery cells, star ratings, and breeding console.
+ * ======================================================================== */
+
+/* ---------------------- original picbreeder.org ------------------------- */
+body {
+  margin: 20px;
+  padding: 0;
+  background: #ffffff;
+  color: #333333;
+  font-size: 0.8em;
+  font-family: arial, sans-serif;
+}
+#main_bg { height: 100%; padding: 0; margin-bottom: 1px; background-color: #ffffff; }
+
+#box {
+  margin: 0 auto;
+  background: #eaeff6;
+  padding: 0;
+  width: 880px;
+  border-bottom: 10px solid #d6e0ee;
+}
+
+#imageheaderhome {
+  font-family: arial, sans-serif;
+  text-align: right;
+  color: #3a59bc;
+  border-bottom: solid #a7c3f6;
+  border-width: 8px 0;
+  text-decoration: none;
+  padding: 10px 10px 10px 10px;
+  background: #f9fbfc;
+  font-size: 0.8em;
+}
+#imageheaderhome table { margin: 0 auto; }
+
+#hdr {
+  text-align: center;
+  background: #d3ddef;
+  text-decoration: none;
+  padding: 5px 5px 1px;
+  font-size: 1.2em;
+  font-weight: bold;
+  line-height: 1.3;
+}
+#hdr a { text-decoration: none; }
+
+/* secondary nav row — cross-archive / source navigation; a direct visual
+   continuation of the main nav bar (same background, font, centering), just
+   the next line down rather than a distinct sub-bar */
+#hdr2 {
+  text-align: center;
+  background: #d3ddef;
+  padding: 1px 5px 5px;
+  font-size: 1.2em;
+  font-weight: bold;
+  line-height: 1.3;
+}
+#hdr2 a { text-decoration: none; }
+
+/* link colors — note the signature blue hover highlight */
+a:visited { color: #2d68d4; }
+a:link    { color: #2d68d4; }
+a:hover   { background: #2d68d4; color: #ffffff; }
+
+#left-col1, #left-col2, #left-col3 {
+  width: 150px;
+  background: #ffffff;
+  color: #000000;
+  padding: 5px;
+  border: 0.5px solid #7186a3;
+  margin-bottom: 10px;
+}
+
+.artistlist { margin: 4px 0 0; padding-left: 20px; font-size: .95em; }
+.artistlist li { margin: 0 0 5px; line-height: 1.2; }
+.artistlist .aname { color: #3a59bc; font-weight: bold; }
+.artistlist .arating { color: #cd6137; font-weight: bold; float: right; margin-left: 4px; }
+.artistlist .aslash { color: #c8a08c; font-weight: normal; font-size: .85em; }
+.artistlist a.aname:hover { color: #fff; }
+.artist-note { margin: 6px 0 0; font-size: .8em; color: #777; line-height: 1.3; }
+
+#rh-col {
+  margin: 10px 10px 20px 180px;
+  border: 0.5px solid #7186a3;
+  background: #ffffff;
+  color: #333333;
+  padding: 5px;
+  position: relative;
+  min-height: 820px;
+}
+
+.tagcloud a { text-decoration: none; }
+td { font-size: 1em; }
+
+h1 { padding: 1px 0; margin: 0; color: #cd6137; font-weight: bold; font-size: 3em; }
+h2 { padding: 1px 0; color: #cd6137; }
+h3 { padding: 1px 0; color: #cd6137; }
+h4 { margin: 0; padding: 1px 0; color: #cd6137; }
+h5 { margin: 0; padding: 1px 0; color: #3a59bc; font-size: 1.5em; }
+hr { border: 1px dashed #787878; margin-top: 5px; }
+
+/* star rater (small, inline) */
+.inline-rating {
+  display: inline-block;
+  vertical-align: middle;
+  overflow: hidden;
+}
+.star-rating {
+  position: relative;
+  list-style: none;
+  margin: 0; padding: 0;
+}
+.star-rating li {
+  display: inline;
+  position: absolute;
+  top: 0; left: 0;
+  text-indent: -1000em;
+  overflow: hidden;
+}
+.small-star, .small-star .current-rating {
+  background-image: url(pb_assets/star_small.gif);
+  width: 50px; height: 10px; line-height: 10px;
+}
+.small-star { background-repeat: repeat-x; background-position: left top; }
+.small-star .current-rating { background-position: left bottom; }
+
+/* ---------------------- additions for the AI archive -------------------- */
+.quickbtn, button.pbbtn {
+  font-family: arial, sans-serif;
+  font-size: 1em;
+  cursor: pointer;
+  padding: 1px 6px;
+  margin: 0 1px;
+}
+
+/* the four homepage gradient boxes */
+.quad { width: 280px; height: 280px; font-size: 1em; color: #333; }
+.quad .qbody { padding: 5px; }
+.quad-branch  { background-image: url(pb_assets/bluegradient.png); }
+.quad-scratch { background-image: url(pb_assets/lightbluegradient.png); }
+.quad-tree    { background-image: url(pb_assets/greengradient.png); }
+.quad-merch   { background-image: url(pb_assets/orangegradient.png); }
+.quad-thumbs { width: 0; margin: 0 auto; }
+.quad-thumbs td { text-align: center; vertical-align: top; font-size: 0.85em; }
+.quad img.icon { border: 0; }
+
+/* gallery cells (Editor's Picks, browse pages, quad thumbs) */
+.cellimg { border: 1px solid #888; width: 128px; height: 128px; display: block; background: #f2f2f2; }
+.cellimg.sm { width: 88px; height: 88px; }
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 150px);
+  gap: 14px 10px;
+  justify-content: center;
+  margin: 8px 0 4px;
+}
+.gcell { text-align: center; font-size: 0.85em; width: 150px; }
+.gcell .title { display: block; line-height: 1.2; min-height: 2.2em; }
+.gcell .by { color: #555; }
+.gcell .by a { text-decoration: none; }
+.gcell .imgwrap { position: relative; display: inline-block; line-height: 0; margin: 2px 0; }
+.gcell .imgwrap a { line-height: 0; }
+.gcell .btns { margin-top: 2px; }
+
+/* (thumbnail star ratings use the original .small-star gif sprite above) */
+.crumbs { margin: 0 0 6px; }
+.note { color: #777; font-size: 0.92em; line-height: 1.5; }
+
+/* category strips on the homepage: orange section heading (OG #FF9900) with a
+ * right-aligned "More..." link below the grid, as on the original site */
+#rh-col h2 { color: #ff9900; font-weight: bold; }
+#cats h2 { margin: 16px 0 0; }
+.strip-more { text-align: right; margin: 2px 0 0; }
+.strip-more a { color: #2d68d4; text-decoration: none; }
+.strip-more a:hover { background: #2d68d4; color: #fff; }
+
+/* browse pagination */
+.pagecount { margin: 6px 0 2px; }
+.pager { margin: 4px 0 10px; }
+.pager a, .pager .cur { text-decoration: none; padding: 1px 7px; margin: 0 1px; border: 0.5px solid #c9d6ea; }
+.pager a { color: #2d68d4; background: #fff; }
+.pager a:hover { background: #2d68d4; color: #fff; }
+.pager .cur { background: #3a59bc; color: #fff; border-color: #1f48b8; }
+.disclaimer {
+  max-width: 820px; margin: 14px auto 0; padding: 8px 10px;
+  font-size: 0.85em; color: #666; background: #f3f6fb; border: 0.5px solid #c9d6ea;
+}
+.disclaimer a { color: #2d68d4; }
+
+/* responsive: the original is a fixed 880px; let it shrink gracefully */
+@media (max-width: 920px) {
+  body { margin: 8px; }
+  #box { width: 100%; }
+  #rh-col { margin-left: 8px; }
+}

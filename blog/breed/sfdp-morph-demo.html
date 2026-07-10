@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+  sfdp-morph-demo.html — scrubbable phylogeny morph viewer (blog-styled).
+
+  A force-directed (Graphviz neato-stress) graph of a run's parent->child phylogeny.
+  Nodes are dots, edges are lines; sweep the cursor over the graph and a "probe"
+  snaps to the nearest edge and renders the parent->child CPPN morph live on the GPU.
+  Founders (roots) connect back to their real gen-0 random-init ancestor (purple).
+
+  Per-run data: breed/data/morph/<run>/{layout.json.gz, genomes.json.gz} +
+  breed/data/morph/manifest.json (built by tools/build_morph_viewer_data.py).
+============================================================================ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scrubbable phylogeny — Picbreeder · VLM</title>
+<link rel="stylesheet" href="../assets/page/page.css">
+<style>
+  :root { --accent:#FF6C00; --ink:#222; --muted:#888; --line:#e2e2e2; }
+  body { background:#fff; color:var(--ink);
+         font-family:"LM Roman","Latin Modern Roman","Times New Roman",Times,serif; }
+  .mv-wrap { max-width:900px; margin:0 auto; padding:28px 20px 60px; }
+  .mv-wrap h1 { font-size:1.7em; font-weight:700; margin:0 0 .15em; }
+  .mv-wrap .lede { color:#555; margin:0 0 1.1em; font-size:1.02em; line-height:1.5; }
+  .mv-wrap .lede b { color:var(--ink); }
+
+  /* controls */
+  .mv-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px; }
+  .mv-controls label { color:#555; font-size:.95em; }
+  .mv-controls select { font:inherit; font-size:.95em; padding:3px 6px; border:1px solid var(--line);
+                        border-radius:5px; background:#fff; color:var(--ink); max-width:420px; }
+  .mv-btns { display:flex; gap:6px; margin-left:auto; }
+  .mv-btns button { font:inherit; font-size:.9em; padding:3px 11px; border:1px solid var(--line);
+                    border-radius:6px; background:#fff; color:#444; cursor:pointer; line-height:1.4; }
+  .mv-btns button:hover { border-color:var(--accent); color:var(--accent); }
+  .mv-btns button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+  /* viewport */
+  #viewport { position:relative; width:100%; height:660px; border:1px solid #cfd6e0; border-radius:6px;
+              overflow:hidden; background:#fcfcfd; cursor:crosshair;
+              background-image:radial-gradient(#eef1f6 1px, transparent 1px); background-size:24px 24px; }
+  #viewport.panning { cursor:grabbing; }
+  #gfx, #ovl { position:absolute; left:0; top:0; width:100%; height:100%; }
+  #ovl { pointer-events:none; }
+  /* fullscreen (click to expand): fill the screen and re-enable scroll-zoom */
+  #viewport:fullscreen { width:100vw; height:100vh; border-radius:0; }
+
+  /* embed: scroll over the graph must NOT zoom (it traps the host page's scroll);
+     instead a click expands to fullscreen where wheel-zoom is re-enabled. The hint
+     badge advertises this; it rides on top of the graph but lets clicks pass through. */
+  .mv-fs-hint { display:none; }
+  body.embed .mv-fs-hint { position:absolute; right:14px; bottom:10px; display:block;
+    font-size:.8em; color:#778; background:rgba(255,255,255,.88); border:1px solid var(--line);
+    border-radius:6px; padding:3px 9px; pointer-events:none; z-index:3; }
+  body.embed #viewport { cursor:zoom-in; }
+  body.embed #viewport:fullscreen { cursor:crosshair; }
+  body.embed #viewport.panning { cursor:grabbing; }
+
+  /* morph preview */
+  #preview { position:absolute; right:14px; top:14px; width:228px; background:#fff;
+             border:1px solid var(--line); border-radius:8px; padding:10px; box-shadow:0 2px 10px rgba(0,0,0,.08); }
+  #preview canvas { width:208px; height:208px; display:block; background:#000; border-radius:5px; }
+  #preview .lbl { font-size:.9em; margin-top:7px; color:#555; line-height:1.35; }
+  #preview .lbl b { color:var(--ink); } #preview .pct { color:var(--accent); font-weight:700; }
+  #preview .arrow { color:#bbb; } #preview.empty { opacity:.5; }
+  #preview .hint { color:var(--muted); }
+
+  /* CPPN topology-morph inset (same look as the "Explore a CPPN" graph) */
+  #graphinset { position:absolute; right:14px; bottom:14px; width:300px; background:#fff;
+                border:1px solid var(--line); border-radius:8px; padding:8px 10px 7px;
+                box-shadow:0 2px 10px rgba(0,0,0,.08); pointer-events:none; }
+  #graphinset.empty { display:none; }
+  #graphinset .gi-title { font-size:.82em; color:#555; margin:0 0 6px; line-height:1.3; }
+  #graphinset .gi-title b { color:var(--ink); }
+  #graphinset .gi-frame { position:relative; width:100%; height:280px; border:1px solid #cfd6e0;
+                border-radius:5px; overflow:hidden; background:#fbfcfe;
+                background-image:radial-gradient(#e7edf6 1px, transparent 1px); background-size:18px 18px; }
+  #graphinset canvas { position:absolute; left:0; top:0; width:100%; height:100%; }
+
+  .mv-legend { position:absolute; left:14px; top:12px; font-size:.85em; color:#667; background:rgba(255,255,255,.85);
+               border:1px solid var(--line); border-radius:6px; padding:5px 9px; line-height:1.6; }
+  .mv-legend .dot { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; margin-right:4px; }
+  .fps { position:absolute; left:14px; bottom:10px; font-size:.8em; color:#aab; font-variant-numeric:tabular-nums; }
+  .mv-note { color:var(--muted); font-size:.85em; margin-top:14px; line-height:1.5; }
+  .mv-note code { background:#f4f4f6; padding:1px 5px; border-radius:4px; }
+  .mv-meta { color:var(--muted); font-size:.85em; }
+
+  /* embedded-figure mode (?embed=1): drop the page chrome, keep controls + graph */
+  body.embed { background:transparent; margin:0; }
+  body.embed .mv-wrap { padding:8px 12px 12px; max-width:none; }
+  body.embed .mv-wrap h1, body.embed .mv-wrap .lede, body.embed .mv-note { display:none; }
+  body.embed #viewport { height:640px; }
+</style>
+</head>
+<body>
+<div class="mv-wrap">
+  <h1>Scrubbable phylogeny</h1>
+  <!-- <p class="lede">Each run's archive is a branching family tree of CPPN images. Here it is laid out as a
+    force-directed graph&mdash;pick an <b>experimental condition</b>, then sweep the cursor over the graph:
+    the probe snaps to the nearest branch and renders the live <b>morph</b> from parent to child. Founders
+    (purple) trace back to the random initial CPPN they grew from&mdash;and every random init in turn
+    grows out of a single neutral <b>grey</b> seed at the centre. Walk is on by default: a ball travels
+    the branches toward your cursor, spending equal time on every image&rarr;image morph (so it lingers
+    where two pictures are far apart in the layout and darts where they're close).</p> -->
+
+  <div class="mv-controls">
+    <label for="runsel">Condition:</label>
+    <select id="runsel"></select>
+    <span class="mv-meta" id="meta"></span>
+    <span class="mv-btns">
+      <button id="btn-fit">Fit</button>
+      <button id="btn-in">Zoom +</button>
+      <button id="btn-out">Zoom −</button>
+      <button id="btn-walk">Walk: off</button>
+    </span>
+  </div>
+
+  <div id="viewport">
+    <canvas id="gfx"></canvas>
+    <canvas id="ovl"></canvas>
+    <div class="mv-legend">
+      <span class="dot" style="background:#6479b6"></span>published image<br>
+      <span class="dot" style="background:#c44ad6"></span>random-init ancestor
+    </div>
+    <div id="preview" class="empty"><canvas id="pvc" width="256" height="256"></canvas>
+      <div class="lbl hint">Move over a branch to morph</div></div>
+    <div id="graphinset" class="empty">
+      <!-- <div class="gi-title">CPPN <b>topology</b> — same image, drawn by a morphing network</div> -->
+      <div class="gi-frame"><canvas id="ginsetc"></canvas></div>
+    </div>
+    <div class="fps" id="fps"></div>
+    <div class="mv-fs-hint" id="fsHint">Click to expand · scroll to zoom</div>
+  </div>
+  <p class="mv-note">Pan: drag · Zoom: wheel · <b>Walk</b> (<kbd>w</kbd>) sends a ball gliding along the
+    branches toward your cursor (it can only travel the edges, so it routes through the tree); with it off, the morph snaps to the closest branch under your cursor.
+    Morphs are rendered on the GPU from the genomes (a CPPN compiled to a fragment shader); nothing is pre-rendered.</p>
+</div>
+
+<script src="cppn.js"></script>
+<script src="weight-cmap.js"></script>
+<script src="morph-graph-inset.js"></script>
+<script>
+(function () {
+  const vp = document.getElementById('viewport');
+  const gfx = document.getElementById('gfx'), gctx = gfx.getContext('2d');
+  const ovl = document.getElementById('ovl'), octx = ovl.getContext('2d');
+  const pvc = document.getElementById('pvc'), pctx = pvc.getContext('2d');
+  const preview = document.getElementById('preview'), lblEl = preview.querySelector('.lbl'), fpsEl = document.getElementById('fps');
+  const insetWrap = document.getElementById('graphinset');
+  const gInset = PB.MorphGraphInset(document.getElementById('ginsetc'));
+
+  let NODES = null, BBOX = null, GEN = null, RUN = null, edges = [], nodeIds = [];
+  // GEN is fetched async and lags the (tiny) layout, so for a beat the graph/walk are live
+  // while genomes are still downloading. genErr distinguishes "still loading" (GEN null,
+  // no error) from "genuinely unavailable" (fetch failed) so the preview shows the right note
+  // instead of falsely crying "unavailable" during the human archive's 16 MB genome load.
+  let genErr = false;
+
+  async function fetchGz(url) { const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+    const s = r.body.pipeThrough(new DecompressionStream('gzip')); return JSON.parse(await new Response(s).text()); }
+
+  // HF archive base for on-demand published genomes (mirrors breed/pbsite.js). The
+  // ?archiveBase= override lets collaborators point at a local proxy for the private
+  // dataset; the blog forwards it into this page's URL when embedding.
+  const HF_BASE = 'https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive/resolve/main';
+  // Only honour the override for a LOCAL mirror (`.`/same-origin/localhost); ignore
+  // any other host so a crafted ?archiveBase= link can't repoint fetches at an
+  // attacker (mirrors breed/pbsite.js _safeBase).
+  function archiveBase() {
+    let o = new URLSearchParams(location.search).get('archiveBase');
+    if (!o || o === '.') return (o || HF_BASE).replace(/\/$/, '');
+    const withScheme = /^(https?:)?\/\//.test(o) ? o : 'http://' + o;
+    let ok = false;
+    try { const h = new URL(withScheme, location.href).hostname;
+      ok = h === location.hostname || h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+    } catch (e) {}
+    return (ok ? withScheme : HF_BASE).replace(/\/$/, '');
+  }
+
+  // ===========================================================================
+  //  WebGL morph engine (shared offscreen; one program per edge, LRU-capped)
+  // ===========================================================================
+  const glCanvas = document.createElement('canvas'); glCanvas.width = glCanvas.height = 256;
+  let gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
+  let glQuad = null;
+  if (gl) { glQuad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, glQuad);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW); }
+
+  const GLSL_ACT = {
+    identity: (s) => s,
+    sin:      (s) => `sin(clamp(${s},-60.0,60.0))`,
+    cos:      (s) => `cos(clamp(${s},-60.0,60.0))`,
+    sigmoid:  (s) => `(2.0/(1.0+exp(-clamp(${s},-60.0,60.0)))-1.0)`,
+    gaussian: (s) => { const z = `clamp(${s},-60.0,60.0)`; return `(2.0*exp(-(${z})*(${z}))-1.0)`; },
+  };
+  const glslAct = (n) => GLSL_ACT[n] ? n : 'identity';
+
+  function buildSuperset(parentJ, childJ) {
+    const parent = genomeFromJSON(parentJ), child = genomeFromJSON(childJ);
+    const sup = cloneGenome(child), nodePairs = {}, nodeIn = {};
+    // nodeIn[k]: 'both' (in parent ∩ child), 'child' (appears), 'parent' (disappears).
+    // Drives the graph inset's node fade-in / fade-out across the morph.
+    for (const [k, n] of child.nodes) { const pn = parent.nodes.get(k); nodePairs[k] = [pn ? pn.activation : n.activation, n.activation]; nodeIn[k] = pn ? 'both' : 'child'; }
+    for (const [k, n] of parent.nodes) if (!sup.nodes.has(k)) { sup.nodes.set(k, { activation: n.activation, affinity: n.affinity, input: n.input }); nodePairs[k] = [n.activation, n.activation]; nodeIn[k] = 'parent'; }
+    const connStats = {}, keys = new Set([...sup.conns.keys(), ...parent.conns.keys()]);
+    for (const key of keys) {
+      const pc = parent.conns.get(key), cc = child.conns.get(key);
+      const sw = pc ? pc.weight : 0, se = pc ? pc.enabled : false;
+      // child has the gene → use its weight/enabled; parent-only gene → fade it
+      // out (ee=false) so a grey-root edge vanishes by t=1 rather than persisting.
+      const ew = cc ? cc.weight : sw, ee = cc ? cc.enabled : false;
+      const ref = cc || pc;
+      connStats[key] = { sw, ew, se, ee, i: ref.i, o: ref.o };
+      if (!sup.conns.has(key)) sup.conns.set(key, { i: ref.i, o: ref.o, weight: sw, enabled: se });
+    }
+    return { sup, nodePairs, connStats, nodeIn };
+  }
+
+  function buildGLProgram(sup, nodePairs) {
+    const conns = [...sup.conns.values()];
+    const connIndex = new Map(conns.map((c, i) => [c.i + ',' + c.o, i]));
+    const allLayers = feedForwardLayers(INPUT_KEYS, OUTPUT_KEYS, conns.map(c => [c.i, c.o]));
+    const nodeList = []; for (const layer of allLayers) for (const n of layer) nodeList.push(n);
+    const declared = new Set(nodeList);
+    for (const k of OUTPUT_KEYS) if (!declared.has(k)) { nodeList.push(k); declared.add(k); }
+    const blendIndex = new Map(nodeList.map((k, i) => [k, i]));
+    const varName = (k) => k < 0 ? ({ '-1': 'IN_X', '-2': 'IN_Y', '-3': 'IN_D', '-4': '1.0' })[String(k)] : `n_${k}`;
+    let body = '';
+    for (const node of nodeList) {
+      const links = conns.filter(c => c.o === node && (c.i < 0 || declared.has(c.i)));
+      const sum = links.length ? links.map(c => `W[${connIndex.get(c.i + ',' + c.o)}]*${varName(c.i)}`).join('+') : '0.0';
+      const [sa, ea] = nodePairs[node] || ['identity', 'identity'];
+      body += `  { float S=(${sum}); n_${node}=mix(${GLSL_ACT[glslAct(sa)]('S')},${GLSL_ACT[glslAct(ea)]('S')},BL[${blendIndex.get(node)}]); }\n`;
+    }
+    const frag = `precision highp float;
+varying vec2 vUV;
+uniform float W[${Math.max(conns.length,1)}];
+uniform float BL[${Math.max(nodeList.length,1)}];
+uniform float uColor;
+vec3 hsv2rgb(vec3 c){ vec4 K=vec4(1.,2./3.,1./3.,3.); vec3 p=abs(fract(c.xxx+K.xyz)*6.-K.www); return c.z*mix(K.xxx,clamp(p-K.xxx,0.,1.),c.y); }
+void main(){
+  float IN_X=(vUV.x*2.0-1.0);
+  float IN_Y=(1.0-vUV.y*2.0);
+  float IN_D=length(vec2(IN_X,IN_Y))*1.41421356;
+${nodeList.map(k => `  float n_${k}=0.0;`).join('\n')}
+${body}
+  float h=fract(n_0+1.0), s=clamp(n_1,0.0,1.0), v=clamp(abs(n_2),0.0,1.0);
+  vec3 col = uColor>0.5 ? hsv2rgb(vec3(h,s,v)) : vec3(v);
+  gl_FragColor=vec4(col,1.0);
+}`;
+    const vert = `attribute vec2 aPos; varying vec2 vUV; void main(){ vUV=aPos*0.5+0.5; gl_Position=vec4(aPos,0.0,1.0); }`;
+    const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vert)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, frag));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    return { prog, conns, connIndex, nodeList, blendIndex,
+      locW: gl.getUniformLocation(prog,'W'), locBL: gl.getUniformLocation(prog,'BL'),
+      locColor: gl.getUniformLocation(prog,'uColor'), locPos: gl.getAttribLocation(prog,'aPos') };
+  }
+
+  function glFrameUniforms(P, connStats, nodePairs, t) {
+    const W = new Float32Array(P.conns.length);
+    for (const c of P.conns) { const s = connStats[c.i + ',' + c.o];
+      let w; if (s.se === s.ee) w = (1-t)*s.sw + t*s.ew; else if (s.se && !s.ee) w = s.sw*(1-t); else w = s.ew*t;
+      W[P.connIndex.get(c.i + ',' + c.o)] = w; }
+    const BL = new Float32Array(P.nodeList.length);
+    for (const k of P.nodeList) { const [sa, ea] = nodePairs[k] || []; BL[P.blendIndex.get(k)] = (sa === ea) ? 1.0 : t; }
+    return { W, BL };
+  }
+
+  const edgeCache = new Map(); const LRU_MAX = 160;
+  function getEdge(childId) {
+    if (edgeCache.has(childId)) { const v = edgeCache.get(childId); edgeCache.delete(childId); edgeCache.set(childId, v); return v; }
+    const pid = NODES[childId].p;
+    if (!GEN || !GEN[pid] || !GEN[childId]) return null;
+    const sup = buildSuperset(GEN[pid], GEN[childId]);
+    let P = null; try { P = buildGLProgram(sup.sup, sup.nodePairs); } catch (e) { console.error('shader', childId, e); }
+    const rec = { ...sup, P, col: NODES[childId].col !== false };
+    edgeCache.set(childId, rec);
+    if (edgeCache.size > LRU_MAX) { const o = edgeCache.get(edgeCache.keys().next().value);
+      if (o && o.P && gl) gl.deleteProgram(o.P.prog); edgeCache.delete(edgeCache.keys().next().value); }
+    return rec;
+  }
+
+  let lastMs = 0;
+  function renderMorph(childId, t) {
+    const e = getEdge(childId); if (!e || !e.P || !gl) return false;
+    const t0 = performance.now();
+    const { W, BL } = glFrameUniforms(e.P, e.connStats, e.nodePairs, t);
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height); gl.useProgram(e.P.prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, glQuad); gl.enableVertexAttribArray(e.P.locPos);
+    gl.vertexAttribPointer(e.P.locPos, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform1fv(e.P.locW, W); gl.uniform1fv(e.P.locBL, BL); gl.uniform1f(e.P.locColor, e.col ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    pctx.clearRect(0, 0, pvc.width, pvc.height); pctx.drawImage(glCanvas, 0, 0, pvc.width, pvc.height);
+    lastMs = performance.now() - t0;
+    return true;
+  }
+
+  // ===========================================================================
+  //  view transform + graph drawing
+  // ===========================================================================
+  let zoom = 1, panX = 0, panY = 0, BASE = 100, DPR = Math.min(2, window.devicePixelRatio || 1);
+  const nodeScreen = {};
+  function resize() { const w = vp.clientWidth, h = vp.clientHeight;
+    for (const c of [gfx, ovl]) { c.width = w * DPR; c.height = h * DPR; }
+    gctx.setTransform(DPR,0,0,DPR,0,0); octx.setTransform(DPR,0,0,DPR,0,0); drawGraph();
+    if (gInset) gInset.resize(); }
+  function worldToScreen(wx, wy) { return [ (wx - BBOX.minx) * BASE * zoom + panX, (BBOX.maxy - wy) * BASE * zoom + panY ]; }
+  function recomputeScreens() { for (const id of nodeIds) { const n = NODES[id]; nodeScreen[id] = worldToScreen(n.x, n.y); } }
+
+  function drawGraph() {
+    if (!NODES) return;
+    recomputeScreens();
+    const w = vp.clientWidth, h = vp.clientHeight; gctx.clearRect(0, 0, w, h);
+    gctx.lineWidth = Math.max(0.6, 0.8 * zoom); gctx.strokeStyle = 'rgba(70,95,150,0.7)';
+    gctx.beginPath();
+    for (const e of edges) { const a = nodeScreen[e.parent], b = nodeScreen[e.child]; if (!a || !b) continue;
+      gctx.moveTo(a[0], a[1]); gctx.lineTo(b[0], b[1]); }
+    gctx.stroke();
+    const r = Math.max(1, 1.6 * zoom);
+    for (const id of nodeIds) { const s = nodeScreen[id], n = NODES[id];
+      gctx.fillStyle = n.is_init ? '#9aa0a6' : n.is_anc ? '#c44ad6' : '#6479b6';
+      const rr = n.is_init ? r + 3 : n.is_anc ? r + 1.2 : r;
+      gctx.beginPath(); gctx.arc(s[0], s[1], rr, 0, 6.2832); gctx.fill();
+      if (n.is_init) { gctx.lineWidth = Math.max(1, 0.8*zoom); gctx.strokeStyle = '#555'; gctx.stroke(); } }
+  }
+  function fit() { if (!BBOX) return; const w = vp.clientWidth, h = vp.clientHeight, m = 36;
+    const gw = (BBOX.maxx - BBOX.minx) || 1, gh = (BBOX.maxy - BBOX.miny) || 1;
+    zoom = Math.min((w - 2*m) / (gw * BASE), (h - 2*m) / (gh * BASE));
+    panX = (w - gw * BASE * zoom) / 2; panY = (h - gh * BASE * zoom) / 2; drawGraph(); }
+  function zoomBy(f, cx, cy) { cx = cx==null?vp.clientWidth/2:cx; cy = cy==null?vp.clientHeight/2:cy;
+    const z2 = Math.max(0.02, Math.min(60, zoom * f)); panX = cx - (cx - panX)*(z2/zoom); panY = cy - (cy - panY)*(z2/zoom); zoom = z2; drawGraph(); }
+
+  // No distance cap: with walk off we always snap to the closest point on the
+  // closest edge while the cursor is anywhere on the canvas (mousemove only
+  // fires inside it), so there is never a dead zone between branches.
+  function nearestEdge(px, py) {
+    let best = null, bestD = Infinity, bestT = 0;
+    for (const e of edges) { const a = nodeScreen[e.parent], b = nodeScreen[e.child]; if (!a || !b) continue;
+      const dx = b[0]-a[0], dy = b[1]-a[1], L2 = dx*dx+dy*dy;
+      let t = L2 ? ((px-a[0])*dx + (py-a[1])*dy) / L2 : 0; t = t<0?0:t>1?1:t;
+      const cx = a[0]+t*dx, cy = a[1]+t*dy, d = Math.hypot(px-cx, py-cy);
+      if (d < bestD) { bestD = d; best = e; bestT = t; } }
+    return best ? { edge: best, t: bestT } : null;
+  }
+  function drawOverlay(hit) { const w = vp.clientWidth, h = vp.clientHeight; octx.clearRect(0, 0, w, h); if (!hit) return;
+    const a = nodeScreen[hit.edge.parent], b = nodeScreen[hit.edge.child];
+    octx.strokeStyle = '#FF6C00'; octx.lineWidth = 2.4; octx.beginPath(); octx.moveTo(a[0],a[1]); octx.lineTo(b[0],b[1]); octx.stroke();
+    octx.fillStyle = '#9aa2b1'; for (const p of [a,b]) { octx.beginPath(); octx.arc(p[0],p[1],3,0,6.2832); octx.fill(); }
+    const px = a[0]+hit.t*(b[0]-a[0]), py = a[1]+hit.t*(b[1]-a[1]);
+    octx.fillStyle = '#fff'; octx.strokeStyle = '#FF6C00'; octx.lineWidth = 2.5;
+    octx.beginPath(); octx.arc(px, py, 6, 0, 6.2832); octx.fill(); octx.stroke(); }
+
+  function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function renderBranch(parentId, childId, branchT) {
+    const ok = renderMorph(childId, branchT);
+    preview.classList.toggle('empty', !ok);
+    // mirror the image morph with a live CPPN-topology morph in the inset
+    const e = ok ? getEdge(childId) : null;
+    if (e && e.sup) { gInset.update(childId, e, branchT); insetWrap.classList.remove('empty'); }
+    else { gInset.clear(); insetWrap.classList.add('empty'); }
+    const isAnc = !!NODES[parentId].is_anc;
+    const pt = isAnc ? 'random init (gen 0)' : (NODES[parentId].t || parentId), ct = NODES[childId].t || childId;
+    const notOk = (!GEN && !genErr) ? 'loading genomes…' : 'genome unavailable for this branch';
+    lblEl.innerHTML = ok ? `<b>${esc(pt)}</b> <span class="arrow">→</span> <b>${esc(ct)}</b><br><span class="pct">${Math.round(branchT*100)}%</span> along branch`
+                         : `<span class="hint">${notOk}</span>`;
+    fpsEl.textContent = ok ? `${lastMs.toFixed(2)} ms · ${(1000/Math.max(lastMs,0.001)).toFixed(0)} fps` : '';
+    return ok;
+  }
+  function showMorph(hit) { renderBranch(hit.edge.parent, hit.edge.child, hit.t); }
+
+  // ===========================================================================
+  //  walk mode — a ball glides along edges at constant speed toward the cursor
+  // ===========================================================================
+  const WALK_RATE = 1.1;                  // morph-fraction per second (≈0.9 s per image→image transition)
+  const cursor = { x: 0, y: 0, inside: false };
+  let walking = false, ball = null, rafId = 0, lastTs = 0, childMap = {}, booted = false;
+
+  // Neutral grey "init" super-root machinery. It joins every founder/ancestor into a
+  // single connected tree so walk mode can glide continuously between any two branches,
+  // morphing through the neutral grey seed at the hub rather than teleporting across
+  // disconnected trees. Essential for the human archive (1714 independent founders): with
+  // the root stripped, the forest fragments into 1714 trees and cross-tree walks flip
+  // drastically between unrelated images/topologies. On layouts that bake __init__ we keep
+  // it; on older ones addPostHocInit synthesizes one at the ancestor centroid.
+  let greyRoot = true;
+  const INIT_KEY = '__init__';
+  const GREY_GENOME = { nodes: [
+      { key: 0, activation: 'identity', affinity: 'color', input: false },
+      { key: 1, activation: 'identity', affinity: 'color', input: false },
+      { key: 2, activation: 'identity', affinity: 'grey',  input: false } ],
+    connections: [ { from: -4, to: 2, weight: 0.5, enabled: true } ] };
+  // Newer layouts bake __init__ into the neato graph (real centred node, ancestors
+  // already parented to it). Older layouts don't — addPostHocInit synthesizes one
+  // at the ancestor centroid. removeInit strips a baked init when the toggle is off.
+  // Both touch NODES only; loadRun rebuilds edges/childMap from p-pointers afterwards.
+  function addPostHocInit() {
+    const ancs = nodeIds.filter((id) => NODES[id].is_anc);
+    if (!ancs.length) return;
+    let sx = 0, sy = 0; for (const id of ancs) { sx += NODES[id].x; sy += NODES[id].y; }
+    NODES[INIT_KEY] = { x: sx/ancs.length, y: sy/ancs.length, p: null, is_init: true, t: 'neutral init (grey)' };
+    for (const id of ancs) NODES[id].p = INIT_KEY;
+  }
+  function removeInit() {
+    for (const id of nodeIds) if (NODES[id].p === INIT_KEY) NODES[id].p = null;   // ancestors AND direct founders
+    delete NODES[INIT_KEY];
+  }
+  const edgeChild = (a, b) => (NODES[a].p === b ? a : b);   // the child of an adjacent pair
+  function neighborsOf(id) { const out = childMap[id] ? childMap[id].slice() : []; const p = NODES[id].p;
+    if (p != null && NODES[p]) out.push(p); return out; }
+  function nearestNode(x, y) { let best = null, bd = Infinity;
+    for (const id of nodeIds) { const s = nodeScreen[id]; if (!s) continue; const d = Math.hypot(s[0]-x, s[1]-y); if (d < bd) { bd = d; best = id; } }
+    return best; }
+  // The closest point on ANY edge to (x,y) — uncapped, so the ball always has a
+  // global target to route toward (same closest-edge search as nearestEdge).
+  function nearestEdgeGlobal(x, y) {
+    let best = null, bestD = Infinity, bestT = 0;
+    for (const e of edges) { const a = nodeScreen[e.parent], b = nodeScreen[e.child]; if (!a || !b) continue;
+      const dx = b[0]-a[0], dy = b[1]-a[1], L2 = dx*dx+dy*dy;
+      let t = L2 ? ((x-a[0])*dx + (y-a[1])*dy) / L2 : 0; t = t<0?0:t>1?1:t;
+      const cx = a[0]+t*dx, cy = a[1]+t*dy, d = Math.hypot(x-cx, y-cy);
+      if (d < bestD) { bestD = d; best = e; bestT = t; } }
+    return best ? { parent: best.parent, child: best.child, t: bestT } : null;
+  }
+  // BFS the tree from the target edge's two endpoints (without crossing the edge
+  // itself). nextHop[X] = the neighbour of X one step toward the target edge;
+  // dist[X] = hop count. Recomputed only when the target edge changes.
+  let routing = null;
+  function buildRouting(P, C) {
+    const nextHop = {}, dist = {}, q = []; let head = 0;
+    nextHop[P] = null; dist[P] = 0; q.push(P);
+    nextHop[C] = null; dist[C] = 0; q.push(C);
+    while (head < q.length) { const x = q[head++];
+      for (const n of neighborsOf(x)) {
+        if ((x === P && n === C) || (x === C && n === P)) continue;   // don't cross the target edge
+        if (dist[n] !== undefined) continue;
+        dist[n] = dist[x] + 1; nextHop[n] = x; q.push(n); } }
+    return { P, C, nextHop, dist };
+  }
+  function initBall() { if (!NODES || !nodeIds.length) { ball = null; routing = null; return; } recomputeScreens();
+    const cx = cursor.inside ? cursor.x : vp.clientWidth/2, cy = cursor.inside ? cursor.y : vp.clientHeight/2;
+    ball = { from: nearestNode(cx, cy), to: null, t: 0 }; routing = null; }
+  // Route the ball along tree edges to the closest point on the closest edge.
+  // It can only leave an edge through one of its two endpoints, so at every step
+  // it heads for whichever endpoint is nearer (in hops) to the target edge —
+  // then slides along the target edge to the exact closest parameter and parks.
+  function walkStep(dt) {
+    if (!ball || !NODES) return; recomputeScreens();
+    if (panning && panMoved) return;                            // hold the ball still while dragging the view
+    if (!cursor.inside) return;                                 // no cursor → idle
+    const hit = nearestEdgeGlobal(cursor.x, cursor.y); if (!hit) return;
+    const P = hit.parent, C = hit.child, destT = hit.t;
+    if (!routing || routing.P !== P || routing.C !== C) routing = buildRouting(P, C);
+    const dist = routing.dist, INF = Infinity;
+    // The forest has one tree per gen-0 ancestor, so the branch under the cursor may
+    // sit in a different tree than the ball. The ball can only travel edges and could
+    // never reach it — leaving it stranded and idle. Hop it to the node nearest the
+    // cursor (in the cursor's tree) so it ALWAYS resumes walking toward the cursor,
+    // however far away that branch is.
+    if (dist[ball.from] === undefined || (ball.to != null && dist[ball.to] === undefined)) {
+      const seed = nearestNode(cursor.x, cursor.y);
+      ball = { from: (seed != null && dist[seed] !== undefined) ? seed : P, to: null, t: 0 };
+    }
+    // Pace by MORPH PROGRESS, not 2D screen length: ball.t is the interpolation
+    // fraction between the two images, so advancing it at a fixed rate per second
+    // means every image→image transition takes the same time (≈1/WALK_RATE s),
+    // regardless of how long or short that edge looks in the projection.
+    let tb = WALK_RATE * dt, guard = 0;
+    while (tb > 1e-6 && guard++ < 512) {
+      if (ball.to == null) {                                     // resting at node ball.from
+        const X = ball.from;
+        if (X === P || X === C) { ball.to = (X === P) ? C : P; ball.t = 0; }   // step onto the target edge
+        else { const nx = routing.nextHop[X]; if (nx == null) break; ball.to = nx; ball.t = 0; }   // null → island, idle
+      }
+      const A = ball.from, B = ball.to;
+      if (!nodeScreen[A] || !nodeScreen[B]) { ball.to = null; break; }
+      const isTarget = (A === P && B === C) || (A === C && B === P);
+      const destParam = isTarget ? (A === P ? destT : 1 - destT)
+                                 : ((dist[B] ?? INF) <= (dist[A] ?? INF) ? 1 : 0);   // head to closer endpoint
+      const dir = destParam >= ball.t ? 1 : -1;
+      const remain = Math.abs(destParam - ball.t);              // morph-fraction left to the stop point
+      if (remain <= 1e-6) {                                      // already at the stop point
+        ball.t = destParam;
+        if (isTarget) { tb = 0; break; }                        // parked on the target edge → idle
+        ball.from = destParam >= 0.999 ? B : A; ball.to = null; continue;   // reached an endpoint node
+      }
+      if (tb < remain) { ball.t += dir * tb; tb = 0; }
+      else { tb -= remain; ball.t = destParam;
+        if (isTarget) { tb = 0; break; }
+        ball.from = destParam >= 0.999 ? B : A; ball.to = null; }
+    }
+  }
+  function drawWalkOverlay() {
+    const w = vp.clientWidth, h = vp.clientHeight; octx.clearRect(0, 0, w, h);
+    if (!ball) return;
+    const sf = nodeScreen[ball.from]; if (!sf) return;
+    let bx = sf[0], by = sf[1];
+    if (ball.to != null && nodeScreen[ball.to]) { const st = nodeScreen[ball.to];
+      bx = sf[0] + ball.t*(st[0]-sf[0]); by = sf[1] + ball.t*(st[1]-sf[1]);
+      octx.strokeStyle = '#FF6C00'; octx.lineWidth = 2.4; octx.beginPath(); octx.moveTo(sf[0],sf[1]); octx.lineTo(st[0],st[1]); octx.stroke(); }
+    if (cursor.inside) { octx.strokeStyle = 'rgba(255,108,0,0.28)'; octx.setLineDash([4,4]); octx.lineWidth = 1.2;
+      octx.beginPath(); octx.moveTo(bx,by); octx.lineTo(cursor.x,cursor.y); octx.stroke(); octx.setLineDash([]); }
+    octx.fillStyle = '#FF6C00'; octx.strokeStyle = '#fff'; octx.lineWidth = 2;
+    octx.beginPath(); octx.arc(bx, by, 7, 0, 6.2832); octx.fill(); octx.stroke();
+  }
+  function walkRender() {
+    let parentId = null, childId = null, branchT = 0;
+    if (ball) {
+      if (ball.to != null) { const c = edgeChild(ball.from, ball.to); childId = c;
+        parentId = (c === ball.from) ? ball.to : ball.from; branchT = (c === ball.to) ? ball.t : 1 - ball.t; }
+      else { const p = NODES[ball.from].p; if (p != null && NODES[p]) { parentId = p; childId = ball.from; branchT = 1; } }
+    }
+    if (childId != null) renderBranch(parentId, childId, branchT);
+    drawWalkOverlay();
+  }
+  function tick(ts) { if (!walking || hostHidden) return;
+    const dt = lastTs ? Math.min(0.05, (ts - lastTs)/1000) : 0.016; lastTs = ts;
+    walkStep(dt); walkRender(); rafId = requestAnimationFrame(tick); }
+  function setWalk(on) {
+    walking = on; const b = document.getElementById('btn-walk');
+    b.classList.toggle('on', on); b.textContent = 'Walk: ' + (on ? 'on' : 'off');
+    if (on) { frozen = false;
+      initBall(); lastTs = 0; if (!hostHidden) rafId = requestAnimationFrame(tick); }
+    else { cancelAnimationFrame(rafId); octx.clearRect(0, 0, vp.clientWidth, vp.clientHeight);
+      preview.classList.add('empty'); lblEl.innerHTML = '<span class="hint">Move over a branch to morph</span>';
+      gInset.clear(); insetWrap.classList.add('empty'); }
+  }
+  // When embedded as a figure, the host page postMessages visibility so we can
+  // freeze the rAF loop while scrolled offscreen (saves GPU; nothing to watch).
+  let hostHidden = false;
+  window.addEventListener('message', (e) => {
+    if (!e.data || e.data.type !== 'pbwalk-visible') return;
+    const vis = !!e.data.visible;
+    if (!vis) { hostHidden = true; cancelAnimationFrame(rafId); }
+    else if (hostHidden) { hostHidden = false; if (walking) { lastTs = 0; rafId = requestAnimationFrame(tick); } }
+  });
+
+  // ---------- interaction ----------
+  // Embedded as a figure (?embed=1, e.g. the archive viewer's Morph mode), the wheel must
+  // NOT zoom — that traps the host page's scroll. Instead a click expands the viewport to
+  // fullscreen, where wheel-zoom is re-enabled (mirrors the loupe→click-fullscreen→click-exit
+  // flow of the viewer's other modes). The standalone page keeps wheel-zoom everywhere.
+  const EMBED = new URLSearchParams(location.search).has('embed');
+  const isFs = () => document.fullscreenElement === vp;
+  function toggleFs() {
+    if (isFs()) { document.exitFullscreen && document.exitFullscreen(); }
+    else if (vp.requestFullscreen) { const p = vp.requestFullscreen(); if (p && p.catch) p.catch(() => {}); }
+  }
+  document.addEventListener('fullscreenchange', () => {
+    const fs = isFs();
+    const hint = document.getElementById('fsHint');
+    if (hint) hint.textContent = fs ? 'Click to exit · scroll to zoom · drag to pan' : 'Click to expand · scroll to zoom';
+    resize(); fit();                                   // viewport size changed → refit the graph
+  });
+
+  // Pan gestures: shift/right/middle drag pans immediately; a plain LEFT drag also pans,
+  // but only after crossing panThresh px so a clean left-click still toggles fullscreen
+  // when embedded (a drag sets panMoved, which the click handler treats as "not a click").
+  let frozen = false, panning = false, panMoved = false, sx=0, sy=0, spx=0, spy=0, panThresh = 0;
+  function localXY(e){ const r = vp.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+  vp.addEventListener('mousemove', (e) => {
+    const [x, y] = localXY(e); cursor.x = x; cursor.y = y; cursor.inside = true;
+    if (panning) {
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (panMoved || Math.abs(dx) >= panThresh || Math.abs(dy) >= panThresh) {
+        if (!panMoved) vp.classList.add('panning');   // confirmed drag → grab cursor (deferred for left-drag)
+        panMoved = true; panX = spx + dx; panY = spy + dy; drawGraph();
+        return;                                       // active pan owns the pointer; don't also hover/walk-morph
+      }
+    }
+    if (walking) return;                       // walk loop drives the morph; just track cursor
+    if (frozen || !NODES) return;
+    const hit = nearestEdge(x, y); drawOverlay(hit); if (hit) showMorph(hit); });
+  vp.addEventListener('mouseenter', () => { cursor.inside = true; });
+  vp.addEventListener('mouseleave', () => { cursor.inside = false; });
+  vp.addEventListener('mousedown', (e) => {
+    const chorded = e.shiftKey || e.button === 2 || e.button === 1;
+    const leftDrag = e.button === 0 && !e.shiftKey;   // plain left → drag-to-pan (confirmed past panThresh)
+    if (!chorded && !leftDrag) return;
+    panning = true; panMoved = false; sx = e.clientX; sy = e.clientY; spx = panX; spy = panY;
+    panThresh = chorded ? 0 : 4;                       // chorded pans on any move; left needs a few px
+    if (chorded) { vp.classList.add('panning'); e.preventDefault(); } });
+  window.addEventListener('mouseup', () => { panning = false; vp.classList.remove('panning'); });
+  // A clean left-click (not a pan-drag) toggles fullscreen when embedded.
+  vp.addEventListener('click', (e) => {
+    if (!EMBED || e.button !== 0 || e.shiftKey) return;
+    if (panMoved) { panMoved = false; return; }       // tail of a shift/middle drag, not a click
+    toggleFs();
+  });
+  vp.addEventListener('contextmenu', (e) => e.preventDefault());
+  vp.addEventListener('wheel', (e) => {
+    if (EMBED && !isFs()) return;                      // embedded & not fullscreen → let the host page scroll
+    e.preventDefault(); const [x,y] = localXY(e);
+    let dy = e.deltaY; if (e.deltaMode === 1) dy *= 16; else if (e.deltaMode === 2) dy *= 400; dy = Math.max(-60, Math.min(60, dy));
+    zoomBy(Math.exp(-dy * 0.0012), x, y); }, { passive: false });
+  document.getElementById('btn-fit').onclick = fit;
+  document.getElementById('btn-in').onclick = () => zoomBy(1.25);
+  document.getElementById('btn-out').onclick = () => zoomBy(1/1.25);
+  document.getElementById('btn-walk').onclick = () => setWalk(!walking);
+  // "w" toggles walk mode (ignore when typing in a field).
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'w' && e.key !== 'W') return;
+    const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault(); setWalk(!walking); });
+  window.addEventListener('resize', resize);
+
+  // ---------- run loading ----------
+  async function loadRun(run) {
+    RUN = run; document.getElementById('meta').textContent = 'loading…';
+    edgeCache.clear(); NODES = null; octx && octx.clearRect(0,0,vp.clientWidth,vp.clientHeight);
+    const layout = await fetchGz(`data/morph/${run}/layout.json.gz`);
+    if (RUN !== run) return;
+    NODES = layout.nodes; BBOX = layout.bbox; nodeIds = Object.keys(NODES);
+    // reconcile the grey super-root with the toggle, then build edges from p-pointers
+    const hasInit = NODES[INIT_KEY] !== undefined;
+    if (greyRoot && !hasInit) addPostHocInit();        // old layout: synthesize a centred-ish init
+    else if (!greyRoot && hasInit) removeInit();        // baked layout, toggle off: strip it
+    nodeIds = Object.keys(NODES); edges = []; childMap = {};
+    for (const id of nodeIds) { const p = NODES[id].p; if (p != null && NODES[p]) { edges.push({ child: id, parent: p });
+      (childMap[p] = childMap[p] || []).push(id); } }
+    const nAnc = nodeIds.filter(id => NODES[id].is_anc).length, nImg = nodeIds.length - nAnc - (NODES[INIT_KEY] ? 1 : 0);
+    document.getElementById('meta').textContent = `${nImg.toLocaleString()} images · ${edges.length.toLocaleString()} branches · ${nAnc} gen-0 ancestors`;
+    resize(); fit();
+    if (walking) initBall();
+    GEN = null; genErr = false; loadGenomes(run);
+    if (!booted) { booted = true; setWalk(true); }   // Walk is the default mode
+  }
+
+  // Curated runs bundle a full genomes.json.gz (offline). Every other run pulls its
+  // published genomes from HF on demand and merges the tiny gh-pages ancestor sidecar.
+  async function loadGenomes(run) {
+    let g;
+    try { g = await fetchGz(`data/morph/${run}/genomes.json.gz`); }            // bundled (pub + anc)
+    catch (e1) {
+      try {
+        const [pub, anc] = await Promise.all([
+          fetchGz(`${archiveBase()}/site/${run}/genomes.json.gz`),             // HF published
+          fetchGz(`data/morph/${run}/anc.json.gz`).catch(() => ({})),          // gh-pages ancestors
+        ]);
+        g = Object.assign({}, pub, anc);
+      } catch (e2) { console.warn('genomes unavailable for', run, e2.message);
+        if (RUN === run) genErr = true; return; }                              // real failure → stop saying "loading"
+    }
+    if (RUN !== run) return;                                                    // a newer run started
+    if (NODES && NODES[INIT_KEY]) g[INIT_KEY] = GREY_GENOME;
+    GEN = g;
+  }
+
+  // ---------- boot ----------
+  const _qs = new URLSearchParams(location.search);
+  if (_qs.has('embed')) document.body.classList.add('embed');
+  const _run = _qs.get('run');
+  if (_run) {
+    // Host-driven (e.g. the archive viewer's Morph mode): load exactly this run and
+    // hide the condition picker — the host owns run selection (arc/seed/model).
+    const lab = document.querySelector('label[for="runsel"]'); if (lab) lab.style.display = 'none';
+    document.getElementById('runsel').style.display = 'none';
+    loadRun(_run);
+  } else {
+    fetch('data/morph/manifest.json').then(r => r.json()).then((mf) => {
+      const sel = document.getElementById('runsel'); const groups = {};
+      mf.runs.forEach((r) => { (groups[r.group] = groups[r.group] || []).push(r); });
+      for (const g in groups) { const og = document.createElement('optgroup'); og.label = g;
+        groups[g].forEach((r) => { const o = document.createElement('option'); o.value = r.run; o.textContent = r.label; og.appendChild(o); });
+        sel.appendChild(og); }
+      sel.value = mf.default || mf.runs[0].run;
+      sel.addEventListener('change', () => loadRun(sel.value));
+      loadRun(sel.value);
+    }).catch((e) => { document.getElementById('meta').textContent = 'manifest load error: ' + e.message; console.error(e); });
+  }
+})();
+</script>
+</body>
+</html>
