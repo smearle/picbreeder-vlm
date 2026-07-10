@@ -253,9 +253,16 @@ for hi, h in enumerate(hero_manifest):
         continue
     ref = np.asarray(Image.open(thumb).convert("RGB").resize((MATCH_RES, MATCH_RES)), dtype=np.float64)
 
+    # The teaser provenance names the run that bred this banner image, so it — not
+    # the render-match — is the authority on which VLM published it. (Matching only
+    # recovers the genome; it fails on ~6 heroes whose genomes never left the cluster,
+    # and it can also land on a same-id genome from a different run, since image ids
+    # are per-run counters.) Feeds the "By <model>" link on the detail page.
+    prov_model = None
     cand_paths: list[Path] = []
     prov_path = prov.get(hid + ".png")
     if prov_path:
+        prov_model = model_from_path(prov_path)
         pp = REPO / prov_path.replace("/images/", "/genomes/").replace(".png", ".pkl")
         if pp.exists():
             cand_paths.append(pp)
@@ -284,7 +291,7 @@ for hi, h in enumerate(hero_manifest):
     key = "h_" + hid
     item = {
         "title": hero_title(hid),
-        "model": model_from_path(str(cp)) if mse <= MATCH_MAX_MSE else "gemini-2.5-pro",
+        "model": prov_model or (model_from_path(str(cp)) if mse <= MATCH_MAX_MSE else canon_model),
         "agent": "",
         "gen": None,
         "rating": None,
@@ -484,6 +491,21 @@ json.dump({"runs": _run_table, "users": user_cards},
           open(OUT / "user_cards.json", "w"), separators=(",", ":"))
 print(f"[artists] {sum(len(v) for v in user_cards.values())} publication cards "
       f"across {len(user_cards)} users -> user_cards.json (sprite thumbs, lazy genomes)")
+
+# Per-MODEL publication galleries (the "By <model>" link under every AI-bred image):
+# the same slim-card contract, written to data/model_cards.json. Without this the
+# gallery could only filter the bundled items below — i.e. the canonical run, which
+# is one model — so every other VLM got a gallery of whatever banner picks it owned.
+print("[models] building per-model publication cards (HF-lazy)")
+import sys  # noqa: E402  (local, near use)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_model_cards import build as _build_model_cards  # noqa: E402
+
+_mc = _build_model_cards(verbose=False)
+json.dump(_mc, open(OUT / "model_cards.json", "w"), separators=(",", ":"))
+print(f"[models] {sum(len(m['cards']) for m in _mc['models'].values())} cards across "
+      f"{len(_mc['models'])} models over {len(_mc['runs'])} runs -> model_cards.json")
 
 # Caption-derived categories, mined from the VLM captions as a cumulative
 # bag-of-words over the WHOLE browseable archive — every canonical run that has a
