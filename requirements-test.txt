@@ -1,0 +1,20 @@
+# Just enough to import the evolution core and run tests/ -- deliberately NOT
+# requirements.txt, which pulls torch + vLLM (multi-GB, GPU-oriented) for the VLM
+# backends and the embedding-based evaluations. Nothing under tests/ needs those.
+#
+# The extras beyond the CPPN stack are transitive: picbreeder_vlm.core.archive_manager
+# reaches picbreeder_vlm.vlm.vlm_backends, which wants httpx / google-genai / requests,
+# and picbreeder_vlm.experiments.sweep_configs reaches matplotlib.
+pytest
+
+neat-python==0.92
+hydra-core
+numpy
+Pillow
+
+google-genai
+httpx
+matplotlib
+python-dotenv
+requests
+tqdm
