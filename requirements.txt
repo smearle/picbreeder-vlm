@@ -1,29 +1,45 @@
-graphviz
-google-genai
-hydra-core
-matplotlib
+# Core dependencies: evolution loop, evaluations, and figure/blog tooling.
+# Pinned to a verified-working set (tested on Python 3.12; wheels exist for 3.11-3.13).
+#
+# For LOCAL vLLM model serving (the `qwen3-vl-*` / `remote:` model paths) also
+# install requirements-local.txt -- it is kept separate on purpose (see the note
+# in that file about why an unpinned `vllm` is dangerous).
+#
+# torch / torchvision: the default PyPI wheels target one CUDA build. For recent
+# NVIDIA GPUs (e.g. Blackwell / RTX 50-series, sm_120) install a matching build
+# FIRST, from the appropriate index, e.g.:
+#     uv pip install "torch>=2.4" "torchvision>=0.19" --index-url https://download.pytorch.org/whl/cu128
+# CPU-only is fine for evaluations/figures that reuse the shipped embedding caches
+# (use --index-url https://download.pytorch.org/whl/cpu).
+
+# --- CPPN / NEAT engine + experiment plumbing ---
 neat-python==0.92
-pandas
-pathlib
-Pillow
-portkey-ai
-python-dotenv
-submitit
+hydra-core==1.3.4
+submitit==1.5.4
+python-dotenv==1.2.2
+numpy==2.4.4
+Pillow==12.2.0
+tqdm==4.68.4
 
-# javascript  # for neurogram only
+# --- hosted VLM API backends ---
+google-genai==2.11.0
+portkey-ai==2.3.2
 
-# Added for embedding and visualization script
-open_clip_torch
-torchvision
-torch
-# umap-learn
-scikit-learn
-scipy
-seaborn
-tqdm
-rasterfairy
+# --- embeddings, analysis, plotting ---
+# torch/torchvision floored (not ==) so the CUDA-specific index above can supply a
+# matching build; the cpu and cuXXX indexes do not always share the same latest version.
+torch>=2.4
+torchvision>=0.19
+open_clip_torch==3.3.0
+scikit-learn==1.9.0
+scipy==1.18.0
+pandas==3.0.3
+matplotlib==3.11.0
+seaborn==0.13.2
+rasterfairy==1.0.6
+graphviz==0.21
+# umap-learn  # optional; only for some UMAP visualizations
 
-# For local models (? let's see if this works)
-transformers
-accelerate
-vllm
+# --- local HuggingFace model fallback (single-worker, in-process) ---
+transformers>=4.45
+accelerate>=1.0

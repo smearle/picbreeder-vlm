@@ -952,13 +952,13 @@ def _plot_seed_aggregates(
         for size in unique_sizes:
             label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
             
-            bn = load_human_baseline("novelty", size, baseline_model_novelty)
+            bn = load_human_baseline("novelty", size, baseline_model_novelty, strict=False)
             if bn:
                 baselines_novelty.append((f"Human Baseline{label_suffix}", bn))
             
             for nl_name in used_nounlists:
                  nl_suffix = f" {nl_name}" if len(used_nounlists) > 1 else ""
-                 bnn = load_human_baseline("noun", size, baseline_model_noun, nounlist=nl_name, negative_anchors=neg_anchors)
+                 bnn = load_human_baseline("noun", size, baseline_model_noun, nounlist=nl_name, strict=False, negative_anchors=neg_anchors)
                  if bnn:
                      baselines_noun.append((f"Human Baseline{label_suffix}{nl_suffix}", bnn))
                  
@@ -1334,8 +1334,8 @@ def _plot_seed_aggregates(
             # Human Baselines
             for size in unique_sizes:
                 label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
-                # Strict=True will raise Exception if baseline missing
-                hb = load_human_baseline("visual_k_covering", size, baseline_model_novelty, k=k_int, strict=True)
+                # Missing baseline -> skip the human overlay (warn) rather than abort the whole eval.
+                hb = load_human_baseline("visual_k_covering", size, baseline_model_novelty, k=k_int, strict=False)
                 if hb:
                     current_baselines.append((f"Human Baseline{label_suffix}", hb))
             
@@ -1399,8 +1399,8 @@ def _plot_seed_aggregates(
             # Human Baselines
             for size in unique_sizes:
                 label_suffix = f" ({size}px)" if len(unique_sizes) > 1 else ""
-                # Strict=True will raise Exception if baseline missing
-                hb = load_human_baseline("caption_k_covering", size, caption_model, k=k_int, strict=True)
+                # Missing baseline -> skip the human overlay (warn) rather than abort the whole eval.
+                hb = load_human_baseline("caption_k_covering", size, caption_model, k=k_int, strict=False)
                 if hb:
                     current_baselines.append((f"Human Baseline{label_suffix}", hb))
             
@@ -2270,19 +2270,31 @@ def main(cfg: SweepConfig) -> None:
 
         if cfg.eval_tree:
             _run_eval_tree(cfg, run_configs, original_cwd, cross_eval_dir, filename_tag)
-        # Plot aggregates for whatever was run
-        _plot_seed_aggregates(
-            run_configs=run_configs,
-            output_dir=cross_eval_dir,
-            filename_tag=filename_tag,
-            image_embedding_model=cfg.image_embedding_model,
-            text_image_embedding_model=cfg.text_image_embedding_model,
-            caption_model=cfg.caption_model,
-            caption_embedding_model=cfg.caption_embedding_model,
-            novelty_ylim=cfg.novelty_ylim,
-            noun_ylim=cfg.noun_ylim,
-            negative_anchors=cfg.negative_anchors,
-        )
+        # Plot cross-seed aggregates for whatever was run. This is a post-eval
+        # convenience: the per-run metrics/plots are already written above. It pulls
+        # in optional human/random reference baselines that a fresh checkout may not
+        # have, so never let a plotting failure abort the whole eval -- warn and move on.
+        try:
+            _plot_seed_aggregates(
+                run_configs=run_configs,
+                output_dir=cross_eval_dir,
+                filename_tag=filename_tag,
+                image_embedding_model=cfg.image_embedding_model,
+                text_image_embedding_model=cfg.text_image_embedding_model,
+                caption_model=cfg.caption_model,
+                caption_embedding_model=cfg.caption_embedding_model,
+                novelty_ylim=cfg.novelty_ylim,
+                noun_ylim=cfg.noun_ylim,
+                negative_anchors=cfg.negative_anchors,
+            )
+        except Exception as exc:
+            import traceback
+            print(
+                f"[warn] Cross-seed aggregate plots skipped ({type(exc).__name__}: {exc}). "
+                "Per-run eval outputs were still written.",
+                file=sys.stderr,
+            )
+            traceback.print_exc()
         return
 
     if cfg.slurm:

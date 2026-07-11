@@ -1903,7 +1903,7 @@ def run(cfg: PicbreederConfig) -> None:
     if cfg.generate_personalities and not cfg.resume:
         _generate_personalities_for_run(cfg)
     apply_random_seed(cfg.seed)
-    if cfg.selection_baseline == "none":
+    if cfg.selection_baseline == "none" and cfg.model != "mock":
         ensure_vlm_credentials()
     orchestrator = _build_orchestrator(cfg)
     orchestrator.run_agents(
@@ -2453,7 +2453,7 @@ def _continual_agent_worker(
     worker_seed = None if cfg.seed is None else cfg.seed + worker_index
     print(f"[Worker {worker_index}] Applying random seed: {worker_seed}")
     apply_random_seed(worker_seed)
-    if cfg.selection_baseline == "none":
+    if cfg.selection_baseline == "none" and cfg.model != "mock":
         ensure_vlm_credentials()
     archive_client = RemoteArchiveClient(archive_conn)
     try:

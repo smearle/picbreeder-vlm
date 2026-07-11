@@ -1614,6 +1614,11 @@ _BACKEND_REGISTRY = {
     "qwen3-vl-4b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-4B-Instruct"),
     "qwen3-vl-2b": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-2B-Instruct"),
     "qwen3-vl-30b-fp8": lambda: Qwen3VLBackend("Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"),
+    # Zero-cost deterministic stand-in (no API key / GPU / download); see mock_backend.py.
+    # Deferred import: mock_backend imports from this module.
+    "mock": lambda: __import__(
+        "picbreeder_vlm.vlm.mock_backend", fromlist=["MockBackend"]
+    ).MockBackend(),
 }
 
 
