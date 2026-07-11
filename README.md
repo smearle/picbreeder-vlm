@@ -208,7 +208,7 @@ The whole repository, with the `picbreeder_vlm/` package expanded into its subpa
 
 ```
 picbreeder-vlm/
-├─ picbreeder_vlm/          # the evolution loop + evaluation code (installable package)
+├─ picbreeder_vlm/          # evolutionary loop and analysis (installable package)
 │  ├─ core/                 #   config, CPPN/NEAT genome (neat_components), reproduction, rendering, archive mgmt
 │  ├─ vlm/                  #   VLM backends (Gemini / Qwen / …), prompts, chat/conversation history
 │  ├─ agents/               #   collaborative multi-agent loop + single-agent runner
@@ -220,10 +220,10 @@ picbreeder-vlm/
 ├─ tools/                   # blog & figure asset builders, HF sync
 ├─ archive_animations/      # lineage / teaser animations
 ├─ third-party/             # vendored external code — nothing here runs in the experiments
-│  ├─ webneat/              #   original Picbreeder Java client (Beato); NEAT calibration source
-│  └─ fer/                  #   akarshkumar0101/fer — human Picbreeder archive
+│  ├─ webneat/              #   original Picbreeder Java client, CPPN+NEAT ground truth
+│  └─ fer/                  #   akarshkumar0101/fer: process human data
 ├─ data/                    # committed data (noun lists, human‑baseline metric JSONs)
-├─ figures/                 # TikZ sources for the paper/blog figures
+├─ figures/                 # e.g. TikZ sources for the paper/blog figures
 └─ blog/                    # interactive blog, archive viewer, and breeding site
 ```
 
