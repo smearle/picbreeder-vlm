@@ -16,7 +16,10 @@ from statistics import mean, pstdev
 import sys
 
 import PIL
-import graphviz 
+try:
+    import graphviz  # optional; keep the chat/agent chain importable without it
+except ImportError:
+    graphviz = None
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

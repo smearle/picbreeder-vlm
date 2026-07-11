@@ -15,7 +15,13 @@ from typing import Optional, Callable, Dict, Any, List, Sequence, Set, Tuple, It
 import numpy as np
 
 import PIL
-import graphviz
+try:
+    # Only per-generation genome *diagrams* (opt-in via render_genome_diagrams) need
+    # graphviz; the run itself does not. Keep it optional so the agent loop imports
+    # in minimal envs (this is why the code below guards on `graphviz is None`).
+    import graphviz
+except ImportError:
+    graphviz = None
 import neat
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
 
