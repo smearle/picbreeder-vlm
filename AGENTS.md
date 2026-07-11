@@ -192,7 +192,7 @@ picbreeder-vlm/
 ├─ tools/                   # asset & figure builders, HF sync (build_*, push_*)
 ├─ third-party/             # vendored external code — never runs in the evolution loop
 │  ├─ webneat/              #   original Picbreeder Java client (Beato); read-only reference
-│  └─ fer/                  #   akarshkumar0101/fer human archive; resolve via _paths.FER_ROOT
+│  └─ fer/                  #   akarshkumar0101/fer — human Picbreeder archive
 ├─ data/noun_lists/         # target-noun lists for the alignment metrics
 ├─ figures/                 # TikZ sources for the paper/blog figures (paper is in Overleaf)
 ├─ human_lineages/          # rendered human archive (gitignored; built by third-party/fer/src,

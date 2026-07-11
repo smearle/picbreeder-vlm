@@ -204,29 +204,24 @@ workflow and the local vLLM server setup.
 
 ## Repository map
 
-Source lives in the **`picbreeder_vlm/`** package:
-
-| subpackage | contents |
-| --- | --- |
-| `picbreeder_vlm.core` | config, CPPN/NEAT genome (`neat_components`), reproduction, rendering, archive management |
-| `picbreeder_vlm.vlm` | VLM backends (Gemini / Qwen / …), prompts, chat/conversation history |
-| `picbreeder_vlm.agents` | the collaborative multi‑agent loop, single‑agent runner |
-| `picbreeder_vlm.experiments` | sweep orchestration (Hydra + Submitit), run configs, experiment CLIs |
-| `picbreeder_vlm.analysis` | coverage / embedding / captioning / phylogeny / rating metrics |
-| `picbreeder_vlm.viz` | figure and lineage/archive visualization |
-| `picbreeder_vlm.niches` | CLIP noun‑niche evolution‑strategy experiments |
-| `picbreeder_vlm.nouns` · `picbreeder_vlm.bench` | vocabulary wrangling · VLM benchmarking/probing |
-
-Top‑level layout:
+The whole repository, with the `picbreeder_vlm/` package expanded into its subpackages:
 
 ```
 picbreeder-vlm/
-├─ picbreeder_vlm/          # the Python package (subpackages in the table above)
+├─ picbreeder_vlm/          # the evolution loop + evaluation code (installable package)
+│  ├─ core/                 #   config, CPPN/NEAT genome (neat_components), reproduction, rendering, archive mgmt
+│  ├─ vlm/                  #   VLM backends (Gemini / Qwen / …), prompts, chat/conversation history
+│  ├─ agents/               #   collaborative multi-agent loop + single-agent runner
+│  ├─ experiments/          #   sweep orchestration (Hydra + Submitit), run configs, experiment CLIs
+│  ├─ analysis/             #   coverage / embedding / captioning / phylogeny / rating metrics
+│  ├─ viz/                  #   figure and lineage/archive visualization
+│  ├─ niches/               #   CLIP noun-niche evolution-strategy experiments
+│  └─ nouns/ · bench/       #   vocabulary wrangling · VLM benchmarking/probing
 ├─ tools/                   # blog & figure asset builders, HF sync
 ├─ archive_animations/      # lineage / teaser animations
 ├─ third-party/             # vendored external code — nothing here runs in the experiments
 │  ├─ webneat/              #   original Picbreeder Java client (Beato); NEAT calibration source
-│  └─ fer/                  #   akarshkumar0101/fer human archive; resolve via _paths.FER_ROOT
+│  └─ fer/                  #   akarshkumar0101/fer — human Picbreeder archive
 ├─ data/                    # committed data (noun lists, human‑baseline metric JSONs)
 ├─ figures/                 # TikZ sources for the paper/blog figures
 └─ blog/                    # interactive blog, archive viewer, and breeding site
