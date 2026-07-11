@@ -13,5 +13,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Get the repo name from the REPO_ROOT path
 REPO_NAME = REPO_ROOT.name
 SELECTION_BASELINES: Sequence[str] = ("none", "random", "max-depth", "max-nodes", "clip-nouns")
-NOUN_LISTS_DIR = Path("noun_lists")
+# Committed data lives under data/. These are repo-relative and get anchored to a
+# base (the launch cwd or REPO_ROOT) at each call site.
+DATA_DIR = Path("data")
+NOUN_LISTS_DIR = DATA_DIR / "noun_lists"
+HUMAN_BASELINE_DIR = DATA_DIR / "human_baseline"
 MAX_MODEL_LEN = 50_000

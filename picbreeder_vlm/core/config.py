@@ -48,7 +48,7 @@ class PicbreederConfig:
     color_nudge: bool = False  # Append a Qwen-specific addendum nudging the model to use color (off by default)
     select_k: Optional[int] = None  # Max parents per generation (clamped to grid size when provided)
     agent_generations: int = 200  # Generations executed for each agent
-    negative_anchors: Optional[str] = "negative_anchors"  # Filename for negative anchors list (in noun_lists/)
+    negative_anchors: Optional[str] = "negative_anchors"  # Filename for negative anchors list (in data/noun_lists/)
     num_agents: int = 200  # How many agents run sequentially in this session
     neat_config_path: Optional[Path] = None  # Path to NEAT config file (uses default if None)
     num_proc: int = 1  # Number of parallel agent processes
@@ -68,7 +68,7 @@ class PicbreederConfig:
     render_genome_diagrams: bool = False  # Render genome structure diagrams per generation
     log_raw_responses: bool = False  # When true, dump raw VLM responses to timestamped text files
     fixed_session_lengths: bool = True  # When true, every agent runs for exactly `agent_generations` generations and must publish on the last one
-    nounlist: str = "things_deduped"  # Noun list name (in noun_lists/) or path
+    nounlist: str = "things_deduped"  # Noun list name (in data/noun_lists/) or path
     n_personality_traits: int = 0  # Number of random personality traits to prepend to the system prompt
     hydra: HydraConf = field(
         default_factory=lambda: HydraConf(

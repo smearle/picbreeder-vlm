@@ -32,7 +32,7 @@ from pathlib import Path
 
 REPO = Path("/home/jupyter-smearle/picbreeder-vlm")
 THUMBS = REPO / "human_lineages/lineages/lineage_phylogeny_thumbs_128"
-CAPTIONS = REPO / "human_baseline/res-128/captions_human.json"
+CAPTIONS = REPO / "data/human_baseline/res-128/captions_human.json"
 
 
 def _load_sprites_module():

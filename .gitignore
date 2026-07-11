@@ -41,8 +41,8 @@ cross_eval_clip_niches/*
 SigLIP2-B-alignet*
 # fer-derived renders of the human Picbreeder archive (regenerable, ~1GB)
 human_lineages/*
-human_baseline/*
-noun_lists/embeddings/*
+data/human_baseline/*
+data/noun_lists/embeddings/*
 _transcripts_stage/
 # transcript / siglip staging scratch (large, regenerable)
 _tx_stage_*/

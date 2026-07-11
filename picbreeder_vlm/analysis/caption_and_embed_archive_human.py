@@ -3,6 +3,7 @@ from pathlib import Path
 import shutil
 import hydra
 from hydra.core.config_store import ConfigStore
+from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
 from picbreeder_vlm.analysis.caption_and_embed_archive import (
     CaptionEmbedConfig, 
     run_captioning_phase, 
@@ -23,7 +24,7 @@ def main(cfg: HumanCaptionEmbedConfig):
     
     embed_model = load_embedding_model(cfg.embedding_model, cfg.embedding_pretrained)
     metrics_file = run_embedding_phase(cfg, embed_model)
-    shutil.copy(metrics_file, Path("human_baseline") / f"metrics_res{cfg.grid_thumb_size}_{cfg.caption_model}.json")
+    shutil.copy(metrics_file, HUMAN_BASELINE_DIR / f"metrics_res{cfg.grid_thumb_size}_{cfg.caption_model}.json")
 
 if __name__ == "__main__":
     main()

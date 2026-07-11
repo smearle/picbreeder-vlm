@@ -30,6 +30,7 @@ from picbreeder_vlm.analysis.compute_visual_coverage import (
 )
 from picbreeder_vlm.core.utils import load_human_archive_images
 from picbreeder_vlm.core.config import ensure_valid_config
+from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
 
 @dataclass
 class HumanVisualCoverageConfig(VisualCoverageConfig):
@@ -102,7 +103,7 @@ def main(
     model_name = validated_cfg.embedding_model.replace("/", "-")
     filename_base = f"novelty_res{validated_cfg.render_size}_{model_name}"
     
-    output_dir = root_dir / "human_baseline"
+    output_dir = root_dir / HUMAN_BASELINE_DIR
     output_dir.mkdir(exist_ok=True, parents=True)
 
     output_base = output_dir / filename_base

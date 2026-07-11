@@ -113,11 +113,11 @@ def build(arc: str) -> Path:
 
 def build_human() -> Path:
     """Regenerate grid_human_representative.png + its focus manifest from the cached
-    human SigLIP embeddings (human_baseline/res-128/limit-2000), mirroring the AI
+    human SigLIP embeddings (data/human_baseline/res-128/limit-2000), mirroring the AI
     pipeline. Focus indices are positions in the gallery's human image order
     (build_human_sprites.human_ids()), so a click parks the loupe on the same pid."""
     from tools.build_human_sprites import human_ids
-    npz = REPO / "human_baseline" / "res-128" / f"limit-{LIMIT}" / "embeddings_openclip_SigLIP2-B-alignet.npz"
+    npz = REPO / "data" / "human_baseline" / "res-128" / f"limit-{LIMIT}" / "embeddings_openclip_SigLIP2-B-alignet.npz"
     z = np.load(npz, allow_pickle=True)
     emb = np.asarray(z["embeddings"])
     pids = [Path(str(fn)).stem for fn in z["filenames"]]   # <pid>.png -> pid

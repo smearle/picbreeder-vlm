@@ -41,7 +41,7 @@ from pathlib import Path
 
 REPO = Path("/home/jupyter-smearle/picbreeder-vlm")
 PB = REPO / "fer/spaghetti/pbRender/genomeAll"            # <pid>/rep.zip published genome
-CAPTIONS = REPO / "human_baseline/res-128/captions_human.json"
+CAPTIONS = REPO / "data/human_baseline/res-128/captions_human.json"
 
 # special-node label -> breed key
 SPECIAL_KEY = {"x": -1, "y": -2, "d": -3, "bias": -4, "h": 0, "s": 1, "v": 2}

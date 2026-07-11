@@ -169,10 +169,10 @@ def _recall_chosen(run: Path, n: int = N_RECALL):
     assert img_emb.shape[0] == len(fnames), (img_emb.shape, len(fnames))
 
     nouns = [ln.strip().replace("_", " ")
-             for ln in (REPO / "noun_lists/things_deduped.txt").read_text().splitlines()
+             for ln in (REPO / "data/noun_lists/things_deduped.txt").read_text().splitlines()
              if ln.strip()]
     noun_emb = np.load(
-        REPO / "noun_lists/embeddings/"
+        REPO / "data/noun_lists/embeddings/"
         "noun_embeddings_things_deduped_ViT-SO400M-14-SigLIP2_webli.npy")
     assert noun_emb.shape[0] == len(nouns), (noun_emb.shape, len(nouns))
     noun_idx = {n: i for i, n in enumerate(nouns)}
@@ -685,10 +685,10 @@ def _global_recall_picks(n: int = N_GLOBAL_RECALL):
     is the same ranking the easter-egg scroller shows (recall-egg.js), so the
     panel's nine thumbnails and the scroller's first nine agree."""
     nouns = [ln.strip().replace("_", " ")
-             for ln in (REPO / "noun_lists/things_deduped.txt").read_text().splitlines()
+             for ln in (REPO / "data/noun_lists/things_deduped.txt").read_text().splitlines()
              if ln.strip()]
     noun_emb = np.load(
-        REPO / "noun_lists/embeddings/"
+        REPO / "data/noun_lists/embeddings/"
         "noun_embeddings_things_deduped_ViT-SO400M-14-SigLIP2_webli.npy").astype(np.float32)
     assert noun_emb.shape[0] == len(nouns), (noun_emb.shape, len(nouns))
 
@@ -909,7 +909,7 @@ AGG_SEMANTIC_NPZ = "_agg_semantic_caption.npz"
 ATLAS_PALETTE_9 = ["#5B8FB0", "#C9745A", "#6FA86B", "#9A6FB0", "#C7A14A",
                    "#4FA3A0", "#B0689A", "#7E8AC0", "#9C8A5A"]
 HUMAN_CAPTION_EMB = REPO / "fer/src/archive_res-128/embeddings_gemini-embedding-001_.json"
-HUMAN_CAPTIONS = REPO / "human_baseline/res-128/captions_human.json"
+HUMAN_CAPTIONS = REPO / "data/human_baseline/res-128/captions_human.json"
 
 
 def _iter_caption_sources():

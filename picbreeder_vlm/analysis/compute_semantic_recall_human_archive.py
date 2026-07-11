@@ -26,6 +26,7 @@ from picbreeder_vlm.analysis.compute_semantic_recall import (
 )
 from picbreeder_vlm.core.utils import _ensure_absolute, load_human_archive_images, resolve_nounlist
 from picbreeder_vlm.core.config import ensure_valid_config
+from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
 
 
 @dataclass
@@ -83,7 +84,7 @@ def main(
     nounlist_name = noun_file.stem
     model_name = validated_cfg.embedding_model.replace("/", "-")
     
-    output_dir = root_dir / "human_baseline"
+    output_dir = root_dir / HUMAN_BASELINE_DIR
     output_dir.mkdir(exist_ok=True, parents=True)
     
     filename_base = f"noun_similarity_res{validated_cfg.render_size}_{model_name}_{nounlist_name}"

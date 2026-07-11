@@ -118,7 +118,7 @@ def resolve_nounlist(name_or_path: Union[str, Path], original_cwd: Path) -> Path
     """Resolve a noun list parameter to an absolute path.
 
     If the value ends in .txt, it is treated as a path (relative to cwd or absolute).
-    Otherwise, it is treated as a stem name in the noun_lists directory.
+    Otherwise, it is treated as a stem name in the data/noun_lists directory.
     """
     if not name_or_path:
         raise ValueError("Nounlist name or path cannot be empty.")
@@ -129,7 +129,7 @@ def resolve_nounlist(name_or_path: Union[str, Path], original_cwd: Path) -> Path
         path = Path(name_or_path)
         return _ensure_absolute(path, original_cwd)
     
-    # It's a name, look in noun_lists
+    # It's a name, look in data/noun_lists
     return (original_cwd / NOUN_LISTS_DIR / f"{name_or_path}.txt").resolve()
 
 

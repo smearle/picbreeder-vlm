@@ -33,8 +33,8 @@ import build_metric_fig_assets as B  # noqa: E402  (sets up REPO, recall helpers
 REPO = B.REPO
 DEFAULT_OUT = Path.home() / "smearle.github.io/picbreeder-vlm-06b0d76d/assets/recall_things"
 
-NOUNS_FILE = REPO / "noun_lists/things_deduped.txt"
-NOUN_EMB_FILE = (REPO / "noun_lists/embeddings/"
+NOUNS_FILE = REPO / "data/noun_lists/things_deduped.txt"
+NOUN_EMB_FILE = (REPO / "data/noun_lists/embeddings/"
                  "noun_embeddings_things_deduped_ViT-SO400M-14-SigLIP2_webli.npy")
 
 

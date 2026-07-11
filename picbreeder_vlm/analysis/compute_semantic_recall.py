@@ -132,7 +132,7 @@ def load_or_compute_noun_embeddings(
     model: torch.nn.Module,
     tokenizer,
 ) -> np.ndarray:
-    noun_embed_cache_dir = original_cwd / "noun_lists" / "embeddings"
+    noun_embed_cache_dir = original_cwd / NOUN_LISTS_DIR / "embeddings"
     noun_embed_cache_dir.mkdir(parents=True, exist_ok=True)
     
     model_name_sanitized = cfg.embedding_model.replace("/", "-")
@@ -174,7 +174,7 @@ def load_or_compute_negative_embeddings(
         return None, []
         
     anchors_name = cfg.negative_anchors
-    anchors_path = original_cwd / "noun_lists" / f"{anchors_name}.txt"
+    anchors_path = original_cwd / NOUN_LISTS_DIR / f"{anchors_name}.txt"
     
     neg_anchors_list = []
     if anchors_path.exists():
@@ -183,7 +183,7 @@ def load_or_compute_negative_embeddings(
         print(f"Warning: Negative anchors file {anchors_path} not found.")
         return None, []
         
-    noun_embed_cache_dir = original_cwd / "noun_lists" / "embeddings"
+    noun_embed_cache_dir = original_cwd / NOUN_LISTS_DIR / "embeddings"
     noun_embed_cache_dir.mkdir(parents=True, exist_ok=True)
     
     model_name_sanitized = cfg.embedding_model.replace("/", "-")
@@ -659,7 +659,7 @@ def process_semantic_recall(
     # Setup Embedding Cache
     # We use a shared directory for noun/negative embeddings to avoid recomputing them
     # across different runs/experiments.
-    noun_embed_cache_dir = original_cwd / "noun_lists" / "embeddings"
+    noun_embed_cache_dir = original_cwd / NOUN_LISTS_DIR / "embeddings"
     noun_embed_cache_dir.mkdir(parents=True, exist_ok=True)
     
     model_name_sanitized = validated_cfg.embedding_model.replace("/", "-")
@@ -679,7 +679,7 @@ def process_semantic_recall(
     if neg_embeddings is None and validated_cfg.negative_anchors:
         anchors_name = validated_cfg.negative_anchors
         # Resolve anchors file for later
-        anchors_path = original_cwd / "noun_lists" / f"{anchors_name}.txt"
+        anchors_path = original_cwd / NOUN_LISTS_DIR / f"{anchors_name}.txt"
         if anchors_path.exists():
             neg_anchors_list = load_nouns(anchors_path)
             neg_cache_path = noun_embed_cache_dir / f"negative_anchors_{anchors_name}_{model_name_sanitized}_{pretrained_sanitized}.npy"

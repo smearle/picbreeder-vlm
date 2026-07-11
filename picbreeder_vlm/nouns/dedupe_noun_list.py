@@ -35,7 +35,7 @@ def dedupe_file(input_path, output_path):
 
 if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    input_file = os.path.join(base_dir, "noun_lists", "things.txt")
-    output_file = os.path.join(base_dir, "noun_lists", "things_deduped.txt")
+    input_file = os.path.join(base_dir, "data", "noun_lists", "things.txt")
+    output_file = os.path.join(base_dir, "data", "noun_lists", "things_deduped.txt")
     
     dedupe_file(input_file, output_file)

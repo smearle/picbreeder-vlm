@@ -1,7 +1,7 @@
 """Shared filesystem anchors.
 
 REPO_ROOT is the repository root, i.e. the directory that holds this package,
-the data files (imagenet*.txt, noun_lists/, data/, ...) and the tools/.
+the committed data (under data/, e.g. data/noun_lists/, data/human_baseline/) and the tools/.
 Modules that used to compute ``Path(__file__).parent`` (when they lived at the
 repo root) should import REPO_ROOT from here instead.
 

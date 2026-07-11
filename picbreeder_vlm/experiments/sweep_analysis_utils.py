@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 # Use Agg backend for non-interactive plotting
 matplotlib.use("Agg")
 
+from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
+
 SCRIPT_ROOT = Path(__file__).resolve().parents[2]
 
 _TAG_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
@@ -140,7 +142,7 @@ def load_human_baseline(
     negative_anchors: Optional[str] = None,
 ) -> Optional[Dict[int, float]]:
     """Load human baseline trajectory for the given metric."""
-    baseline_dir = SCRIPT_ROOT / "human_baseline"
+    baseline_dir = SCRIPT_ROOT / HUMAN_BASELINE_DIR
     if not baseline_dir.exists():
         msg = f"Human baseline directory not found: {baseline_dir}"
         if strict:

@@ -1,7 +1,7 @@
 import os
 
 def main():
-    output_dir = 'noun_lists'
+    output_dir = 'data/noun_lists'
     input_file = os.path.join(output_dir, 'imagenet21k_all_words.txt')
     output_file = os.path.join(output_dir, 'imagenet21k_all_first_words.txt')
 
