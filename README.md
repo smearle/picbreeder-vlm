@@ -257,7 +257,7 @@ holds the evolved archives across runs, under `results/<run>/`: packed CPPN geno
 (`genomes.tar.gz`), agent logs (`agents.tar`), full lineages, per‑image VLM
 captions/ratings, cached image embeddings, and curated metric JSONs.
 The dataset also includes the sprite
-sheets & orderings that power the blog's interactive galleries. Images do not generally need to be
+sheets & orderings that power the blog's interactive galleries. We include images for convenience, but generally they do not need to be
 stored as they re‑render deterministically from the genomes.
 
 ### Reconstruct a run for evaluation, figures, or continued evolution
