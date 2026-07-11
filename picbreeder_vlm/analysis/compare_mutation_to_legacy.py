@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable
+ensure_fer_importable()
 from fer.src.lineage_utils import recursive_parse_all_genomes  # type: ignore[import]
 from fer.src.picbreeder_util import load_zip_xml_as_dict  # type: ignore[import]
 from picbreeder_vlm.core.picbreeder_reproduction import PicbreederReproduction
@@ -503,7 +505,7 @@ def iter_pids(pb_dir: Path) -> Iterable[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare modern mutation against legacy Picbreeder offspring")
-    parser.add_argument("--pb-dir", type=Path, default=Path("fer/spaghetti/pbRender/genomeAll"), help="Directory containing legacy pid folders")
+    parser.add_argument("--pb-dir", type=Path, default=FER_ROOT / "spaghetti/pbRender/genomeAll", help="Directory containing legacy pid folders")
     parser.add_argument("--pids", nargs="*", default=None, help="Optional subset of pid directories to process")
     parser.add_argument("--samples", type=int, default=200, help="Number of offspring samples per mutation strength (default: 100)")
     parser.add_argument("--seed", type=int, default=0, help="Base random seed for reproducibility")

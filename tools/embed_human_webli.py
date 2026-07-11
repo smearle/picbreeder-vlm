@@ -19,13 +19,14 @@ import torch
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from picbreeder_vlm._paths import FER_ROOT  # noqa: E402
 from picbreeder_vlm.vlm.model_loader import load_model_by_name, embed_images  # noqa: E402
 from picbreeder_vlm.core.utils import load_human_archive_images                 # noqa: E402
 
 
 def main() -> None:
     dev = "cuda:0" if torch.cuda.is_available() else "cpu"
-    arc = REPO / "fer/src/archive_res-128"
+    arc = FER_ROOT / "src/archive_res-128"
     paths = load_human_archive_images(arc / "images")
     print(f"images: {len(paths)}")
     model, preprocess, _tok = load_model_by_name("ViT-SO400M-14-SigLIP2", "webli", dev)

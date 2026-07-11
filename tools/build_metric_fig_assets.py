@@ -46,6 +46,8 @@ from matplotlib.font_manager import FontProperties
 
 REPO = Path(__file__).resolve().parent.parent
 
+from picbreeder_vlm._paths import FER_ROOT  # noqa: E402
+
 DEFAULT_RUN = (
     REPO / "sweep_logs/sweep/"
     "th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s6"
@@ -77,8 +79,8 @@ WEBLI_CACHE = "image_embeddings_cache_ViT-SO400M-14-SigLIP2_webli.npy"
 SWEEP_DIR = REPO / "sweep_logs/sweep"
 # Human archive embeddings WITH filenames (built by tools/embed_human_webli.py;
 # the plain webli cache omits names and lags the on-disk image set).
-HUMAN_WEBLI_NPZ = REPO / "fer/src/archive_res-128/webli_emb_named.npz"
-HUMAN_IMAGES = REPO / "fer/src/archive_res-128/images"
+HUMAN_WEBLI_NPZ = FER_ROOT / "src/archive_res-128/webli_emb_named.npz"
+HUMAN_IMAGES = FER_ROOT / "src/archive_res-128/images"
 
 # Pretty model names for the per-cell condition label.
 RECALL_MODEL_NAMES = {
@@ -908,7 +910,7 @@ AGG_SEMANTIC_NPZ = "_agg_semantic_caption.npz"
 # 9-hue qualitative palette (one per region).
 ATLAS_PALETTE_9 = ["#5B8FB0", "#C9745A", "#6FA86B", "#9A6FB0", "#C7A14A",
                    "#4FA3A0", "#B0689A", "#7E8AC0", "#9C8A5A"]
-HUMAN_CAPTION_EMB = REPO / "fer/src/archive_res-128/embeddings_gemini-embedding-001_.json"
+HUMAN_CAPTION_EMB = FER_ROOT / "src/archive_res-128/embeddings_gemini-embedding-001_.json"
 HUMAN_CAPTIONS = REPO / "data/human_baseline/res-128/captions_human.json"
 
 

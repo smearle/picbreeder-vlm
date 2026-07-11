@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 from picbreeder_vlm.core.config import ensure_valid_config
 from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
 from picbreeder_vlm.core.utils import load_human_archive_images
+from picbreeder_vlm._paths import FER_ROOT
 from picbreeder_vlm.analysis.embed_and_visualize import (
     EmbedVisualizeConfig,
     _greedy_k_center,
@@ -57,7 +58,7 @@ def main(cfg: HumanEmbedVisualizeConfig) -> None:
 
     # Input directory
     root_dir = original_cwd
-    archive_dir = root_dir / "fer/src" / f"archive_res-{validated_cfg.render_size}"
+    archive_dir = FER_ROOT / "src" / f"archive_res-{validated_cfg.render_size}"
     
     if not archive_dir.exists():
         print(f"Archive directory not found: {archive_dir}")

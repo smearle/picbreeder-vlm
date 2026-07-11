@@ -4,16 +4,17 @@ import shutil
 import hydra
 from hydra.core.config_store import ConfigStore
 from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
+from picbreeder_vlm._paths import FER_ROOT
 from picbreeder_vlm.analysis.caption_and_embed_archive import (
-    CaptionEmbedConfig, 
-    run_captioning_phase, 
-    run_embedding_phase, 
+    CaptionEmbedConfig,
+    run_captioning_phase,
+    run_embedding_phase,
     load_embedding_model
 )
 
 @dataclass
 class HumanCaptionEmbedConfig(CaptionEmbedConfig):
-    archive_path: str = "fer/src/archive_res-128"
+    archive_path: str = str(FER_ROOT / "src/archive_res-128")
 
 cs = ConfigStore.instance()
 cs.store(name="human_caption_embed_config", node=HumanCaptionEmbedConfig)

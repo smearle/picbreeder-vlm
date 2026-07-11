@@ -19,6 +19,7 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+from picbreeder_vlm._paths import FER_ROOT  # noqa: E402
 
 SITE = Path("/home/jupyter-smearle/smearle.github.io/picbreeder-vlm")
 DEST = SITE / "assets" / "lineages"
@@ -26,8 +27,8 @@ OUT_PX = 256  # save crisp; CPPN images upscale cleanly
 
 VLM_RUN = REPO / "sweep_logs/sweep/th1_ag20_model-gemini-2.5-pro_tb-1_scheme-toggle_nopersonalities_fixed-sesh_s8"
 VLM_TARGET = "img_000810"
-HUMAN_ROOT = REPO / "fer/spaghetti/pbRender/genomeAll"
-HUMAN_PRE = REPO / "fer/src/archive_res-128/images"
+HUMAN_ROOT = FER_ROOT / "spaghetti/pbRender/genomeAll"
+HUMAN_PRE = FER_ROOT / "src/archive_res-128/images"
 HUMAN_TARGET = "464"
 
 

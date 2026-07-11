@@ -1,12 +1,12 @@
 # Picbreeder Global Phylogeny
 
-`fer/src/plot_full_phylogeny.py` rebuilds the entire Picbreeder tree by stitching together every lineage and identifying the parent/child overlap across runs. Thicker, labeled edges in the rendered figure correspond to branches that are reused by multiple descendant lineages.
+`third-party/fer/src/plot_full_phylogeny.py` rebuilds the entire Picbreeder tree by stitching together every lineage and identifying the parent/child overlap across runs. Thicker, labeled edges in the rendered figure correspond to branches that are reused by multiple descendant lineages.
 
 ## Quick Start
 
 ```bash
-/Users/samearle/picbreeder-vlm/.venv/bin/python fer/src/plot_full_phylogeny.py \
-  --pb-dir fer/spaghetti/pbRender/genomeAll \
+python third-party/fer/src/plot_full_phylogeny.py \
+  --pb-dir third-party/fer/spaghetti/pbRender/genomeAll \
   --output human_lineages/lineages/full_phylogeny \
   --format pdf
 ```

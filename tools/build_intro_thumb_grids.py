@@ -35,6 +35,7 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+from picbreeder_vlm._paths import FER_ROOT  # noqa: E402
 from picbreeder_vlm.analysis.embed_and_visualize import (  # noqa: E402
     _greedy_k_center,
     reduce_embeddings,
@@ -121,7 +122,7 @@ def build_human() -> Path:
     z = np.load(npz, allow_pickle=True)
     emb = np.asarray(z["embeddings"])
     pids = [Path(str(fn)).stem for fn in z["filenames"]]   # <pid>.png -> pid
-    thumbs = REPO / "fer/src" / "archive_res-128" / "images"
+    thumbs = FER_ROOT / "src" / "archive_res-128" / "images"
     coords = reduce_embeddings(emb)
     centers, _ = _greedy_k_center(emb, K)
     rep_coords = coords[centers]

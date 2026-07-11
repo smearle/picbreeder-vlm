@@ -22,6 +22,8 @@ except ImportError:
 # Add current directory to sys.path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable
+ensure_fer_importable()
 try:
     from fer.src.picbreeder_util import load_zip_xml_as_dict
     from fer.src.save_lineage_figures import do_forward_pass, load_pbcppn
@@ -412,10 +414,10 @@ def main():
     thumb_dir = pb_dir.parent / "thumbs_cache" # Reuse a cache dir
     
     # Check for pre-rendered images in standard location
-    pre_rendered_dir = Path("fer/src/archive_res-128/images").resolve()
+    pre_rendered_dir = FER_ROOT / "src/archive_res-128/images"
     if not pre_rendered_dir.exists():
         pre_rendered_dir = None
-        print("Notice: pre-rendered directory fer/src/archive_res-128/images not found. Will render on the fly.")
+        print(f"Notice: pre-rendered directory {FER_ROOT / 'src/archive_res-128/images'} not found. Will render on the fly.")
     else:
         print(f"Using pre-rendered images from {pre_rendered_dir}")
 

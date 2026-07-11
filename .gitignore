@@ -34,14 +34,19 @@ archive_neat
 mutation_logs
 cross_eval*
 clip_noun_niche_es_logs/*
-fer/src/archive*
-fer/src/lineages*
-fer/spaghetti/pbRender/thumbs_cache/
+third-party/fer/src/archive*
+third-party/fer/src/lineages*
+third-party/fer/spaghetti/pbRender/thumbs_cache/
+third-party/fer/spaghetti/pbRender/genomeAll/
 cross_eval_clip_niches/*
 SigLIP2-B-alignet*
 # fer-derived renders of the human Picbreeder archive (regenerable, ~1GB)
 human_lineages/*
 data/human_baseline/*
+# ...but DO ship the small human-baseline trajectory/metric JSONs (needed by the
+# eval aggregate plots); only the large regenerable renders (res-*, PNG/PDF, the
+# SigLIP2-B-alignet* model) stay ignored above/below.
+!data/human_baseline/*.json
 data/noun_lists/embeddings/*
 _transcripts_stage/
 # transcript / siglip staging scratch (large, regenerable)

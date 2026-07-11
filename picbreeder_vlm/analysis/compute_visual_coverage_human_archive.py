@@ -31,6 +31,7 @@ from picbreeder_vlm.analysis.compute_visual_coverage import (
 from picbreeder_vlm.core.utils import load_human_archive_images
 from picbreeder_vlm.core.config import ensure_valid_config
 from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
+from picbreeder_vlm._paths import FER_ROOT
 
 @dataclass
 class HumanVisualCoverageConfig(VisualCoverageConfig):
@@ -60,7 +61,7 @@ def main(
     
     # Construct archive dir based on render_size
     root_dir = original_cwd
-    archive_dir = root_dir / "fer/src" / f"archive_res-{validated_cfg.render_size}"
+    archive_dir = FER_ROOT / "src" / f"archive_res-{validated_cfg.render_size}"
     
     print(f"Looking for images in {archive_dir}")
     try:

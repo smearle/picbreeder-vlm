@@ -12,10 +12,12 @@ import numpy as np
 from PIL import Image
 
 sys.path.append("/home/jupyter-smearle/picbreeder-vlm")
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable
+ensure_fer_importable()
 from fer.src.plot_lineage_phylogeny import _load_lineage_info, _render_thumbnail_array
 
 ROOT = Path("/home/jupyter-smearle/picbreeder-vlm")
-PB = ROOT / "fer/spaghetti/pbRender/genomeAll"
+PB = FER_ROOT / "spaghetti/pbRender/genomeAll"
 SRC64 = ROOT / "human_lineages/lineages/lineage_phylogeny_thumbs"
 OUT = ROOT / "human_lineages/lineages/lineage_phylogeny_thumbs_128"
 

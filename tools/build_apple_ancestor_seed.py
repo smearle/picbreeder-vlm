@@ -26,10 +26,12 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable
+ensure_fer_importable()
 from fer.src.picbreeder_util import load_zip_xml_as_dict
 from fer.src.lineage_utils import _ensure_list
 
-PB = REPO / "fer/spaghetti/pbRender/genomeAll"
+PB = FER_ROOT / "spaghetti/pbRender/genomeAll"
 ASSETS_DIR = Path.home() / "smearle.github.io/picbreeder-vlm-06b0d76d"
 OUT = ASSETS_DIR / "breed/data/apple_ancestor.json"
 

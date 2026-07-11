@@ -40,7 +40,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 REPO = Path("/home/jupyter-smearle/picbreeder-vlm")
-PB = REPO / "fer/spaghetti/pbRender/genomeAll"            # <pid>/rep.zip published genome
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable  # noqa: E402
+PB = FER_ROOT / "spaghetti/pbRender/genomeAll"           # <pid>/rep.zip published genome
 CAPTIONS = REPO / "data/human_baseline/res-128/captions_human.json"
 
 # special-node label -> breed key
@@ -85,7 +86,7 @@ def load_final_genome(pid):
     generation + its storage shard, then we pull that generation's chromosome out
     of <storage>.zip. This is the genome the published <pid>_final.png renders —
     rep.zip is only a (sometimes earlier) representative, so we must NOT use it."""
-    sys.path.append(str(REPO))
+    ensure_fer_importable()
     from fer.src.picbreeder_util import load_zip_xml_as_dict
     main_zip = PB / pid / "main.zip"
     if not main_zip.exists():

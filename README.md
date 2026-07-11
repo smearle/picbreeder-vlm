@@ -48,10 +48,23 @@ uv pip install -r requirements.txt
 uv pip install -e .          # exposes the `picbreeder_vlm` package + pickle-compat shims
 ```
 
+`requirements.txt` covers the evolution loop, the hosted‑API (Gemini) path, and all
+evaluation/figure tooling. Two extras are opt‑in:
+
+- **Local vLLM models** (the `qwen3-vl-*` / `remote:` paths): also
+  `uv pip install -r requirements-local.txt`. It is kept separate on purpose—an
+  unconstrained `vllm` can resolve to an ancient source‑only build that fails to
+  compile on modern GPUs.
+- **GPU torch.** The default PyPI `torch`/`torchvision` wheels target one CUDA build.
+  On a recent NVIDIA GPU (e.g. Blackwell / RTX 50‑series) install a matching build
+  first, e.g. `uv pip install "torch>=2.4" "torchvision>=0.19" --index-url
+  https://download.pytorch.org/whl/cu128`. CPU‑only is fine for evaluations and
+  figures that reuse the dataset's cached embeddings
+  (`--index-url https://download.pytorch.org/whl/cpu`).
+
 ## Quickstart
 
-The collaborative loop needs a vision‑language model to act as the "breeder." You
-can drive it **two ways**: a hosted API or a local model:
+The AI Picbreeder loop needs a vision‑language model to act as the "breeder," you can provide an API key or spin up a local model (if your compute is sufficient):
 
 - **Hosted API (Gemini).** Set your key and pick a Gemini model:
   ```bash
@@ -80,6 +93,13 @@ can drive it **two ways**: a hosted API or a local model:
 
   On a machine without vLLM installed, single-worker runs fall back to loading the
   weights in-process through HuggingFace `transformers`.
+- **No model (mock).** `model=mock` is a zero‑cost, dependency‑free stand‑in that
+  returns well‑formed random selections. It needs no API key, GPU, or download and
+  exercises the full evolution / archive / continue‑a‑run plumbing—handy for smoke
+  tests, CI, and trying the pipeline before committing real compute:
+  ```bash
+  python evolve_collaborative.py model=mock num_agents=2 agent_generations=3
+  ```
 
 ### Run one collaborative session with `evolve_collaborative.py`
 
@@ -102,7 +122,7 @@ Outputs are written to `logs_collaborative/<experiment>/` (evolved images, genom
 
 | arg | what it does |
 | --- | --- |
-| `model=` | VLM to use: `gemini-2.5-pro` (API) · `qwen3-vl-8b` (local) · `remote:Qwen/…` (local server) |
+| `model=` | VLM to use: `gemini-2.5-pro` (API) · `qwen3-vl-8b` (local) · `remote:Qwen/…` (local server) · `mock` (no‑cost stand‑in) |
 | `num_agents=` · `agent_generations=` | how many agents run, and generations per agent |
 | `seed=` | RNG seed for a reproducible run |
 | `goal=` | breeding objective prompt—one of the keys in [`GOAL_PROMPTS`](picbreeder_vlm/vlm/prompts.py) (`familiar_objects`, `objective_free`, …) |
@@ -204,23 +224,64 @@ the blog figures), **`data/`** (committed data),
 HTML/JS/CSS; generated media and archive mirrors are omitted and rebuilt by `tools/`),
 **`reference/`** (third‑party material, nothing imported by the experiments).
 
-Two pieces of that lineage are worth naming. Our CPPN rasterizer and NEAT preset
+Our CPPN rasterizer and NEAT preset
 (`picbreeder_vlm/core/picture2d.py`, `picbreeder_vlm/core/interactive_config_color`)
 began as a fork of the `examples/picture2d` demo in
 [neat‑python](https://github.com/CodeReclaimers/neat-python) (BSD‑3‑Clause) and have
-since diverged substantially — four CPPN inputs, a fully connected initial topology,
+since diverged substantially. We now use four CPPN inputs, a fully connected initial topology,
 and the `PicbreederGenome` / `PicbreederReproduction` operators. Those operators were
-in turn calibrated against **`reference/webneat/`**, Nick Beato's original Picbreeder
-Java client (obtained via Sebastian Risi), which is the authority for how the 2008
-system actually behaved; the mutation weight range and mutation‑strength floor in
-`core/neat_components.py` were matched to it directly.
+in turn calibrated against **`reference/webneat/`**, a copy of the original Picbreeder
+Java client and the most plausible source of truth in terms of how the 2008
+system actually behaved. The mutation weight range and mutation‑strength floor in
+`core/neat_components.py` were also matched to it.
 
 ## Data
 
 The [**archive dataset**](https://huggingface.co/datasets/picbreeder-vlm/picbreeder-vlm-archive)
-holds the evolved archives across runs: rendered images, CPPN genomes, full
-lineages, per‑image VLM captions/ratings, and the sprite sheets + orderings that
-power the interactive gallery in the blog.
+holds the evolved archives across runs, under `results/<run>/`: packed CPPN genomes
+(`genomes.tar.gz`), agent logs (`agents.tar`), full lineages, per‑image VLM
+captions/ratings, cached image embeddings, and curated metric JSONs—plus the sprite
+sheets + orderings that power the interactive gallery in the blog. Images are **not**
+stored; they re‑render deterministically from the genomes.
+
+### Reconstruct a run for evaluation, figures, or continued evolution
+
+The dataset stores each run in a flattened, packed form (and with the absolute
+paths of the cluster it was produced on). To turn one back into a runnable
+experiment directory—unpack the genomes, re‑render the images, fix up the metadata
+paths—use the helper:
+
+```bash
+# reconstruct one or more runs into sweep_logs/sweep/<run>/ (where the tools look)
+PYTHONPATH=. python tools/pull_run_from_hf.py <run_name> [<run_name> ...]
+PYTHONPATH=. python tools/pull_run_from_hf.py --all          # every run
+```
+
+You can then run the evaluations/figures over the reconstructed runs exactly as for
+a local sweep (see [AGENTS.md](AGENTS.md)), e.g.:
+
+```bash
+python -m picbreeder_vlm.experiments.sweep \
+    sweep_name=chat_history_turns eval_visual_coverage=true slurm=false
+```
+
+**Continue evolving a published archive.** Point a run at a reconstructed
+directory; new agents load the existing archive, branch from it, and append new
+publications. `mock` lets you try it with zero compute:
+
+```bash
+PYTHONPATH=. python tools/pull_run_from_hf.py <run_name>
+python evolve_collaborative.py model=mock resume=true \
+    experiment_dir=sweep_logs/sweep/<run_name> num_agents=<original+N>
+```
+
+Two caveats the tool handles for you: many runs shipped only their first ~1000
+genomes (a historical sync gap), and per‑image `image_path`/`genome_path` in the
+metadata are stale absolute paths. `pull_run_from_hf.py` rewrites the paths and, by
+default, prunes archive entries whose genome wasn't shipped so the reconstructed
+archive is self‑consistent. Evaluations reuse the shipped embedding caches, so they
+run on CPU; the phylogeny (`eval_tree`) figure additionally needs the system
+Graphviz `dot` binary (`apt install graphviz`).
 
 ## Tests
 
@@ -252,8 +313,8 @@ pull request against Python 3.11 and 3.13.
 
 Builds on the original **Picbreeder** (Secretan, Beato, D'Ambrosio, Rodriguez,
 Campbell & Stanley, 2008) and the NEAT/CPPN lineage of work by Kenneth O. Stanley
-and collaborators. `reference/webneat/` is the original WebNEAT code by Nick Beato.
-`fer/` is vendored from [akarshkumar0101/fer](https://github.com/akarshkumar0101/fer)
+and collaborators. `third-party/webneat/` is the original WebNEAT code by Nick Beato.
+`third-party/fer/` is vendored from [akarshkumar0101/fer](https://github.com/akarshkumar0101/fer)
 (Apache‑2.0), the code for *The Fractured Entangled Representation Hypothesis*; we use
 its Picbreeder genome parsing and have added our own lineage/phylogeny scripts alongside
 it. Our CPPN rendering derives from

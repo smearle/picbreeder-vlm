@@ -27,6 +27,7 @@ from picbreeder_vlm.analysis.compute_semantic_recall import (
 from picbreeder_vlm.core.utils import _ensure_absolute, load_human_archive_images, resolve_nounlist
 from picbreeder_vlm.core.config import ensure_valid_config
 from picbreeder_vlm.core.constants import HUMAN_BASELINE_DIR
+from picbreeder_vlm._paths import FER_ROOT
 
 
 @dataclass
@@ -56,7 +57,7 @@ def main(
     
     # Construct archive dir based on render_size
     root_dir = original_cwd
-    archive_dir = root_dir / "fer/src" / f"archive_res-{validated_cfg.render_size}" / "images"
+    archive_dir = FER_ROOT / "src" / f"archive_res-{validated_cfg.render_size}" / "images"
     noun_file = resolve_nounlist(validated_cfg.nounlist, original_cwd)
     
     print(f"Looking for images in {archive_dir}")

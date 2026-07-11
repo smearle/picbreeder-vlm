@@ -30,6 +30,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 REPO = Path(__file__).resolve().parent.parent
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable  # noqa: E402
 BLOG = Path.home() / "smearle.github.io" / "picbreeder-vlm-06b0d76d"
 ARCHIVE = BLOG / "breed" / "data" / "archive.json"
 OUT = BLOG / "breed" / "data" / "cppn_explainer.json"
@@ -214,7 +215,7 @@ def convert_human(pkl_path: Path):
 # The famous skull/butterfly/apple shipped as pkls, but the rest of the original
 # Picbreeder archive lives as XML chromosomes in fer/spaghetti/pbRender/genomeAll
 # (anonymous — no titles). We convert published colour genomes the same way.
-PB_DIR = REPO / "fer/spaghetti/pbRender/genomeAll"
+PB_DIR = FER_ROOT / "spaghetti/pbRender/genomeAll"
 _PB_IN = {"x": -1, "y": -2, "d": -3, "bias": -4}
 _PB_OUT = {"hue": 0, "saturation": 1, "brightness": 2}
 
@@ -225,9 +226,7 @@ def _pb_listify(x):
 
 def _pb_final_genome(pid: str):
     """The published genome for a Picbreeder series id (its last generation)."""
-    import sys
-    if str(REPO) not in sys.path:
-        sys.path.insert(0, str(REPO))
+    ensure_fer_importable()
     from fer.src.picbreeder_util import load_zip_xml_as_dict
     from fer.src.lineage_utils import _ensure_list
 
@@ -311,9 +310,9 @@ def convert_dump(pid: str):
 genomes = {}
 
 HUMAN = [
-    ("skull", "Skull", REPO / "fer/data/picbreeder_skull"),
-    ("butterfly", "Butterfly", REPO / "fer/data/picbreeder_butterfly"),
-    ("apple", "Apple", REPO / "fer/data/picbreeder_apple"),
+    ("skull", "Skull", FER_ROOT / "data/picbreeder_skull"),
+    ("butterfly", "Butterfly", FER_ROOT / "data/picbreeder_butterfly"),
+    ("apple", "Apple", FER_ROOT / "data/picbreeder_apple"),
 ]
 human_refs = {}
 for hid, label, ddir in HUMAN:

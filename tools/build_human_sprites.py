@@ -20,10 +20,11 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path("/home/jupyter-smearle/picbreeder-vlm")
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable  # noqa: E402
 THUMBS = REPO / "human_lineages/lineages/lineage_phylogeny_thumbs_128"   # 128px to match the VLM runs
 EMB = REPO / "data/human_baseline/res-128/embeddings_openclip_SigLIP2-B-alignet.npz"
 SITE = REPO / "archive_animations/_archive_mirror/site"
-PB = REPO / "fer/spaghetti/pbRender/genomeAll"                    # per-pid main.zip (carries branchFrom)
+PB = FER_ROOT / "spaghetti/pbRender/genomeAll"                    # per-pid main.zip (carries branchFrom)
 RUN, CELL = "human", 128
 
 
@@ -57,7 +58,7 @@ def human_ids():
 def _parent_pid(pid):
     """Picbreeder parent of an image: the branchFrom @branch recorded in its main.zip.
     Lightweight read (no genome render); returns the parent pid string or None."""
-    sys.path.append(str(REPO))
+    ensure_fer_importable()
     from fer.src.picbreeder_util import load_zip_xml_as_dict
     mz = PB / pid / "main.zip"
     if not mz.exists():

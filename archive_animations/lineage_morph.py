@@ -42,6 +42,9 @@ sys.path.insert(0, str(REPO / "archive_animations"))
 
 import cppn_interp as ci  # noqa: E402
 from picbreeder_vlm.viz.render_lineage_animation import build_superset, render_frames  # noqa: E402
+from picbreeder_vlm._paths import FER_ROOT, ensure_fer_importable  # noqa: E402
+
+ensure_fer_importable()  # make the in-function `from fer.src...` imports below resolve
 
 # ---- the two lineages (identical provenance to extract_lineage_assets.py) ----
 VLM_GENOME_DIR = REPO / "archive_animations/_lineage_genomes/vlm"
@@ -56,7 +59,7 @@ VLM_CHAIN = [  # root -> tip, with the model's published titles
     ("img_000803", "Chrome Speedster"),
     ("img_000810", "Chrome Streamliner"),
 ]
-HUMAN_ROOT = REPO / "fer/spaghetti/pbRender/genomeAll"
+HUMAN_ROOT = FER_ROOT / "spaghetti/pbRender/genomeAll"
 HUMAN_CHAIN = ["57", "86", "167", "372", "375", "464"]  # root -> car (PID 464)
 
 FONT_PATH = Path(  # italic -- reserved for image titles (the VLM clip)
