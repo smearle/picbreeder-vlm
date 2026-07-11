@@ -89,3 +89,29 @@ def test_mock_reload_continues_archive(tmp_path):
     for eid in after_ids - before_ids:
         assert int(eid.split("_")[-1]) >= before_next_id
     _assert_self_consistent(exp)
+
+
+def test_mock_continue_without_agents_metadata(tmp_path):
+    """A run reconstructed from the HF dataset (tools/pull_run_from_hf.py) ships the
+    archive but *no* agents_metadata.json -- we deliberately don't publish the
+    orchestrator ledger. Continuing such a run must degrade gracefully: the
+    orchestrator starts a fresh ledger, keeps the existing archive, and extends it."""
+    exp = tmp_path / "run"
+
+    # Build an archive, then simulate an HF-pulled run by removing the ledger.
+    run(_mock_config(exp, num_agents=1, generations=3))
+    before = _archive_entries(exp)
+    assert before, "first run produced no entries"
+    before_ids = {e["id"] for e in before}
+    meta_file = exp / "agents_metadata.json"
+    assert meta_file.exists()
+    meta_file.unlink()
+
+    # Continue: no crash, a fresh ledger is written, and the archive is extended
+    # rather than clobbered.
+    run(_mock_config(exp, num_agents=1, generations=3, resume=True))
+
+    assert meta_file.exists(), "continue did not recreate agents_metadata.json"
+    after_ids = {e["id"] for e in _archive_entries(exp)}
+    assert before_ids <= after_ids, "continue dropped previously-published entries"
+    _assert_self_consistent(exp)
