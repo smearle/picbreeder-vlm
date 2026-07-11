@@ -503,8 +503,20 @@ async function launchPublication(tok) {
   rider.style.display = "block"; rider.style.opacity = "1";
   rider.style.width = cr.w + "px"; rider.style.height = cr.h + "px";
   rider.style.transform = at(pts[0]);
-  clone.style.transition = "none"; clone.style.display = "none"; clone.style.opacity = "0";
-  title.style.transition = `opacity ${0.24 / sp}s ease`; title.style.opacity = "0";
+  // The rider (a transform-animated copy) carries the publication out for a LIVE viewer, but the
+  // screencast that bakes the GIF never samples that solo compositor animation — so hard-hiding the
+  // clone here made the big image CUT to nothing (a harsh flip) with its title left hanging alone.
+  // Fade the clone + title out in place instead: an opacity fade the capture DOES sample, so the
+  // image lifts off gracefully in the GIF while the rider still rides for live. Hide the spent
+  // clone once the fade has landed.
+  // A CSS transition (not a WAAPI fill:forwards animation) — the latter would persist as an
+  // override on `clone` and, uncancelled, pin the NEXT publication's clone at opacity 0 through its
+  // whole hold (its `opacity="1"` reset silently loses to the leftover animation). The transition
+  // writes real inline opacity, which the next runPublish overwrites cleanly.
+  clone.style.transition = "none"; void clone.offsetWidth;
+  clone.style.transition = `opacity ${0.36 / sp}s ease`; clone.style.opacity = "0";
+  setTimeout(() => { clone.style.display = "none"; }, 380 / sp + 30);
+  title.style.transition = `opacity ${0.36 / sp}s ease`; title.style.opacity = "0";
   els["gen-grid"].style.transition = "none"; els["gen-grid"].style.opacity = "0";
   if (pts.length < 2) { rider.style.width = gm.cw + "px"; rider.style.height = gm.ch + "px"; return; }
 
@@ -708,6 +720,11 @@ async function evalStream(a, tok, landed) {
     await sleep(hold);
   }
   if (!alive(tok)) return;
+  // the draw is spent — every candidate in the Sampling node has been rated and faded out — so its
+  // shelf headers (least-rated / random) leave WITH the last of them rather than labelling an
+  // empty card. (card._labels is the eval draw's row-label list in the Sampling node.)
+  if (card._labels) card._labels.animate([{ opacity: 1 }, { opacity: 0 }],
+      { duration: 260 / sp, easing: "ease", fill: "forwards" });
   // the batch is complete -> NOW the Evaluation→Archive arrow lights, the LAST card drops its
   // title + stars (like every card before it), and in that same instant a single fat star
   // swells up at the foot of the node and rides the edge to burst over the Archive. The pile of
@@ -841,7 +858,11 @@ function glideCard(card, spec, a, tok, persist) {
       if (!alive(tok)) { if (!persist) layer.innerHTML = ""; resolve(persist ? landed : null); return; }
       card.classList.add("dealt");   // thumbnails are in place -> the shelf labels may fade in
       if (persist) { resolve(landed); return; }   // leave cells in place; composite stays hidden
-      img.style.transition = `opacity ${0.2 / sp}s ease`; img.style.opacity = "1";
+      // SNAP the composite in the same frame the flown cells are cleared. The assembled cells
+      // are pixel-identical crops of this very image, so the swap is invisible — but a fade
+      // here (transition 0→1) would leave the draw BLANK for that beat, since the cells vanish
+      // instantly while the composite is still transparent: a one-frame blink at every deal.
+      img.style.transition = "none"; img.style.opacity = "1";
       layer.innerHTML = "";
       resolve(null);
     }, (560 + nF * 14) / sp + 40);

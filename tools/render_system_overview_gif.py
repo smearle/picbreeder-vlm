@@ -23,10 +23,18 @@ The show loops over the curated epochs, so by default we cut on epoch boundaries
 window.__sysov hook the player exposes) and emit exactly one full cycle — a seamless GIF.
 The README ships two of the three epochs, which is a shorter, lighter loop.
 
-    python3 tools/render_system_overview_gif.py --out /tmp/system_overview.gif
-    python3 tools/render_system_overview_gif.py --epochs 2 --out figures/system_fig/system_overview.gif
+One beat resists this pipeline: the rated pile that stacks up in the Evaluation node sits STATIC
+(cards snap on, nothing animates), so the compositor may present no frame while it is up and the
+resampler holds a pre-pile frame — the pile then silently vanishes from an otherwise-fine GIF,
+non-deterministically from run to run. So each render is verified (stack_coverage) and re-rolled up
+to --attempts times until the pile lands in every epoch; the best attempt is kept regardless. And to
+protect a good committed render, an existing --out is never overwritten without --force (the new one
+lands beside it as <name>.new.gif).
 
-Requires: playwright (+ `playwright install chromium`), pillow and ffmpeg on PATH.
+    python3 tools/render_system_overview_gif.py --out /tmp/system_overview.gif
+    python3 tools/render_system_overview_gif.py --epochs 2 --out figures/system_fig/system_overview.gif --force
+
+Requires: playwright (+ `playwright install chromium`), pillow, numpy and ffmpeg on PATH.
 """
 from __future__ import annotations
 
@@ -211,9 +219,47 @@ def capture(args: argparse.Namespace, frame_dir: Path) -> int:
                 print(f"WARNING: hit --max-frames={args.max_frames}; the cycle was cut short "
                       f"(lower --fps, or raise --speed to shorten the show)", file=sys.stderr)
             browser.close()
-            return n
+            return n, epochs
     finally:
         httpd.shutdown()
+
+
+def stack_coverage(gif: Path, epochs: int) -> list[int]:
+    """Per-epoch count of frames whose Evaluation node actually shows the rated pile.
+
+    That pile is the one beat the screencast drops non-deterministically: while it sits (cards
+    snapped on, nothing animating) the compositor may present no frames, so the resampler holds a
+    pre-pile frame and the pile silently vanishes from an otherwise-fine GIF. We slice the loop into
+    its `epochs` equal parts and, in each, count the frames whose bottom-right quadrant (below the
+    VLM-critic box) carries real image content — saturated or dark pixels, i.e. rated thumbnails.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return [-1] * max(1, epochs)          # can't verify; caller treats -1 as "unknown, accept"
+    if epochs <= 0:
+        return [0]
+    # Decode with ffmpeg, not PIL's ImageSequence: PIL's GIF frame compositing doesn't reproduce the
+    # encoder's disposal, so its frames read blank here.
+    vtmp = Path(tempfile.mkdtemp(prefix="sysov_verify_"))
+    try:
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(gif), str(vtmp / "f%05d.png")],
+                       check=True)
+        pngs = sorted(vtmp.glob("f*.png"))
+        n = len(pngs)
+        if not n:
+            return [0] * epochs
+        counts = [0] * epochs
+        for idx, p in enumerate(pngs):
+            a = np.asarray(Image.open(p).convert("RGB")).astype(int)
+            h, w = a.shape[0], a.shape[1]
+            q = a[int(h * 0.54):int(h * 0.965), int(w * 0.60):int(w * 0.985)]
+            mx, mn = q.max(2), q.min(2)
+            if float((((mx - mn) > 45) | (mx < 200)).mean()) > 0.03:
+                counts[min(epochs - 1, idx * epochs // n)] += 1
+        return counts
+    finally:
+        shutil.rmtree(vtmp, ignore_errors=True)
 
 
 def encode(frame_dir: Path, out: Path, fps: int, colors: int, width: int | None,
@@ -260,23 +306,68 @@ def main() -> int:
     ap.add_argument("--dither", default="none", help="paletteuse dither (none, bayer, ...)")
     ap.add_argument("--manifest", default="", help="override the player's ?manifest= URL")
     ap.add_argument("--keep-frames", action="store_true")
+    ap.add_argument("--attempts", type=int, default=4,
+                    help="re-render up to this many times until the rated pile lands in every "
+                         "epoch (the screencast drops that static beat non-deterministically); "
+                         "the best attempt is kept if none is clean")
+    ap.add_argument("--min-stack-frames", type=int, default=25,
+                    help="an epoch passes verification only if at least this many of its frames "
+                         "show the rated pile")
+    ap.add_argument("--no-verify", dest="verify", action="store_false",
+                    help="skip the rated-pile check and keep the first render")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite --out if it already exists; otherwise the render is written "
+                         "beside it as <name>.new.gif and the committed file is left untouched")
     args = ap.parse_args()
 
     if not shutil.which("ffmpeg"):
         print("ffmpeg not on PATH", file=sys.stderr)
         return 1
 
-    tmp = Path(tempfile.mkdtemp(prefix="sysov_frames_"))
-    try:
-        n = capture(args, tmp)
-        print(f"{n} frames = {n / args.fps:.1f}s; encoding {args.out}", file=sys.stderr)
-        encode(tmp, args.out, args.fps, args.colors, args.gif_width or None, args.dither)
-        print(f"{args.out}  ({args.out.stat().st_size / 1e6:.1f} MB)", file=sys.stderr)
-    finally:
-        if args.keep_frames:
-            print(f"frames kept in {tmp}", file=sys.stderr)
-        else:
-            shutil.rmtree(tmp, ignore_errors=True)
+    # rename-pin: never silently clobber an existing render (e.g. the committed figure). Land beside
+    # it and let the user promote it by hand, unless they opt in with --force.
+    out = args.out
+    if out.exists() and not args.force:
+        out = out.with_suffix(".new.gif")
+        print(f"{args.out} exists — writing to {out} instead (review it, then move it over "
+              f"manually, or pass --force to overwrite).", file=sys.stderr)
+
+    attempts = args.attempts if args.verify else 1
+    best_min = -2            # best (over attempts) of the worst-covered epoch
+    for attempt in range(1, attempts + 1):
+        tmp = Path(tempfile.mkdtemp(prefix="sysov_frames_"))
+        cand = out.with_suffix(f".try{attempt}.gif") if attempts > 1 else out
+        try:
+            n, epochs = capture(args, tmp)
+            print(f"{n} frames = {n / args.fps:.1f}s; encoding {cand}", file=sys.stderr)
+            encode(tmp, cand, args.fps, args.colors, args.gif_width or None, args.dither)
+        finally:
+            if args.keep_frames:
+                print(f"frames kept in {tmp}", file=sys.stderr)
+            else:
+                shutil.rmtree(tmp, ignore_errors=True)
+
+        if not args.verify:
+            break
+        cov = stack_coverage(cand, epochs)
+        worst = min(cov)
+        print(f"attempt {attempt}/{attempts}: rated-pile frames per epoch = {cov}"
+              + (" (numpy missing → not verified)" if worst < 0 else ""), file=sys.stderr)
+        if worst > best_min:                        # promote this attempt to the winner
+            best_min = worst
+            if cand != out:
+                shutil.move(str(cand), str(out))
+        elif cand != out:
+            cand.unlink(missing_ok=True)             # a worse attempt: discard
+        if worst < 0 or worst >= args.min_stack_frames:
+            print("rated pile present in every epoch ✓" if worst >= 0 else "", file=sys.stderr)
+            break
+    else:
+        print(f"WARNING: no clean render in {attempts} attempts; kept the best "
+              f"({best_min} pile-frame(s) in its weakest epoch). Re-run, raise --attempts, or "
+              f"eyeball {out}.", file=sys.stderr)
+
+    print(f"{out}  ({out.stat().st_size / 1e6:.1f} MB)", file=sys.stderr)
     return 0
 
 
